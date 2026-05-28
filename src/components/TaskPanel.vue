@@ -64,7 +64,10 @@ const getStatusClass = (status: string) => {
   background: linear-gradient(135deg, rgba(17, 24, 39, 0.9) 0%, rgba(26, 35, 50, 0.8) 100%);
   border: 1px solid rgba(0, 212, 255, 0.2);
   border-radius: 12px;
-  padding: 16px;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
 }
 
 .panel-header {
@@ -132,15 +135,19 @@ const getStatusClass = (status: string) => {
   display: flex;
   flex-direction: column;
   gap: 8px;
+  flex: 1;
+  overflow-y: auto;
+  min-height: 0;
 }
 
 .task-item {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 10px 12px;
+  padding: 8px 10px;
   background: rgba(0, 212, 255, 0.05);
   border-radius: 8px;
+  flex-shrink: 0;
 }
 
 .task-name {
@@ -179,7 +186,10 @@ const getStatusClass = (status: string) => {
 .log-list {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 8px;
+  flex: 1;
+  overflow-y: auto;
+  min-height: 0;
 }
 
 .log-item {

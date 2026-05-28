@@ -65,7 +65,6 @@ const getIconPath = (iconName: string) => {
 <style scoped>
 .sidebar {
   width: 200px;
-  height: calc(100vh - 65px);
   background: linear-gradient(180deg, rgba(17, 24, 39, 0.95) 0%, rgba(13, 17, 23, 0.98) 100%);
   border-right: 1px solid rgba(0, 212, 255, 0.15);
   display: flex;

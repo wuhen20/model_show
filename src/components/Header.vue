@@ -70,10 +70,11 @@ defineProps<{
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 16px 24px;
+  padding: 10px 20px;
   background: linear-gradient(135deg, rgba(17, 24, 39, 0.95) 0%, rgba(26, 35, 50, 0.9) 100%);
   border-bottom: 1px solid rgba(0, 212, 255, 0.2);
   backdrop-filter: blur(10px);
+  flex-shrink: 0;
 }
 
 .header-left {

@@ -33,12 +33,7 @@ const getStatusTag = (status: string) => {
           <tr>
             <th>服务名称</th>
             <th>基础模型</th>
-            <th>模型类型</th>
-            <th>服务环境</th>
-            <th>CPS</th>
-            <th>TPS</th>
             <th>QPS</th>
-            <th>负责人</th>
             <th>状态</th>
             <th>操作</th>
           </tr>
@@ -52,12 +47,7 @@ const getStatusTag = (status: string) => {
               <span>{{ model.name }}</span>
             </td>
             <td>{{ model.baseModel }}</td>
-            <td>{{ model.version }}</td>
-            <td>{{ model.serviceType }}</td>
-            <td>{{ model.CPS }}</td>
-            <td>{{ model.TPS }}</td>
             <td>{{ model.QPS }}</td>
-            <td>{{ model.owner }}</td>
             <td>
               <span class="status-tag" :class="getStatusTag(model.status).type">
                 {{ getStatusTag(model.status).text }}
@@ -113,7 +103,10 @@ const getStatusTag = (status: string) => {
   background: linear-gradient(135deg, rgba(17, 24, 39, 0.9) 0%, rgba(26, 35, 50, 0.8) 100%);
   border: 1px solid rgba(0, 212, 255, 0.2);
   border-radius: 12px;
-  padding: 16px;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
 }
 
 .table-header {
@@ -140,7 +133,9 @@ const getStatusTag = (status: string) => {
 }
 
 .table-wrapper {
-  overflow-x: auto;
+  flex: 1;
+  overflow: auto;
+  min-height: 0;
 }
 
 .model-table {

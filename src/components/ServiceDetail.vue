@@ -175,7 +175,10 @@ const publishParams = [
   background: linear-gradient(135deg, rgba(17, 24, 39, 0.9) 0%, rgba(26, 35, 50, 0.8) 100%);
   border: 1px solid rgba(0, 212, 255, 0.2);
   border-radius: 12px;
-  padding: 20px;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
 }
 
 .detail-header {
@@ -259,7 +262,9 @@ const publishParams = [
 }
 
 .tab-content {
-  min-height: 200px;
+  flex: 1;
+  overflow-y: auto;
+  min-height: 0;
 }
 
 .info-grid {

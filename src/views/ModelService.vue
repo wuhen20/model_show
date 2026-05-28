@@ -370,61 +370,79 @@ const getAnomalyLevelClass = (level: string) => {
 .app-layout {
   display: flex;
   flex-direction: column;
-  min-height: 100vh;
+  height: 100vh;
+  overflow: hidden;
 }
 
 .main-content {
   display: flex;
   flex: 1;
   overflow: hidden;
+  min-height: 0;
 }
 
 .content-area {
   flex: 1;
-  overflow-y: auto;
-  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding: 12px 16px;
+  min-height: 0;
 }
 
 .stats-grid {
   display: grid;
   grid-template-columns: repeat(5, 1fr);
-  gap: 16px;
-  margin-bottom: 20px;
+  gap: 12px;
+  margin-bottom: 10px;
+  flex-shrink: 0;
 }
 
 .main-grid {
   display: grid;
   grid-template-columns: 400px 1fr 320px;
-  gap: 20px;
-  margin-bottom: 20px;
+  gap: 12px;
+  margin-bottom: 10px;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
 }
 
 .left-column {
   grid-column: 1;
   display: flex;
   flex-direction: column;
-  gap: 20px;
+  gap: 10px;
+  overflow: hidden;
+  min-height: 0;
 }
 
 .center-column {
   grid-column: 2;
   display: flex;
   flex-direction: column;
-  gap: 20px;
+  gap: 10px;
+  overflow: hidden;
+  min-height: 0;
 }
 
 .right-column {
   grid-column: 3;
   display: flex;
   flex-direction: column;
-  gap: 20px;
+  gap: 10px;
+  overflow: hidden;
+  min-height: 0;
 }
 
 .experience-panel, .templates-panel, .invoke-panel {
   background: linear-gradient(135deg, rgba(17, 24, 39, 0.9) 0%, rgba(26, 35, 50, 0.8) 100%);
   border: 1px solid rgba(0, 212, 255, 0.2);
   border-radius: 12px;
-  padding: 16px;
+  padding: 12px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
 }
 
 .panel-header {
@@ -683,7 +701,10 @@ const getAnomalyLevelClass = (level: string) => {
   background: linear-gradient(135deg, rgba(17, 24, 39, 0.9) 0%, rgba(26, 35, 50, 0.8) 100%);
   border: 1px solid rgba(0, 212, 255, 0.2);
   border-radius: 12px;
-  padding: 16px;
+  padding: 12px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
 }
 
 .panel-tabs {
@@ -884,13 +905,19 @@ const getAnomalyLevelClass = (level: string) => {
   background: linear-gradient(135deg, rgba(17, 24, 39, 0.9) 0%, rgba(26, 35, 50, 0.8) 100%);
   border: 1px solid rgba(0, 212, 255, 0.2);
   border-radius: 12px;
-  padding: 16px;
+  padding: 12px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
 }
 
 .task-list {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 8px;
+  flex: 1;
+  overflow-y: auto;
+  min-height: 0;
 }
 
 .task-item {
@@ -955,10 +982,11 @@ const getAnomalyLevelClass = (level: string) => {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 16px 24px;
+  padding: 10px 16px;
   background: linear-gradient(135deg, rgba(17, 24, 39, 0.95) 0%, rgba(26, 35, 50, 0.9) 100%);
   border: 1px solid rgba(0, 212, 255, 0.2);
   border-radius: 12px;
+  flex-shrink: 0;
 }
 
 .footer-text {

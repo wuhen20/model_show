@@ -183,27 +183,33 @@ const inputContent = ref('请输入：分析某台区本月线损异常，结合
 .app-layout {
   display: flex;
   flex-direction: column;
-  min-height: 100vh;
+  height: 100vh;
+  overflow: hidden;
 }
 
 .main-content {
   display: flex;
   flex: 1;
   overflow: hidden;
+  min-height: 0;
 }
 
 .content-area {
   flex: 1;
-  overflow-y: auto;
-  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding: 12px 16px;
+  min-height: 0;
 }
 
 .hero-section {
   background: linear-gradient(135deg, rgba(0, 212, 255, 0.1) 0%, rgba(0, 255, 136, 0.05) 100%);
   border: 1px solid rgba(0, 212, 255, 0.2);
   border-radius: 16px;
-  padding: 32px;
-  margin-bottom: 20px;
+  padding: 20px 32px;
+  margin-bottom: 10px;
+  flex-shrink: 0;
 }
 
 .hero-content {
@@ -260,14 +266,19 @@ const inputContent = ref('请输入：分析某台区本月线损异常，结合
 .experience-section {
   display: grid;
   grid-template-columns: 1fr 500px;
-  gap: 20px;
-  margin-bottom: 20px;
+  gap: 12px;
+  margin-bottom: 10px;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
 }
 
 .experience-left {
   display: flex;
   flex-direction: column;
-  gap: 20px;
+  gap: 10px;
+  overflow: hidden;
+  min-height: 0;
 }
 
 .category-tabs {
@@ -445,14 +456,19 @@ const inputContent = ref('请输入：分析某台区本月线损异常，结合
 .experience-right {
   display: flex;
   flex-direction: column;
-  gap: 20px;
+  gap: 10px;
+  overflow: hidden;
+  min-height: 0;
 }
 
 .experience-card {
   background: linear-gradient(135deg, rgba(17, 24, 39, 0.9) 0%, rgba(26, 35, 50, 0.8) 100%);
   border: 1px solid rgba(0, 212, 255, 0.2);
   border-radius: 12px;
-  padding: 20px;
+  padding: 12px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
 }
 
 .card-header {
@@ -557,7 +573,12 @@ const inputContent = ref('请输入：分析某台区本月线损异常，结合
   background: linear-gradient(135deg, rgba(17, 24, 39, 0.9) 0%, rgba(26, 35, 50, 0.8) 100%);
   border: 1px solid rgba(0, 212, 255, 0.2);
   border-radius: 12px;
-  padding: 20px;
+  padding: 12px;
+  flex: 1;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
 }
 
 .catalog-header {
@@ -591,7 +612,10 @@ const inputContent = ref('请输入：分析某台区本月线损异常，结合
 .catalog-list {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 8px;
+  flex: 1;
+  overflow-y: auto;
+  min-height: 0;
 }
 
 .catalog-item {
@@ -662,10 +686,11 @@ const inputContent = ref('请输入：分析某台区本月线损异常，结合
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 20px 24px;
+  padding: 10px 16px;
   background: linear-gradient(135deg, rgba(17, 24, 39, 0.95) 0%, rgba(26, 35, 50, 0.9) 100%);
   border: 1px solid rgba(0, 212, 255, 0.2);
   border-radius: 12px;
+  flex-shrink: 0;
 }
 
 .footer-text {

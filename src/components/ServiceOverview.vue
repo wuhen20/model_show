@@ -116,7 +116,7 @@ const getStatusColor = (status: string) => {
   background: linear-gradient(135deg, rgba(17, 24, 39, 0.9) 0%, rgba(26, 35, 50, 0.8) 100%);
   border: 1px solid rgba(0, 212, 255, 0.2);
   border-radius: 12px;
-  padding: 20px;
+  padding: 12px;
 }
 
 .overview-header {
