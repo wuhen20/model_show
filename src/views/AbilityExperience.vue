@@ -2,10 +2,9 @@
 import { ref } from 'vue'
 import Header from '@/components/Header.vue'
 import Sidebar from '@/components/Sidebar.vue'
-import { abilityCategories, abilityCards, frameworkLayers, serviceList } from '@/data/models'
+import { abilityCategories, abilityCards, frameworkLayers } from '@/data/models'
 
 const activeCategory = ref('language')
-const inputContent = ref('请输入：分析某台区本月线损异常，结合电量突增、采集失败、倍率档案变化给出疑似原因。')
 </script>
 
 <template>
@@ -16,8 +15,8 @@ const inputContent = ref('请输入：分析某台区本月线损异常，结合
       <main class="content-area">
         <div class="hero-section">
           <div class="hero-content">
-            <h1 class="hero-title">多模态模型能力展示与体验中心</h1>
-            <p class="hero-desc">统一展示、体验与接入语言、视觉、时序、语音四大方向模型能力，服务电力业务场景，赋能智能决策与高效运维。</p>
+            <h1 class="hero-title">多模态模型能力展示中心</h1>
+            <p class="hero-desc">统一展示语言、视觉、时序、语音四大方向模型能力，服务电力业务场景，赋能智能决策与高效运维</p>
           </div>
           <div class="hero-stats">
             <div class="stat-card">
@@ -41,7 +40,8 @@ const inputContent = ref('请输入：分析某台区本月线损异常，结合
             <div class="stat-card">
               <div class="stat-icon">
                 <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#ffaa00" stroke-width="2">
-                  <path d="M12 20V10M12 4l8 8-8 8"/>
+                  <circle cx="12" cy="12" r="10"/>
+                  <path d="M12 6v6l4 2"/>
                 </svg>
               </div>
               <span class="stat-number">4</span>
@@ -60,8 +60,9 @@ const inputContent = ref('请输入：分析某台区本月线损异常，结合
             </div>
           </div>
         </div>
-        <div class="experience-section">
-          <div class="experience-left">
+
+        <div class="main-section">
+          <div class="section-left">
             <div class="category-tabs">
               <button
                 v-for="category in abilityCategories"
@@ -80,6 +81,7 @@ const inputContent = ref('请输入：分析某台区本月线损异常，结合
                 <span class="category-count">{{ category.count }}类</span>
               </button>
             </div>
+
             <div class="ability-cards">
               <div v-for="card in abilityCards" :key="card.id" class="ability-card">
                 <div class="card-icon">
@@ -97,6 +99,9 @@ const inputContent = ref('请输入：分析某台区本月线损异常，结合
                 </div>
               </div>
             </div>
+          </div>
+
+          <div class="section-right">
             <div class="framework-section">
               <h3 class="section-title">统一能力架构</h3>
               <div class="framework-list">
@@ -114,64 +119,24 @@ const inputContent = ref('请输入：分析某台区本月线损异常，结合
                 </div>
               </div>
             </div>
-          </div>
-          <div class="experience-right">
-            <div class="experience-card">
-              <div class="card-header">
-                <span class="card-title">当前体验能力</span>
+
+            <div class="quick-link-card">
+              <div class="link-header">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#00d4ff" stroke-width="2">
+                  <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+                </svg>
+                <span class="link-title">前往体验</span>
               </div>
-              <div class="sub-tabs">
-                <button class="sub-tab active">业务问答 · 报告生成 · 根因诊断 · 样本构造</button>
-                <button class="sub-tab">12类</button>
-                <button class="sub-tab">语义任务接口</button>
-              </div>
-              <div class="input-section">
-                <textarea
-                  v-model="inputContent"
-                  class="input-textarea"
-                  placeholder="请输入您的问题或分析需求..."
-                  rows="4"
-                ></textarea>
-                <div class="input-footer">
-                  <span class="char-count">{{ inputContent.length }}/1000</span>
-                  <div class="input-actions">
-                    <button class="action-btn">运行体验</button>
-                    <button class="action-btn secondary">上传样例</button>
-                  </div>
-                </div>
-              </div>
-            </div>
-            <div class="service-catalog">
-              <div class="catalog-header">
-                <span class="catalog-title">接口服务目录</span>
-                <button class="catalog-more">查看全部</button>
-              </div>
-              <div class="catalog-list">
-                <div v-for="service in serviceList" :key="service.id" class="catalog-item">
-                  <div class="item-icon">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                      <path d="M12 2L4.5 20.29l.71.71L12 18l6.79 3 .71-.71z"/>
-                    </svg>
-                  </div>
-                  <div class="item-info">
-                    <span class="item-name">{{ service.name }}</span>
-                    <div class="item-meta">
-                      <span class="meta-tag">{{ service.abilityType }}</span>
-                      <span class="meta-tag">{{ service.accessMode }}</span>
-                    </div>
-                  </div>
-                  <span class="item-status" :class="service.status === '已接入' ? 'success' : service.status === '测试中' ? 'warning' : service.status === '已封装' ? 'info' : 'danger'">
-                    {{ service.status }}
-                  </span>
-                </div>
-              </div>
+              <p class="link-desc">在工作台首页中选择模型，即可开始智能问答体验</p>
+              <router-link to="/" class="link-btn">进入问答工作台</router-link>
             </div>
           </div>
         </div>
+
         <div class="footer-bar">
           <span class="footer-text">模型能力不是单点展示，而是可复用的业务能力资产</span>
           <div class="footer-actions">
-            <button class="footer-btn primary">进入能力工作台</button>
+            <router-link to="/" class="footer-btn primary">进入问答工作台</router-link>
           </div>
         </div>
       </main>
@@ -214,20 +179,20 @@ const inputContent = ref('请输入：分析某台区本月线损异常，结合
 
 .hero-content {
   text-align: center;
-  margin-bottom: 32px;
+  margin-bottom: 24px;
 }
 
 .hero-title {
-  font-size: 28px;
+  font-size: 26px;
   font-weight: 700;
   color: #fff;
-  margin: 0 0 12px 0;
+  margin: 0 0 10px 0;
 }
 
 .hero-desc {
   font-size: 14px;
   color: rgba(255, 255, 255, 0.7);
-  max-width: 800px;
+  max-width: 700px;
   margin: 0 auto;
 }
 
@@ -241,31 +206,31 @@ const inputContent = ref('请输入：分析某台区本月线损异常，结合
   display: flex;
   flex-direction: column;
   align-items: center;
-  padding: 20px 32px;
+  padding: 18px 28px;
   background: rgba(17, 24, 39, 0.8);
   border: 1px solid rgba(0, 212, 255, 0.2);
   border-radius: 12px;
 }
 
 .stat-icon {
-  margin-bottom: 12px;
+  margin-bottom: 10px;
 }
 
 .stat-number {
-  font-size: 32px;
+  font-size: 28px;
   font-weight: 700;
   color: #00d4ff;
 }
 
 .stat-label {
-  font-size: 13px;
+  font-size: 12px;
   color: rgba(255, 255, 255, 0.6);
   margin-top: 4px;
 }
 
-.experience-section {
+.main-section {
   display: grid;
-  grid-template-columns: 1fr 500px;
+  grid-template-columns: 1fr 380px;
   gap: 12px;
   margin-bottom: 10px;
   flex: 1;
@@ -273,17 +238,25 @@ const inputContent = ref('请输入：分析某台区本月线损异常，结合
   overflow: hidden;
 }
 
-.experience-left {
+.section-left {
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  overflow: hidden;
+  gap: 12px;
+  overflow-y: auto;
+  min-height: 0;
+}
+
+.section-right {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
   min-height: 0;
 }
 
 .category-tabs {
   display: flex;
   gap: 12px;
+  flex-shrink: 0;
 }
 
 .category-tab {
@@ -453,97 +426,37 @@ const inputContent = ref('请输入：分析某台区本月线损异常，结合
   color: rgba(0, 212, 255, 0.5);
 }
 
-.experience-right {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  overflow: hidden;
-  min-height: 0;
-}
-
-.experience-card {
-  background: linear-gradient(135deg, rgba(17, 24, 39, 0.9) 0%, rgba(26, 35, 50, 0.8) 100%);
+.quick-link-card {
+  background: linear-gradient(135deg, rgba(0, 212, 255, 0.08) 0%, rgba(0, 255, 136, 0.05) 100%);
   border: 1px solid rgba(0, 212, 255, 0.2);
   border-radius: 12px;
-  padding: 12px;
-  overflow: hidden;
+  padding: 20px;
+  text-align: center;
+}
+
+.link-header {
   display: flex;
-  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  margin-bottom: 12px;
 }
 
-.card-header {
-  margin-bottom: 16px;
-}
-
-.card-title {
-  font-size: 14px;
+.link-title {
+  font-size: 15px;
   font-weight: 600;
   color: #fff;
 }
 
-.sub-tabs {
-  display: flex;
-  gap: 8px;
-  margin-bottom: 16px;
-}
-
-.sub-tab {
-  padding: 8px 14px;
-  background: rgba(0, 212, 255, 0.1);
-  border: 1px solid rgba(0, 212, 255, 0.2);
-  border-radius: 6px;
-  color: rgba(255, 255, 255, 0.7);
-  font-size: 12px;
-  cursor: pointer;
-  transition: all 0.3s ease;
-}
-
-.sub-tab.active {
-  background: rgba(0, 212, 255, 0.2);
-  color: #00d4ff;
-}
-
-.input-section {
-  background: rgba(0, 0, 0, 0.3);
-  border-radius: 10px;
-  padding: 16px;
-}
-
-.input-textarea {
-  width: 100%;
-  padding: 12px;
-  background: transparent;
-  border: 1px solid rgba(0, 212, 255, 0.2);
-  border-radius: 8px;
-  color: #fff;
+.link-desc {
+  margin: 0 0 16px 0;
   font-size: 13px;
-  resize: none;
-  outline: none;
-  box-sizing: border-box;
+  color: rgba(255, 255, 255, 0.6);
+  line-height: 1.5;
 }
 
-.input-textarea::placeholder {
-  color: rgba(255, 255, 255, 0.4);
-}
-
-.input-footer {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-top: 12px;
-}
-
-.char-count {
-  font-size: 12px;
-  color: rgba(255, 255, 255, 0.5);
-}
-
-.input-actions {
-  display: flex;
-  gap: 10px;
-}
-
-.action-btn {
+.link-btn {
+  display: inline-block;
   padding: 10px 24px;
   background: linear-gradient(135deg, #00d4ff 0%, #0099cc 100%);
   border: none;
@@ -551,135 +464,13 @@ const inputContent = ref('请输入：分析某台区本月线损异常，结合
   color: #fff;
   font-size: 13px;
   font-weight: 500;
+  text-decoration: none;
   cursor: pointer;
   transition: all 0.3s ease;
 }
 
-.action-btn:hover {
+.link-btn:hover {
   box-shadow: 0 0 20px rgba(0, 212, 255, 0.4);
-}
-
-.action-btn.secondary {
-  background: transparent;
-  border: 1px solid rgba(0, 212, 255, 0.3);
-  color: #00d4ff;
-}
-
-.action-btn.secondary:hover {
-  background: rgba(0, 212, 255, 0.1);
-}
-
-.service-catalog {
-  background: linear-gradient(135deg, rgba(17, 24, 39, 0.9) 0%, rgba(26, 35, 50, 0.8) 100%);
-  border: 1px solid rgba(0, 212, 255, 0.2);
-  border-radius: 12px;
-  padding: 12px;
-  flex: 1;
-  overflow: hidden;
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
-}
-
-.catalog-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 16px;
-}
-
-.catalog-title {
-  font-size: 14px;
-  font-weight: 600;
-  color: #fff;
-}
-
-.catalog-more {
-  padding: 4px 10px;
-  background: transparent;
-  border: none;
-  border-radius: 4px;
-  color: rgba(255, 255, 255, 0.5);
-  font-size: 12px;
-  cursor: pointer;
-}
-
-.catalog-more:hover {
-  background: rgba(0, 212, 255, 0.1);
-  color: #00d4ff;
-}
-
-.catalog-list {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  flex: 1;
-  overflow-y: auto;
-  min-height: 0;
-}
-
-.catalog-item {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 12px;
-  background: rgba(0, 212, 255, 0.05);
-  border-radius: 8px;
-}
-
-.item-icon {
-  color: #00d4ff;
-}
-
-.item-info {
-  flex: 1;
-}
-
-.item-name {
-  display: block;
-  font-size: 12px;
-  color: #fff;
-  margin-bottom: 4px;
-}
-
-.item-meta {
-  display: flex;
-  gap: 6px;
-}
-
-.meta-tag {
-  padding: 2px 6px;
-  background: rgba(0, 212, 255, 0.1);
-  border-radius: 3px;
-  font-size: 10px;
-  color: rgba(255, 255, 255, 0.6);
-}
-
-.item-status {
-  padding: 3px 8px;
-  border-radius: 4px;
-  font-size: 11px;
-  font-weight: 500;
-}
-
-.item-status.success {
-  background: rgba(0, 255, 136, 0.2);
-  color: #00ff88;
-}
-
-.item-status.warning {
-  background: rgba(255, 170, 0, 0.2);
-  color: #ffaa00;
-}
-
-.item-status.info {
-  background: rgba(0, 212, 255, 0.2);
-  color: #00d4ff;
-}
-
-.item-status.danger {
-  background: rgba(255, 85, 85, 0.2);
-  color: #ff5555;
 }
 
 .footer-bar {
@@ -703,19 +494,17 @@ const inputContent = ref('请输入：分析某台区本月线损异常，结合
   gap: 12px;
 }
 
-.footer-btn {
-  padding: 12px 24px;
-  border-radius: 8px;
-  font-size: 13px;
-  font-weight: 500;
-  cursor: pointer;
-  transition: all 0.3s ease;
-}
-
 .footer-btn.primary {
+  padding: 10px 20px;
   background: linear-gradient(135deg, #00d4ff 0%, #0099cc 100%);
   border: none;
+  border-radius: 8px;
   color: #fff;
+  font-size: 13px;
+  font-weight: 500;
+  text-decoration: none;
+  cursor: pointer;
+  transition: all 0.3s ease;
 }
 
 .footer-btn.primary:hover {
