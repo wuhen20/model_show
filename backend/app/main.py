@@ -4,6 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.core.config import settings
 from app.api.routes.models import router as models_router
 from app.api.routes.chat import router as chat_router
+from app.api.routes.knowledge import router as knowledge_router
 
 os.makedirs(settings.upload_dir, exist_ok=True)
 
@@ -19,6 +20,7 @@ app.add_middleware(
 
 app.include_router(models_router, prefix="/api/models", tags=["模型管理"])
 app.include_router(chat_router, prefix="/api", tags=["对话服务"])
+app.include_router(knowledge_router, prefix="/api/knowledge", tags=["知识管理"])
 
 @app.get("/api/health")
 def health_check():

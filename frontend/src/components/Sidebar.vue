@@ -9,6 +9,7 @@ const menuItems = [
   { id: 'home', name: '工作台首页', icon: 'home', path: '/' },
   { id: 'experience', name: '能力体验', icon: 'zap', path: '/ability-experience' },
   { id: 'service', name: '模型服务', icon: 'server', path: '/model-service' },
+  { id: 'knowledge', name: '知识管理', icon: 'book', path: '/knowledge-management' },
   { id: 'interface', name: '接口管理', icon: 'plug', path: '/interface' },
   { id: 'config', name: '场景配置', icon: 'settings', path: '/config' },
   { id: 'center', name: '样本中心', icon: 'database', path: '/sample' },
@@ -29,7 +30,8 @@ const getIconPath = (iconName: string) => {
     'bar-chart': 'M18 20V10M12 20V4M6 20v-6',
     activity: 'M18 20V10M12 20V4M6 20v-6',
     'file-text': 'M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z',
-    cog: 'M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6zm9.5-2.5a1.5 1.5 0 0 1-1.5-1.5v-1a1.5 1.5 0 0 1 3 0v1a1.5 1.5 0 0 1-1.5 1.5zm-19 0a1.5 1.5 0 0 1-1.5-1.5v-1a1.5 1.5 0 0 1 3 0v1a1.5 1.5 0 0 1-1.5 1.5zM12 4.5a1.5 1.5 0 0 1-1.5-1.5v-1a1.5 1.5 0 0 1 3 0v1A1.5 1.5 0 0 1 12 4.5zm0 19a1.5 1.5 0 0 1-1.5-1.5v-1a1.5 1.5 0 0 1 3 0v1a1.5 1.5 0 0 1-1.5 1.5zM5.5 9a1.5 1.5 0 0 1-1.5-1.5V6a1.5 1.5 0 0 1 3 0v1.5A1.5 1.5 0 0 1 5.5 9zm13 0a1.5 1.5 0 0 1-1.5-1.5V6a1.5 1.5 0 0 1 3 0v1.5a1.5 1.5 0 0 1-1.5 1.5z'
+    cog: 'M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6zm9.5-2.5a1.5 1.5 0 0 1-1.5-1.5v-1a1.5 1.5 0 0 1 3 0v1a1.5 1.5 0 0 1-1.5 1.5zm-19 0a1.5 1.5 0 0 1-1.5-1.5v-1a1.5 1.5 0 0 1 3 0v1a1.5 1.5 0 0 1-1.5 1.5zM12 4.5a1.5 1.5 0 0 1-1.5-1.5v-1a1.5 1.5 0 0 1 3 0v1A1.5 1.5 0 0 1 12 4.5zm0 19a1.5 1.5 0 0 1-1.5-1.5v-1a1.5 1.5 0 0 1 3 0v1a1.5 1.5 0 0 1-1.5 1.5zM5.5 9a1.5 1.5 0 0 1-1.5-1.5V6a1.5 1.5 0 0 1 3 0v1.5A1.5 1.5 0 0 1 5.5 9zm13 0a1.5 1.5 0 0 1-1.5-1.5V6a1.5 1.5 0 0 1 3 0v1.5a1.5 1.5 0 0 1-1.5 1.5z',
+    book: 'M4 19.5A2.5 2.5 0 0 1 6.5 17H20M4 19.5A2.5 2.5 0 0 0 6.5 22H20V2H6.5A2.5 2.5 0 0 0 4 4.5v15zM9 7h6M9 11h4'
   }
   return icons[iconName] || icons.home
 }
