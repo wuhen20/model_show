@@ -155,12 +155,12 @@ pip install -r requirements.txt
 cp .env.example .env
 # 编辑 .env 填入你的 DASHSCOPE_API_KEY
 
-# 启动后端服务 (端口 3003)
-python -m uvicorn app.main:app --host 0.0.0.0 --port 3003
-# 或: uvicorn app.main:app --host 0.0.0.0 --port 3003 --reload
+# 启动后端服务 (端口 3002)
+python -m uvicorn app.main:app --host 0.0.0.0 --port 3002
+# 或: uvicorn app.main:app --host 0.0.0.0 --port 3002 --reload
 ```
 
-API 文档自动生成: http://localhost:3003/docs
+API 文档自动生成: http://localhost:3002/docs
 
 ### 2. 启动前端
 
@@ -206,4 +206,4 @@ npm run preview
 | `/api/knowledge/quality-metrics` | GET | 知识质量指标 |
 | `/api/knowledge/graph` | GET | 知识图谱数据 (节点+关系+统计) |
 
-Swagger API 文档: http://localhost:3003/docs
+Swagger API 文档: http://localhost:3002/docs
