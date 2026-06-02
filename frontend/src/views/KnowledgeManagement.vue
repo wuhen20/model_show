@@ -115,10 +115,10 @@
 
           <div class="bottom-row">
             <div class="bottom-left">
-              <KnowledgeTable :category-id="activeCategory" @back="clearCategory" />
+              <KnowledgeTable :category-id="activeCategory" :workspace="activeWorkspace" @back="clearCategory" />
             </div>
             <div class="bottom-right">
-              <KnowledgeGraph :category-id="activeCategory" @back="clearCategory" />
+              <KnowledgeGraph :category-id="activeCategory" :workspace="activeWorkspace" @back="clearCategory" />
             </div>
           </div>
 
@@ -143,26 +143,36 @@ import KnowledgeTrend from '@/components/KnowledgeTrend.vue'
 import KnowledgeTable from '@/components/KnowledgeTable.vue'
 import KnowledgeGraph from '@/components/KnowledgeGraph.vue'
 import KnowledgeTools from '@/components/KnowledgeTools.vue'
-import { fetchKnowledgeStats, fetchCategories, type KnowledgeStats, type KnowledgeCategory } from '@/api/knowledge'
+import { fetchKnowledgeStats, fetchCategories, fetchKnowledgeBases, type KnowledgeStats, type KnowledgeCategory, type KnowledgeBase } from '@/api/knowledge'
 
 const router = useRouter()
 const route = useRoute()
 const stats = ref<KnowledgeStats | null>(null)
 const categories = ref<KnowledgeCategory[]>([])
 const activeCategory = ref<string>('')
+const knowledgeBases = ref<KnowledgeBase[]>([])
+const activeWorkspace = ref<string>('')
 
 watch(() => route.query.category, (val) => {
   activeCategory.value = (val as string) || ''
+  const kb = knowledgeBases.value.find(k => k.id === activeCategory.value || k.name === activeCategory.value)
+  activeWorkspace.value = kb ? kb.workspace : ''
+}, { immediate: true })
+
+watch(() => route.query.workspace, (val) => {
+  if (val) activeWorkspace.value = val as string
 }, { immediate: true })
 
 onMounted(async () => {
   try {
-    const [statsData, catsData] = await Promise.all([
+    const [statsData, catsData, basesData] = await Promise.all([
       fetchKnowledgeStats(),
-      fetchCategories()
+      fetchCategories(),
+      fetchKnowledgeBases(),
     ])
     stats.value = statsData
     categories.value = catsData
+    knowledgeBases.value = basesData
   } catch {
     stats.value = {
       total_count: 2887, structured_count: 505, unstructured_count: 2382,
@@ -198,10 +208,13 @@ function getCategoryIcon(iconName: string) {
 }
 
 function navigateCategory(cat: KnowledgeCategory) {
-  router.push({ path: '/knowledge-management', query: { category: cat.id } })
+  const kb = knowledgeBases.value.find(k => k.id === cat.id || k.name === cat.id)
+  const query = { category: cat.id, ...(kb ? { workspace: kb.workspace } : {}) }
+  router.push({ path: '/knowledge-management', query })
 }
 
 function clearCategory() {
+  activeWorkspace.value = ''
   router.push({ path: '/knowledge-management' })
 }
 </script>

@@ -1,12 +1,12 @@
 const API_BASE = '/api/knowledge'
 
-async function request(url: string) {
+async function request<T>(url: string): Promise<T> {
   const res = await fetch(url)
   const data = await res.json()
   if (data.code !== 0) {
     throw new Error(data.message || '请求失败')
   }
-  return data.data
+  return data.data as T
 }
 
 export interface KnowledgeStats {
@@ -91,7 +91,8 @@ export function fetchKnowledgeList(params?: {
   keyword?: string
   page?: number
   page_size?: number
-}): Promise<{ items: KnowledgeItem[]; total: number; page: number; page_size: number }> {
+  workspace?: string
+}): Promise<{ items: KnowledgeItem[]; total: number; page: number; page_size: number; status_counts?: Record<string, number> }> {
   const searchParams = new URLSearchParams()
   if (params) {
     Object.entries(params).forEach(([k, v]) => {
@@ -118,6 +119,41 @@ export function fetchQualityMetrics(): Promise<QualityMetrics> {
   return request(`${API_BASE}/quality-metrics`)
 }
 
+// --- Knowledge base ---
+
+export interface KnowledgeBase {
+  id: string
+  name: string
+  workspace: string
+  description: string
+  icon: string
+  color: string
+  doc_count: number
+  status_counts: Record<string, number>
+}
+
+export function fetchKnowledgeBases(): Promise<KnowledgeBase[]> {
+  return request(`${API_BASE}/bases`)
+}
+
+// --- Pipeline status ---
+
+export interface PipelineStatus {
+  busy: boolean
+  job_name: string
+  docs: number
+  cur_batch: number
+  batches: number
+  latest_message: string
+}
+
+export function fetchPipelineStatus(workspace?: string): Promise<PipelineStatus> {
+  const params = workspace ? `?workspace=${workspace}` : ''
+  return request(`${API_BASE}/pipeline-status${params}`)
+}
+
+// --- Knowledge graph ---
+
 export interface GraphNode {
   name: string
   symbolSize: number
@@ -143,6 +179,7 @@ export interface KnowledgeGraph {
   stats: GraphStats
 }
 
-export function fetchKnowledgeGraph(): Promise<KnowledgeGraph> {
-  return request(`${API_BASE}/graph`)
+export function fetchKnowledgeGraph(workspace?: string): Promise<KnowledgeGraph> {
+  const params = workspace ? `?workspace=${workspace}` : ''
+  return request(`${API_BASE}/graph${params}`)
 }

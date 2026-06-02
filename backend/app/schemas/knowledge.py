@@ -20,7 +20,7 @@ class KnowledgeItem(BaseModel):
     knowledge_type: str
     source: str
     score: int = 5
-    status: str = "已发布"
+    status: str = "PENDING"
     update_time: str = ""
     file_path: str = ""
     description: str = ""
@@ -45,9 +45,29 @@ class KnowledgeDetail(BaseModel):
     knowledge_type: str
     source: str
     score: int = 5
-    status: str = "已发布"
+    status: str = "PENDING"
     update_time: str = ""
     file_path: str = ""
     description: str = ""
     content: str = ""
     tags: list[str] = []
+
+
+class KnowledgeBase(BaseModel):
+    id: str
+    name: str
+    workspace: str
+    description: str = ""
+    icon: str = "brain"
+    color: str = "#00d4ff"
+    doc_count: int = 0
+    status_counts: dict[str, int] = {}
+
+
+class PipelineStatus(BaseModel):
+    busy: bool = False
+    job_name: str = ""
+    docs: int = 0
+    cur_batch: int = 0
+    batches: int = 0
+    latest_message: str = ""

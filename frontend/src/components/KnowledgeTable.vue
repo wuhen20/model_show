@@ -59,10 +59,10 @@
         </template>
       </el-table-column>
 
-      <el-table-column prop="status" label="状态" width="80">
+      <el-table-column prop="status" label="状态" width="100">
         <template #default="{ row }">
-          <el-tag :type="row.status === '已发布' ? 'success' : 'warning'" size="small">
-            {{ row.status }}
+          <el-tag :type="statusTagType(row.status)" size="small">
+            {{ statusLabel(row.status) }}
           </el-tag>
         </template>
       </el-table-column>
@@ -88,11 +88,13 @@ import { fetchKnowledgeList, type KnowledgeItem } from '@/api/knowledge'
 
 const props = defineProps<{
   categoryId?: string
+  workspace?: string
 }>()
 
 const emit = defineEmits<{
   (e: 'back'): void
 }>()
+
 const router = useRouter()
 const activeTab = ref('latest')
 const tableData = ref<KnowledgeItem[]>([])
@@ -105,13 +107,52 @@ const headerCellStyle = {
   fontSize: '13px'
 }
 
+/** Map LightRAG / legacy status strings to el-tag type */
+function statusTagType(status: string): 'success' | 'warning' | 'danger' | 'info' | 'primary' {
+  switch (status) {
+    case 'PROCESSED':
+    case '已发布':
+      return 'success'
+    case 'PROCESSING':
+      return 'primary'
+    case 'PENDING':
+    case '待审核':
+      return 'info'
+    case 'FAILED':
+      return 'danger'
+    default:
+      return 'warning'
+  }
+}
+
+/** Friendly status label in Chinese */
+function statusLabel(status: string): string {
+  switch (status) {
+    case 'PROCESSED':
+      return '已处理'
+    case 'PROCESSING':
+      return '处理中'
+    case 'PENDING':
+      return '待处理'
+    case 'FAILED':
+      return '处理失败'
+    case '已发布':
+      return '已发布'
+    case '待审核':
+      return '待审核'
+    default:
+      return status
+  }
+}
+
 async function loadData() {
   try {
     const result = await fetchKnowledgeList({
       tab: activeTab.value,
       page: 1,
       page_size: 10,
-      category_id: props.categoryId || undefined
+      category_id: props.categoryId || undefined,
+      workspace: props.workspace || undefined,
     })
     tableData.value = result.items
     totalItems.value = result.total
@@ -126,6 +167,10 @@ onMounted(() => {
 })
 
 watch(() => props.categoryId, () => {
+  loadData()
+})
+
+watch(() => props.workspace, () => {
   loadData()
 })
 

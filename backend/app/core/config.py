@@ -12,6 +12,27 @@ class Settings(BaseSettings):
     allowed_image_types: str = "image/jpeg,image/png,image/gif,image/webp,image/bmp"
     upload_dir: str = "uploads"
 
+    # LightRAG
+    lightrag_base_url: str = "http://127.0.0.1:9621"
+
+    # Memgraph
+    memgraph_uri: str = "bolt://localhost:7687"
+    memgraph_username: str = ""
+    memgraph_password: str = ""
+    memgraph_database: str = "memgraph"
+
+    # Knowledge bases: id → workspace mapping
+    knowledge_bases: list[dict] = [
+        {
+            "id": "cai_ji_zi_yu",
+            "name": "采集自愈知识库",
+            "workspace": "cai_ji_zi_yu",
+            "description": "电力采集消缺与自愈恢复经验知识",
+            "icon": "plug",
+            "color": "#00d4ff",
+        },
+    ]
+
     models: list[dict] = [
         {
             "id": "qwen-plus",

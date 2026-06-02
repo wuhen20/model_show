@@ -11,6 +11,7 @@
         返回全部
       </el-button>
     </div>
+
     <div class="graph-body">
       <div ref="chartRef" class="graph-chart"></div>
       <div class="graph-sidebar">
@@ -18,18 +19,21 @@
           <div class="stat-num">{{ formatNum(graphStats.entityCount) }}</div>
           <div class="stat-label">实体总数</div>
         </div>
+
         <div class="stat-block">
           <div class="stat-num">{{ formatNum(graphStats.relationCount) }}</div>
           <div class="stat-label">关系总数</div>
         </div>
+
         <div class="stat-block">
           <div class="stat-num">{{ graphStats.coverage }}%</div>
           <div class="stat-label">图谱覆盖率</div>
         </div>
+
         <div class="graph-legend">
-          <div class="legend-row"><span class="dot" style="background:#00d4ff"></span>知识库</div>
-          <div class="legend-row"><span class="dot" style="background:#00ff88"></span>子分类</div>
-          <div class="legend-row"><span class="dot" style="background:#ffaa00"></span>知识类型</div>
+          <div class="legend-row"><span class="dot" style="background:#00d4ff"></span>核心实体</div>
+          <div class="legend-row"><span class="dot" style="background:#00ff88"></span>关联实体</div>
+          <div class="legend-row"><span class="dot" style="background:#ffaa00"></span>边缘实体</div>
         </div>
       </div>
     </div>
@@ -37,8 +41,9 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, onMounted, onBeforeUnmount } from 'vue'
+import { ref, reactive, onMounted, onBeforeUnmount, watch } from 'vue'
 import * as echarts from 'echarts'
+import { fetchKnowledgeGraph } from '@/api/knowledge'
 
 const chartRef = ref<HTMLElement | null>(null)
 let chartInstance: echarts.ECharts | null = null
@@ -46,113 +51,78 @@ let retryTimer: ReturnType<typeof setTimeout> | null = null
 
 const props = defineProps<{
   categoryId?: string
+  workspace?: string
 }>()
 
 const emit = defineEmits<{
   (e: 'back'): void
 }>()
 
-const graphStats = reactive({ entityCount: 36584, relationCount: 128652, coverage: 89.7 })
+const graphStats = reactive({ entityCount: 0, relationCount: 0, coverage: 0 })
 
 function formatNum(n: number) {
   if (n >= 10000) return (n / 10000).toFixed(1) + '万'
   return n.toLocaleString()
 }
 
-function buildGraphData() {
+function buildFallbackData() {
   const nodes: any[] = [
-    { name: '计量营销专业知识库', symbolSize: 58, category: 0, itemStyle: { color: '#00d4ff' } },
-    { name: '计量数字讲师', symbolSize: 48, category: 0, itemStyle: { color: '#00d4ff' } },
-    { name: '专家系统知识库', symbolSize: 36, category: 0, itemStyle: { color: '#00d4ff' } },
-    { name: '装表接电知识库', symbolSize: 28, category: 0, itemStyle: { color: '#00d4ff' } },
-    { name: '采集自愈知识库', symbolSize: 24, category: 0, itemStyle: { color: '#00d4ff' } },
-
-    { name: '工作指导', symbolSize: 32, category: 1, itemStyle: { color: '#00ff88' } },
-    { name: '作业指导', symbolSize: 28, category: 1, itemStyle: { color: '#00ff88' } },
-    { name: '技术文件', symbolSize: 26, category: 1, itemStyle: { color: '#00ff88' } },
-    { name: '检定规程', symbolSize: 30, category: 1, itemStyle: { color: '#00ff88' } },
-    { name: '管理制度', symbolSize: 24, category: 1, itemStyle: { color: '#00ff88' } },
-    { name: '培训资料', symbolSize: 22, category: 1, itemStyle: { color: '#00ff88' } },
-    { name: '国家电网企业标准', symbolSize: 26, category: 1, itemStyle: { color: '#00ff88' } },
-    { name: '行业标准', symbolSize: 24, category: 1, itemStyle: { color: '#00ff88' } },
-    { name: '电力行业标准', symbolSize: 22, category: 1, itemStyle: { color: '#00ff88' } },
-    { name: '课程资源', symbolSize: 28, category: 1, itemStyle: { color: '#00ff88' } },
-    { name: '考试题库', symbolSize: 26, category: 1, itemStyle: { color: '#00ff88' } },
-    { name: '实操指南', symbolSize: 22, category: 1, itemStyle: { color: '#00ff88' } },
-    { name: '专家规则', symbolSize: 24, category: 1, itemStyle: { color: '#00ff88' } },
-    { name: '故障案例', symbolSize: 22, category: 1, itemStyle: { color: '#00ff88' } },
-    { name: '装表接电', symbolSize: 18, category: 1, itemStyle: { color: '#00ff88' } },
-    { name: '采集运维', symbolSize: 18, category: 1, itemStyle: { color: '#00ff88' } },
-
-    { name: '国家标准', symbolSize: 14, category: 2, itemStyle: { color: '#ffaa00' } },
-    { name: '国家计量规程', symbolSize: 14, category: 2, itemStyle: { color: '#ffaa00' } },
-    { name: '企业标准', symbolSize: 12, category: 2, itemStyle: { color: '#ffaa00' } },
-    { name: '技术规范', symbolSize: 12, category: 2, itemStyle: { color: '#ffaa00' } },
-    { name: '法律法规', symbolSize: 12, category: 2, itemStyle: { color: '#ffaa00' } },
-    { name: '操作手册', symbolSize: 10, category: 2, itemStyle: { color: '#ffaa00' } },
-    { name: '培训题库', symbolSize: 10, category: 2, itemStyle: { color: '#ffaa00' } },
-    { name: '计量规范', symbolSize: 10, category: 2, itemStyle: { color: '#ffaa00' } },
+    { name: '采集自愈知识库', symbolSize: 55, category: 0, itemStyle: { color: '#00d4ff' } },
+    { name: '采集常见故障', symbolSize: 30, category: 1, itemStyle: { color: '#00ff88' } },
+    { name: '集中器', symbolSize: 28, category: 1, itemStyle: { color: '#00ff88' } },
+    { name: '采集器', symbolSize: 26, category: 1, itemStyle: { color: '#00ff88' } },
+    { name: '消缺典型案例', symbolSize: 26, category: 1, itemStyle: { color: '#00ff88' } },
+    { name: '低压台区', symbolSize: 24, category: 1, itemStyle: { color: '#00ff88' } },
+    { name: '冻结曲线', symbolSize: 22, category: 1, itemStyle: { color: '#00ff88' } },
+    { name: '故障排查', symbolSize: 24, category: 1, itemStyle: { color: '#00ff88' } },
+    { name: '远程研判', symbolSize: 22, category: 1, itemStyle: { color: '#00ff88' } },
+    { name: '标准化作业', symbolSize: 20, category: 2, itemStyle: { color: '#ffaa00' } },
+    { name: '七步法', symbolSize: 18, category: 2, itemStyle: { color: '#ffaa00' } },
+    { name: '采集稳定性', symbolSize: 18, category: 2, itemStyle: { color: '#ffaa00' } },
+    { name: '现场装置', symbolSize: 16, category: 2, itemStyle: { color: '#ffaa00' } },
   ]
-
   const links: any[] = [
-    { source: '计量营销专业知识库', target: '工作指导' },
-    { source: '计量营销专业知识库', target: '检定规程' },
-    { source: '计量营销专业知识库', target: '国家电网企业标准' },
-    { source: '计量营销专业知识库', target: '行业标准' },
-    { source: '计量营销专业知识库', target: '管理制度' },
-    { source: '计量营销专业知识库', target: '技术文件' },
-
-    { source: '计量数字讲师', target: '课程资源' },
-    { source: '计量数字讲师', target: '考试题库' },
-    { source: '计量数字讲师', target: '实操指南' },
-    { source: '计量数字讲师', target: '培训资料' },
-    { source: '计量数字讲师', target: '作业指导' },
-
-    { source: '专家系统知识库', target: '专家规则' },
-    { source: '专家系统知识库', target: '故障案例' },
-    { source: '专家系统知识库', target: '检定规程' },
-
-    { source: '装表接电知识库', target: '装表接电' },
-    { source: '装表接电知识库', target: '作业指导' },
-
-    { source: '采集自愈知识库', target: '采集运维' },
-    { source: '采集自愈知识库', target: '技术文件' },
-
-    { source: '行业标准', target: '国家标准' },
-    { source: '行业标准', target: '电力行业标准' },
-    { source: '国家电网企业标准', target: '企业标准' },
-    { source: '国家电网企业标准', target: '技术规范' },
-    { source: '检定规程', target: '国家计量规程' },
-    { source: '检定规程', target: '计量规范' },
-    { source: '管理制度', target: '法律法规' },
-    { source: '工作指导', target: '操作手册' },
-    { source: '考试题库', target: '培训题库' },
-
-    { source: '电力行业标准', target: '国家标准' },
-    { source: '技术规范', target: '国家标准' },
-    { source: '故障案例', target: '检定规程' },
+    { source: '采集自愈知识库', target: '采集常见故障' },
+    { source: '采集自愈知识库', target: '消缺典型案例' },
+    { source: '采集自愈知识库', target: '低压台区' },
+    { source: '采集自愈知识库', target: '集中器' },
+    { source: '采集自愈知识库', target: '故障排查' },
+    { source: '集中器', target: '采集器' },
+    { source: '采集常见故障', target: '远程研判' },
+    { source: '消缺典型案例', target: '七步法' },
+    { source: '故障排查', target: '标准化作业' },
+    { source: '低压台区', target: '冻结曲线' },
+    { source: '低压台区', target: '采集稳定性' },
+    { source: '远程研判', target: '标准化作业' },
+    { source: '冻结曲线', target: '现场装置' },
   ]
-
   return { nodes, links }
 }
 
-function initChart() {
+function initChart(nodes: any[], links: any[]) {
   if (!chartRef.value) return
   const w = chartRef.value.clientWidth
   if (w <= 0) {
-    retryTimer = setTimeout(initChart, 200)
+    retryTimer = setTimeout(() => initChart(nodes, links), 200)
     return
   }
 
+  if (chartInstance) {
+    chartInstance.dispose()
+  }
   chartInstance = echarts.init(chartRef.value)
-  const { nodes, links } = buildGraphData()
 
   const option: echarts.EChartsOption = {
     tooltip: {
       trigger: 'item',
       backgroundColor: 'rgba(17,24,39,0.95)',
       borderColor: 'rgba(0,212,255,0.3)',
-      textStyle: { color: '#fff', fontSize: 12 }
+      textStyle: { color: '#fff', fontSize: 12 },
+      formatter: (p: any) => {
+        if (p.dataType === 'node') return p.name || ''
+        if (p.dataType === 'edge') return `${p.data.source} → ${p.data.target}`
+        return ''
+      }
     },
     series: [{
       type: 'graph',
@@ -165,16 +135,16 @@ function initChart() {
         show: true,
         position: 'bottom',
         fontSize: 10,
-        color: 'rgba(255,255,255,0.75)',
+        color: 'rgba(255,255,255,0.8)',
         formatter: (p: any) => {
           const n = p.name || ''
-          return n.length > 6 ? n.slice(0, 6) + '..' : n
+          return n.length > 8 ? n.slice(0, 8) + '..' : n
         }
       },
       force: {
-        repulsion: 180,
-        edgeLength: [50, 100],
-        gravity: 0.12
+        repulsion: 200,
+        edgeLength: [40, 120],
+        gravity: 0.08
       },
       lineStyle: {
         color: 'rgba(0,212,255,0.3)',
@@ -190,22 +160,39 @@ function initChart() {
   chartInstance.setOption(option)
 }
 
-onMounted(async () => {
+async function loadGraph() {
   try {
-    const resp = await fetch('/api/knowledge/graph')
-    const json = await resp.json()
-    if (json.code === 0 && json.data) {
-      const s = json.data.stats
+    // When workspace is specified, query Memgraph via backend API
+    const data = await fetchKnowledgeGraph(props.workspace || undefined)
+    if (data && data.nodes && data.nodes.length > 0) {
+      const s = data.stats
       if (s) {
         graphStats.entityCount = s.entity_count
         graphStats.relationCount = s.relation_count
         graphStats.coverage = s.coverage
       }
+      initChart(data.nodes, data.links)
+      return
     }
-  } catch {}
+  } catch (e) {
+    console.warn('[KnowledgeGraph] Failed to load from backend:', e)
+  }
 
-  initChart()
+  // Fallback to hardcoded data
+  const fb = buildFallbackData()
+  initChart(fb.nodes, fb.links)
+  graphStats.entityCount = 36584
+  graphStats.relationCount = 128652
+  graphStats.coverage = 89.7
+}
+
+onMounted(async () => {
+  await loadGraph()
   window.addEventListener('resize', handleResize)
+})
+
+watch(() => props.workspace, () => {
+  loadGraph()
 })
 
 onBeforeUnmount(() => {
