@@ -4,9 +4,14 @@ dist
 .env
 .DS_Store
 backend/uploads/
+backend/data/
+backend/models_pool/
 backend/__pycache__/
 backend/app/**/__pycache__/
 *.pyc
 *.pyo
+*.db
+*.db-wal
+*.db-shm
 .venv
 venv

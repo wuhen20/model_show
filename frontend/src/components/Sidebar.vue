@@ -5,17 +5,15 @@ import { RouterLink, useRoute } from 'vue-router'
 const route = useRoute()
 const collapsed = ref(false)
 
+// 7 大功能模块（与 DESIGN.md 对齐）
 const menuItems = [
   { id: 'home', name: '工作台首页', icon: 'home', path: '/' },
-  { id: 'experience', name: '能力体验', icon: 'zap', path: '/ability-experience' },
-  { id: 'service', name: '模型服务', icon: 'server', path: '/model-service' },
-  { id: 'interface', name: '接口管理', icon: 'plug', path: '/interface' },
-  { id: 'config', name: '场景配置', icon: 'settings', path: '/config' },
-  { id: 'center', name: '样本中心', icon: 'database', path: '/sample' },
-  { id: 'analysis', name: '评测分析', icon: 'bar-chart', path: '/analysis' },
-  { id: 'monitor', name: '运行监控', icon: 'activity', path: '/monitor' },
-  { id: 'log', name: '日志中心', icon: 'file-text', path: '/log' },
-  { id: 'system', name: '系统设置', icon: 'cog', path: '/system' }
+  { id: 'models', name: '小模型管理', icon: 'server', path: '/models' },
+  { id: 'training', name: '小模型训练', icon: 'activity', path: '/training' },
+  { id: 'experience', name: '展示与体验', icon: 'zap', path: '/experience' },
+  { id: 'datasets', name: '训练数据集', icon: 'database', path: '/datasets' },
+  { id: 'mcp', name: 'MCP 服务管理', icon: 'plug', path: '/mcp' },
+  { id: 'mcp-test', name: 'MCP 服务测试', icon: 'bar-chart', path: '/mcp/test' }
 ]
 
 const getIconPath = (iconName: string) => {

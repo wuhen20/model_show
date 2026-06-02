@@ -1,5 +1,6 @@
 import os
 import json
+import uuid
 from datetime import datetime
 from fastapi import APIRouter, HTTPException, UploadFile, File, Form
 from fastapi.responses import StreamingResponse
@@ -56,7 +57,15 @@ async def chat_upload(
         return {"code": -1, "message": "请上传文件"}
 
     os.makedirs(settings.upload_dir, exist_ok=True)
-    file_path = os.path.join(settings.upload_dir, file.filename)
+    # 安全处理：去掉客户端传入的目录信息，使用 uuid 防重名 + 路径遍历
+    raw_name = os.path.basename(file.filename or "")
+    if not raw_name:
+        return {"code": -1, "message": "文件名无效"}
+    safe_name = f"{uuid.uuid4().hex}_{raw_name}"
+    abs_upload_dir = os.path.abspath(settings.upload_dir)
+    file_path = os.path.abspath(os.path.join(abs_upload_dir, safe_name))
+    if not file_path.startswith(abs_upload_dir + os.sep):
+        raise HTTPException(status_code=400, detail="非法的上传路径")
 
     try:
         content = await file.read()
@@ -69,12 +78,14 @@ async def chat_upload(
             question=question,
             file_path=file_path,
             mime_type=mime_type,
-            file_name=file.filename,
+            file_name=raw_name,
         )
 
         return {"code": 0, "data": result}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"文件处理失败: {str(e)}")
     finally:
+        # 注意：chat_with_file 当前为同步调用，确保 finally 在文件读取完成后执行。
+        # 若未来改为异步（如流式上传处理），需将删除逻辑移至异步完成回调。
         if os.path.exists(file_path):
             os.remove(file_path)

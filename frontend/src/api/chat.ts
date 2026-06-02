@@ -1,4 +1,6 @@
+// 开发环境通过 Vite proxy 代理 /api → localhost:3002
 const BASE_URL = '/api'
+// SSE 流式调用绕开 Vite proxy 以获取更稳定的流传输
 const DIRECT_URL = 'http://localhost:3002/api'
 
 export interface ModelInfo {
@@ -34,7 +36,8 @@ export interface ApiResult<T> {
 }
 
 export async function fetchModels(): Promise<ModelInfo[]> {
-  const res = await fetch(`${BASE_URL}/models`)
+  // 注意：与 /api/models（小模型管理）区分；此处获取对话用 LLM 列表。
+  const res = await fetch(`${BASE_URL}/llm-models`)
   const json: ApiResult<ModelInfo[]> = await res.json()
   if (json.code !== 0) throw new Error(json.message || '获取模型列表失败')
   return json.data || []

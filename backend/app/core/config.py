@@ -6,11 +6,18 @@ class Settings(BaseSettings):
     dashscope_base_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
 
     server_port: int = 3002
-    cors_origin: str = "*"
+    # 多个允许的源用逗号分隔；保持 "*" 时会自动禁用 credentials（避免浏览器拒绝）。
+    cors_origin: str = "http://localhost:5173,http://127.0.0.1:5173"
 
     max_file_size: int = 10 * 1024 * 1024
     allowed_image_types: str = "image/jpeg,image/png,image/gif,image/webp,image/bmp"
     upload_dir: str = "uploads"
+
+    # 数据与模型权重根目录
+    data_dir: str = "data"
+    models_pool_dir: str = "models_pool"
+    mcp_port_start: int = 8100
+    mcp_port_end: int = 8199
 
     models: list[dict] = [
         {

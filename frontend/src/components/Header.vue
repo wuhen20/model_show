@@ -1,6 +1,4 @@
 <script setup lang="ts">
-import { RouterLink } from 'vue-router'
-
 defineProps<{
   title: string
   subtitle?: string
