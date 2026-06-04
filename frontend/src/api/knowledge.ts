@@ -1,7 +1,10 @@
 const API_BASE = '/api/knowledge'
 
-async function request<T>(url: string): Promise<T> {
-  const res = await fetch(url)
+async function request<T>(url: string, options?: RequestInit): Promise<T> {
+  const res = await fetch(url, {
+    headers: { 'Content-Type': 'application/json' },
+    ...options,
+  })
   const data = await res.json()
   if (data.code !== 0) {
     throw new Error(data.message || '请求失败')
@@ -130,6 +133,7 @@ export interface KnowledgeBase {
   color: string
   doc_count: number
   status_counts: Record<string, number>
+  tags?: TagResponse[]
 }
 
 export function fetchKnowledgeBases(): Promise<KnowledgeBase[]> {
@@ -160,11 +164,19 @@ export interface GraphNode {
   category: number
   itemStyle: { color: string }
   label?: { show: boolean }
+  /** Detail fields for the graph detail dialog */
+  entityType?: string
+  description?: string
+  kbName?: string
+  degree?: number
 }
 
 export interface GraphLink {
   source: string
   target: string
+  /** Detail fields for the graph detail dialog */
+  relType?: string
+  description?: string
 }
 
 export interface GraphStats {
@@ -179,7 +191,357 @@ export interface KnowledgeGraph {
   stats: GraphStats
 }
 
-export function fetchKnowledgeGraph(workspace?: string): Promise<KnowledgeGraph> {
-  const params = workspace ? `?workspace=${workspace}` : ''
-  return request(`${API_BASE}/graph${params}`)
+export function fetchKnowledgeGraph(workspace?: string, kbName?: string, maxNodes?: number): Promise<KnowledgeGraph> {
+  const params = new URLSearchParams()
+  if (workspace) params.set('workspace', workspace)
+  if (kbName) params.set('kb_name', kbName)
+  if (maxNodes) params.set('max_nodes', String(maxNodes))
+  const qs = params.toString()
+  return request(`${API_BASE}/graph${qs ? '?' + qs : ''}`)
+}
+
+// ===========================================================================
+// Knowledge Base Management API (Phase 1+)
+// ===========================================================================
+
+// --- Tags ---
+
+export interface TagCreatePayload {
+  level: number
+  name: string
+  parent_tag_id?: string | null
+  children?: TagCreatePayload[]
+}
+
+export interface TagResponse {
+  id: string
+  kb_id?: string
+  level: number
+  name: string
+  parent_tag_id?: string | null
+  children?: TagResponse[]
+}
+
+// --- Knowledge Base CRUD ---
+
+export interface KBCreatePayload {
+  name: string
+  description?: string
+  icon?: string
+  color?: string
+  chunk_size?: number
+  chunk_overlap?: number
+  chunking_strategy?: string
+  parent_chunk_size?: number
+  chunk_separator?: string
+  tags?: TagCreatePayload[]
+}
+
+export interface KBUpdatePayload {
+  name?: string
+  description?: string
+  icon?: string
+  color?: string
+  chunk_size?: number
+  chunk_overlap?: number
+  chunking_strategy?: string
+  parent_chunk_size?: number
+  chunk_separator?: string
+}
+
+export interface KBResponse {
+  id: string
+  name: string
+  workspace: string
+  description: string
+  icon: string
+  color: string
+  chunk_size: number
+  chunk_overlap: number
+  chunking_strategy: string
+  parent_chunk_size: number
+  chunk_separator: string
+  doc_count: number
+  tags: TagResponse[]
+  created_at: string
+  updated_at: string
+}
+
+export function createKnowledgeBase(data: KBCreatePayload): Promise<KBResponse> {
+  return request(`${API_BASE}/bases`, {
+    method: 'POST',
+    body: JSON.stringify(data),
+  })
+}
+
+export function fetchKnowledgeBaseDetail(kbId: string): Promise<KBResponse> {
+  return request(`${API_BASE}/bases/${kbId}`)
+}
+
+export function updateKnowledgeBase(kbId: string, data: KBUpdatePayload): Promise<KBResponse> {
+  return request(`${API_BASE}/bases/${kbId}`, {
+    method: 'PUT',
+    body: JSON.stringify(data),
+  })
+}
+
+export function deleteKnowledgeBase(kbId: string): Promise<void> {
+  return request(`${API_BASE}/bases/${kbId}`, { method: 'DELETE' })
+}
+
+// --- Tags API ---
+
+export function fetchKBTags(kbId: string): Promise<TagResponse[]> {
+  return request(`${API_BASE}/bases/${kbId}/tags`)
+}
+
+export function createKBTag(kbId: string, data: TagCreatePayload): Promise<TagResponse[]> {
+  return request(`${API_BASE}/bases/${kbId}/tags`, {
+    method: 'POST',
+    body: JSON.stringify(data),
+  })
+}
+
+export function updateTag(tagId: string, data: { name?: string; level?: number; parent_tag_id?: string | null }): Promise<TagResponse> {
+  return request(`${API_BASE}/tags/${tagId}`, {
+    method: 'PUT',
+    body: JSON.stringify(data),
+  })
+}
+
+export function deleteTag(tagId: string): Promise<void> {
+  return request(`${API_BASE}/tags/${tagId}`, { method: 'DELETE' })
+}
+
+// --- Documents ---
+
+export interface DocumentResponse {
+  id: string
+  kb_id: string
+  file_name: string
+  file_path: string
+  file_size: number
+  mime_type: string
+  status: string
+  chunk_count: number
+  vector_count: number
+  tags: TagResponse[]
+  created_at: string
+  updated_at: string
+}
+
+export interface PaginatedDocuments {
+  items: DocumentResponse[]
+  total: number
+  page: number
+  page_size: number
+}
+
+export async function uploadDocuments(
+  kbId: string,
+  formData: FormData
+): Promise<{ uploaded: DocumentResponse[]; count: number }> {
+  const res = await fetch(`${API_BASE}/bases/${kbId}/documents/upload`, {
+    method: 'POST',
+    body: formData,
+  })
+  const data = await res.json()
+  if (data.code !== 0) {
+    throw new Error(data.message || '上传失败')
+  }
+  return data.data
+}
+
+export function fetchKBDocuments(
+  kbId: string,
+  page?: number,
+  pageSize?: number
+): Promise<PaginatedDocuments> {
+  const params = new URLSearchParams()
+  if (page) params.set('page', String(page))
+  if (pageSize) params.set('page_size', String(pageSize))
+  const qs = params.toString()
+  return request(`${API_BASE}/bases/${kbId}/documents${qs ? '?' + qs : ''}`)
+}
+
+export function fetchDocumentDetail(docId: string): Promise<DocumentResponse> {
+  return request(`${API_BASE}/documents/${docId}`)
+}
+
+export function deleteDocument(docId: string): Promise<void> {
+  return request(`${API_BASE}/documents/${docId}`, { method: 'DELETE' })
+}
+
+// --- Chunks ---
+
+export interface ChunkResponse {
+  id: string
+  document_id: string
+  kb_id: string
+  content: string
+  chunk_index: number
+  chunk_type: string
+  parent_chunk_id: string | null
+  vector_id: string | null
+  metadata_json: string
+}
+
+export function fetchDocumentChunks(docId: string): Promise<ChunkResponse[]> {
+  return request(`${API_BASE}/documents/${docId}/chunks`)
+}
+
+// --- LightRAG Sync ---
+
+export interface SyncResult {
+  synced: number
+  failed: number
+  total: number
+  errors?: { doc_id: string; file_name: string; error: string }[]
+  message: string
+}
+
+export interface SyncStatus {
+  pending_count: number
+  pending_documents: { id: string; file_name: string }[]
+}
+
+export function syncToLightRAG(kbId: string): Promise<SyncResult> {
+  return request(`${API_BASE}/bases/${kbId}/sync-lightrag`, { method: 'POST' })
+}
+
+export function fetchSyncStatus(kbId: string): Promise<SyncStatus> {
+  return request(`${API_BASE}/bases/${kbId}/sync-status`)
+}
+
+// ===========================================================================
+// Folder-Based Knowledge Base API
+// ===========================================================================
+
+const FOLDER_API_BASE = '/api/knowledge/folder'
+
+export interface FolderTagResponse {
+  name: string
+  level: number
+  children: FolderTagResponse[]
+}
+
+export interface FolderDocumentResponse {
+  id: string
+  file_name: string
+  relative_path: string
+  file_size: number
+  extension: string
+  tags: string[]
+  modified_time: string
+}
+
+export interface FolderKBResponse {
+  name: string
+  doc_count: number
+  top_tags: string[]
+}
+
+export interface FolderKBListResponse {
+  bases: FolderKBResponse[]
+  total: number
+}
+
+export interface ImportFolderKBRequest {
+  kb_name: string
+  description?: string
+  icon?: string
+  color?: string
+  chunk_size?: number
+  chunk_overlap?: number
+}
+
+export function fetchFolderKBs(): Promise<FolderKBListResponse> {
+  return request(`${FOLDER_API_BASE}/bases`)
+}
+
+export function fetchFolderKBFiles(
+  kbName: string,
+  page?: number,
+  pageSize?: number,
+  keyword?: string
+): Promise<{ items: FolderDocumentResponse[]; total: number; page: number; page_size: number }> {
+  const params = new URLSearchParams()
+  if (page) params.set('page', String(page))
+  if (pageSize) params.set('page_size', String(pageSize))
+  if (keyword) params.set('keyword', keyword)
+  const qs = params.toString()
+  return request(`${FOLDER_API_BASE}/bases/${encodeURIComponent(kbName)}/files${qs ? '?' + qs : ''}`)
+}
+
+export function fetchFolderKBTags(kbName: string): Promise<FolderTagResponse[]> {
+  return request(`${FOLDER_API_BASE}/bases/${encodeURIComponent(kbName)}/tags`)
+}
+
+export function fetchFolderKBGraph(kbName: string): Promise<KnowledgeGraph> {
+  return request(`${FOLDER_API_BASE}/bases/${encodeURIComponent(kbName)}/graph`)
+}
+
+export function importFolderKB(kbName: string, data: ImportFolderKBRequest): Promise<{ kb_id: string; imported_docs: number; imported_tags: number }> {
+  return request(`${FOLDER_API_BASE}/bases/${encodeURIComponent(kbName)}/import`, {
+    method: 'POST',
+    body: JSON.stringify(data),
+  })
+}
+
+// ===========================================================================
+// Folder KB Trend & Asset Stats API
+// ===========================================================================
+
+export interface TrendSeriesItem {
+  name: string
+  data: number[]
+  color: string
+}
+
+export interface TrendSummary {
+  new_count: number
+  new_change_pct: number
+  updated_count: number
+  updated_change_pct: number
+}
+
+export interface TrendData {
+  months: string[]
+  series: TrendSeriesItem[]
+  summary: TrendSummary
+}
+
+export interface AssetExtensionItem {
+  ext: string
+  count: number
+}
+
+export interface AssetCategory {
+  name: string
+  count: number
+  size: number
+  value: number
+  color: string
+  extensions: AssetExtensionItem[]
+}
+
+export interface ExtensionSummary {
+  ext: string
+  count: number
+  value: number
+}
+
+export interface AssetStats {
+  total_count: number
+  total_size: number
+  categories: AssetCategory[]
+  extension_summary: ExtensionSummary[]
+}
+
+export function fetchFolderKBTrend(): Promise<TrendData> {
+  return request(`${FOLDER_API_BASE}/trend`)
+}
+
+export function fetchFolderKBAssetStats(): Promise<AssetStats> {
+  return request(`${FOLDER_API_BASE}/asset-stats`)
 }

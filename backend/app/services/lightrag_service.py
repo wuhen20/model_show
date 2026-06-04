@@ -31,7 +31,7 @@ async def get_documents_paginated(
     if status_filter:
         body["status_filter"] = status_filter
 
-    async with httpx.AsyncClient(timeout=30) as client:
+    async with httpx.AsyncClient(timeout=5) as client:
         resp = await client.post(
             f"{_base_url()}/documents/paginated",
             json=body,
@@ -47,7 +47,7 @@ async def get_pipeline_status(workspace: str | None = None) -> dict:
     if workspace:
         headers["LIGHTRAG-WORKSPACE"] = workspace
 
-    async with httpx.AsyncClient(timeout=30) as client:
+    async with httpx.AsyncClient(timeout=5) as client:
         resp = await client.get(
             f"{_base_url()}/documents/pipeline_status",
             headers=headers,
@@ -66,7 +66,7 @@ async def get_status_counts(workspace: str | None = None) -> dict[str, int]:
     if workspace:
         headers["LIGHTRAG-WORKSPACE"] = workspace
 
-    async with httpx.AsyncClient(timeout=30) as client:
+    async with httpx.AsyncClient(timeout=5) as client:
         resp = await client.get(
             f"{_base_url()}/documents/status_counts",
             headers=headers,
@@ -94,7 +94,7 @@ async def get_graph(
         "max_nodes": max_nodes,
     }
 
-    async with httpx.AsyncClient(timeout=30) as client:
+    async with httpx.AsyncClient(timeout=5) as client:
         resp = await client.get(
             f"{_base_url()}/graphs",
             params=params,
@@ -110,9 +110,34 @@ async def get_graph_labels(workspace: str | None = None) -> list[str]:
     if workspace:
         headers["LIGHTRAG-WORKSPACE"] = workspace
 
-    async with httpx.AsyncClient(timeout=30) as client:
+    async with httpx.AsyncClient(timeout=5) as client:
         resp = await client.get(
             f"{_base_url()}/graph/label/list",
+            headers=headers,
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+
+async def upload_document(
+    file_content: bytes,
+    file_name: str,
+    workspace: str | None = None,
+) -> dict:
+    """Upload a document to LightRAG for graph parsing.
+
+    Calls POST /documents/upload with multipart file upload
+    and optional workspace header.
+    """
+    headers = {}
+    if workspace:
+        headers["LIGHTRAG-WORKSPACE"] = workspace
+
+    async with httpx.AsyncClient(timeout=120) as client:
+        files = {"file": (file_name, file_content)}
+        resp = await client.post(
+            f"{_base_url()}/documents/upload",
+            files=files,
             headers=headers,
         )
         resp.raise_for_status()

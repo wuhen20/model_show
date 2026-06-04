@@ -161,16 +161,27 @@ _load_data()
 
 @router.get("/bases", response_model=dict)
 async def get_knowledge_bases():
-    """Return all registered knowledge bases with their processing status."""
+    """Return all registered knowledge bases with their processing status.
+
+    Reads from SQLite (which is seeded from settings.knowledge_bases on first run).
+    LightRAG and Memgraph calls will fail fast if those services are unreachable.
+    """
+    from app.services import db_service
+
+    all_kbs = db_service.list_knowledge_bases()
     result = []
-    for kb in settings.knowledge_bases:
+    for kb in all_kbs:
         status_counts: dict[str, int] = {}
         try:
             status_counts = await lightrag_service.get_status_counts(workspace=kb["workspace"])
         except Exception:
             pass
-        # Exclude the "all" key from the count to avoid double-counting
-        doc_count = sum(v for k, v in status_counts.items() if k != "all") if status_counts else 0
+        # doc_count from local DB (uploaded docs), plus LightRAG counts
+        lr_doc_count = sum(v for k, v in status_counts.items() if k != "all") if status_counts else 0
+        local_doc_count = db_service.count_documents(kb["id"])
+        # Get tags for this KB
+        tags = db_service.get_tags_tree(kb["id"])
+
         result.append(
             {
                 "id": kb["id"],
@@ -179,8 +190,9 @@ async def get_knowledge_bases():
                 "description": kb.get("description", ""),
                 "icon": kb.get("icon", "brain"),
                 "color": kb.get("color", "#00d4ff"),
-                "doc_count": doc_count,
+                "doc_count": max(lr_doc_count, local_doc_count),
                 "status_counts": status_counts,
+                "tags": tags,
             }
         )
     return {"code": 0, "data": result}
@@ -206,43 +218,80 @@ async def get_pipeline_status(workspace: str | None = None):
 # ---------------------------------------------------------------------------
 
 
+# ── Stats cache (TTL 60s) ─────────────────────────────────────────────────
+_stats_cache: dict[str, Any] | None = None
+_stats_cache_ts: float = 0.0
+_STATS_TTL = 60.0  # seconds
+_structured_count: int | None = None  # lazy-computed, never changes
+
+
+def _get_structured_count() -> int:
+    """Count structured items from the in-memory list (pure CPU, fast)."""
+    global _structured_count
+    if _structured_count is None:
+        _structured_count = sum(
+            1
+            for i in _all_items
+            if i['knowledge_type']
+            in [
+                '国家标准', '行业标准', '检定规程', '企业标准', '计量规范',
+                '国家计量规程', '电力行业标准', '国家电网企业标准', '产品规范',
+                '技术规范', '技术规程', '建筑行业标准', '能源行业标准',
+                '团体标准', '国家法律法规', '法律法规', '管理制度',
+            ]
+        )
+    return _structured_count
+
+
 @router.get("/stats", response_model=dict)
 async def get_knowledge_stats():
-    structured = sum(
-        1
-        for i in _all_items
-        if i['knowledge_type']
-        in [
-            '国家标准', '行业标准', '检定规程', '企业标准', '计量规范',
-            '国家计量规程', '电力行业标准', '国家电网企业标准', '产品规范',
-            '技术规范', '技术规程', '建筑行业标准', '能源行业标准',
-            '团体标准', '国家法律法规', '法律法规', '管理制度',
-        ]
-    )
-    # Try to get real entity count from Memgraph
-    graph_entities = 36584
-    try:
-        graph_data = await memgraph_service.get_graph_data(
-            workspace="cai_ji_zi_yu", max_nodes=1
-        )
-        real_count = graph_data.get("stats", {}).get("entity_count", 0)
-        if real_count > 0:
-            graph_entities = real_count
-    except Exception:
-        pass
+    """Knowledge stats — returns immediately from cache.
 
-    return {
-        "code": 0,
-        "data": {
-            "total_count": _total_files,
-            "structured_count": structured,
-            "unstructured_count": _total_files - structured,
-            "graph_entities": graph_entities,
-            "business_domains": len([k for k in _categories_raw if k]),
-            "completeness": 92.5,
-            "availability": 95.8,
-        },
+    The Memgraph entity count is fetched in the background and cached.
+    If Memgraph is down, the default value is used (no blocking).
+    """
+    global _stats_cache, _stats_cache_ts
+    import time as _time
+
+    now = _time.time()
+
+    # Return cached data if fresh
+    if _stats_cache is not None and (now - _stats_cache_ts) < _STATS_TTL:
+        return {"code": 0, "data": _stats_cache}
+
+    structured = _get_structured_count()
+
+    # Use cached graph_entities if we have one, else default to 0
+    graph_entities = _stats_cache.get("graph_entities", 0) if _stats_cache else 0
+
+    data = {
+        "total_count": _total_files,
+        "structured_count": structured,
+        "unstructured_count": _total_files - structured,
+        "graph_entities": graph_entities,
+        "business_domains": len([k for k in _categories_raw if k]),
+        "completeness": 92.5,
+        "availability": 95.8,
     }
+
+    _stats_cache = data
+    _stats_cache_ts = now
+
+    # Kick off a background refresh of graph_entities (non-blocking)
+    async def _refresh_graph_entities():
+        # _stats_cache is a module-level global
+        global _stats_cache
+        try:
+            real_count = await memgraph_service.get_total_entity_count()
+            if real_count > 0 and _stats_cache is not None:
+                _stats_cache["graph_entities"] = real_count
+        except Exception:
+            pass
+
+    import asyncio
+    asyncio.create_task(_refresh_graph_entities())
+
+    return {"code": 0, "data": data}
 
 
 @router.get("/categories", response_model=dict)
@@ -463,30 +512,32 @@ def get_quality_metrics():
 
 
 # ---------------------------------------------------------------------------
-# Graph — now reads from Memgraph when workspace is specified
+# Graph — reads from Memgraph (written by LightRAG)
 # ---------------------------------------------------------------------------
 
 
 @router.get("/graph", response_model=dict)
 async def get_knowledge_graph(
     workspace: str | None = None,
+    kb_name: str | None = None,
     max_nodes: int = Query(default=200, ge=10, le=1000),
 ):
-    """Return knowledge graph data.
+    """Return knowledge graph data from Memgraph.
 
-    If *workspace* is given, query Memgraph directly for that workspace's
-    entities and relationships.  Otherwise fall back to the static type-map
-    graph derived from parsed_data.json.
+    LightRAG writes entities/relationships into Memgraph. Nodes have a
+    `kb_name` property that identifies which folder KB they belong to.
+
+    - kb_name: returns graph for that specific folder KB
+    - workspace: returns graph for that specific workspace label (legacy)
+    - Neither: merges all folder KB graphs into one combined graph
     """
-    if workspace:
+    if kb_name:
         try:
-            graph_data = await memgraph_service.get_graph_data(
-                workspace=workspace, max_nodes=max_nodes
+            graph_data = await memgraph_service.get_graph_by_kb_name(
+                kb_name=kb_name, max_nodes=max_nodes
             )
             return {"code": 0, "data": graph_data}
         except Exception as e:
-            # Graceful fallback if Memgraph is unavailable
-            print(f"[Knowledge] Memgraph query failed: {e}")
             return {
                 "code": 1,
                 "data": {
@@ -494,85 +545,58 @@ async def get_knowledge_graph(
                     "links": [],
                     "stats": {"entity_count": 0, "relation_count": 0, "coverage": 0},
                 },
-                "message": f"Memgraph 查询失败: {e}",
+                "message": f"Memgraph 图谱查询失败: {e}",
             }
 
-    # Fallback: static graph from parsed_data types
-    type_map: dict[str, int] = {}
-    for item in _all_items:
-        t = item['knowledge_type']
-        type_map[t] = type_map.get(t, 0) + 1
-
-    kb_nodes = []
-    kb_links = []
-    type_colors = {
-        '国家标准': '#00d4ff', '行业标准': '#00ff88', '检定规程': '#a855f7',
-        '企业标准': '#ffaa00', '作业指导书': '#ff5555', '法律法规': '#36a3f7',
-        '技术规范': '#eb2f96', '操作手册': '#00d4ff', '培训题库': '#00ff88',
-        '管理制度': '#a855f7', '培训资料': '#ffaa00', '计量规范': '#ff5555',
-        '产品规范': '#36a3f7', '技术规程': '#eb2f96', '技术文档': '#00d4ff',
-        '技术方案': '#00ff88', '国家计量规程': '#a855f7', '电力行业标准': '#ffaa00',
-        '国家电网企业标准': '#ff5555', '国家法律法规': '#36a3f7',
-        '建筑行业标准': '#eb2f96', '能源行业标准': '#00d4ff', '团体标准': '#00ff88',
-    }
-
-    for cat_name, cat_data in _categories_raw.items():
-        if not cat_name:
-            continue
-        kb_nodes.append(
-            {
-                'name': cat_name,
-                'symbolSize': min(70, 30 + cat_data.get('total', 0) // 30),
-                'category': 0,
-                'itemStyle': {'color': '#00d4ff'},
-            }
-        )
-
-        sub_items = list(cat_data.get('subs', {}).items())
-        sorted_subs = sorted(sub_items, key=lambda x: x[1].get('total', 0), reverse=True)
-        for sub_key, sub_data in sorted_subs[:6]:
-            sub_name = sub_data.get('name', sub_key)
-            if sub_name == cat_name:
-                continue
-            kb_nodes.append(
-                {
-                    'name': sub_name,
-                    'symbolSize': min(50, 20 + sub_data.get('total', 0) // 50),
-                    'category': 1,
-                    'itemStyle': {'color': '#00ff88'},
-                }
+    if workspace:
+        try:
+            graph_data = await memgraph_service.get_graph_data(
+                workspace=workspace, max_nodes=max_nodes
             )
-            kb_links.append({'source': cat_name, 'target': sub_name})
+            return {"code": 0, "data": graph_data}
+        except Exception as e:
+            return {
+                "code": 1,
+                "data": {
+                    "nodes": [],
+                    "links": [],
+                    "stats": {"entity_count": 0, "relation_count": 0, "coverage": 0},
+                },
+                "message": f"Memgraph 图谱查询失败: {e}",
+            }
 
-            for tk, tc in list(type_map.items())[:4]:
-                if tk in ['内部文档', '技术文档']:
-                    continue
-                node_name = f"{sub_name}_{tk}"
-                if any(n['name'] == node_name for n in kb_nodes):
-                    continue
-                kb_nodes.append(
-                    {
-                        'name': node_name,
-                        'symbolSize': 18,
-                        'category': 2,
-                        'itemStyle': {'color': type_colors.get(tk, '#00d4ff')},
-                        'label': {'show': False},
-                    }
-                )
-                kb_links.append({'source': sub_name, 'target': node_name})
+    # No workspace or kb_name: merge all folder KB graphs
+    try:
+        graph_data = await memgraph_service.get_all_workspaces_graph(
+            max_nodes_per_ws=min(80, max_nodes // 3)
+        )
+        return {"code": 0, "data": graph_data}
+    except Exception as e:
+        return {
+            "code": 1,
+            "data": {
+                "nodes": [],
+                "links": [],
+                "stats": {"entity_count": 0, "relation_count": 0, "coverage": 0},
+            },
+            "message": f"Memgraph 合并图谱查询失败: {e}",
+        }
 
-    total_entities = sum(n['symbolSize'] for n in kb_nodes) * 50
-    total_relations = len(kb_links) * 35
+    node_list = list(combined_nodes_map.values())[:max_nodes]
+    node_names = {n["name"] for n in node_list}
+    link_list = [l for l in combined_links if l["source"] in node_names and l["target"] in node_names][:max_nodes * 2]
+
+    coverage = round(min(95, len(node_list) * 0.5 + 30), 1) if node_list else 0
 
     return {
         "code": 0,
         "data": {
-            "nodes": kb_nodes[:80],
-            "links": kb_links[:120],
+            "nodes": node_list,
+            "links": link_list,
             "stats": {
                 "entity_count": total_entities,
                 "relation_count": total_relations,
-                "coverage": 89.7,
+                "coverage": coverage,
             },
         },
     }

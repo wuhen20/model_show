@@ -126,6 +126,78 @@ body {
   }
 }
 
+/* ---- Dark-theme overrides for Element Plus components ---- */
+:root {
+  --el-input-bg-color: rgba(255, 255, 255, 0.05);
+  --el-input-border-color: rgba(0, 212, 255, 0.2);
+  --el-input-hover-border-color: rgba(0, 212, 255, 0.4);
+  --el-input-focus-border-color: #00d4ff;
+  --el-input-text-color: #ffffff;
+  --el-input-placeholder-color: rgba(255, 255, 255, 0.35);
+  --el-textarea-bg-color: rgba(255, 255, 255, 0.05);
+  --el-textarea-text-color: #ffffff;
+  --el-textarea-placeholder-color: rgba(255, 255, 255, 0.35);
+  --el-radio-text-color: #ffffff;
+  --el-checkbox-text-color: #ffffff;
+  --el-checkbox-bg-color: rgba(255, 255, 255, 0.05);
+  --el-checkbox-input-border-color: rgba(0, 212, 255, 0.3);
+  --el-radio-input-border-color: rgba(0, 212, 255, 0.3);
+  --el-radio-input-bg-color: rgba(255, 255, 255, 0.05);
+  --el-input-number-bg-color: rgba(255, 255, 255, 0.05);
+  --el-input-number-unit-color: rgba(255, 255, 255, 0.5);
+  --el-fill-color-blank: rgba(255, 255, 255, 0.05);
+  --el-bg-color: rgba(17, 24, 39, 0.9);
+  --el-bg-color-overlay: rgba(17, 24, 39, 0.95);
+  --el-text-color-regular: #ffffff;
+  --el-text-color-primary: #ffffff;
+  --el-text-color-secondary: rgba(255, 255, 255, 0.7);
+  --el-text-color-placeholder: rgba(255, 255, 255, 0.35);
+  --el-border-color: rgba(0, 212, 255, 0.2);
+  --el-border-color-light: rgba(0, 212, 255, 0.15);
+  --el-border-color-lighter: rgba(0, 212, 255, 0.1);
+  --el-disabled-bg-color: rgba(255, 255, 255, 0.02);
+  --el-disabled-text-color: rgba(255, 255, 255, 0.3);
+  --el-disabled-border-color: rgba(0, 212, 255, 0.1);
+  --el-color-primary: #00d4ff;
+}
+
+.el-textarea__inner {
+  background: rgba(255, 255, 255, 0.05) !important;
+  color: #ffffff !important;
+  border-color: rgba(0, 212, 255, 0.2) !important;
+  &::placeholder { color: rgba(255, 255, 255, 0.35) !important; }
+  &:focus { border-color: #00d4ff !important; box-shadow: 0 0 10px rgba(0, 212, 255, 0.2) !important; }
+}
+
+.el-input-number {
+  .el-input__inner { color: #ffffff !important; }
+}
+
+.el-radio {
+  color: #ffffff !important;
+  .el-radio__label { color: rgba(255, 255, 255, 0.85) !important; }
+}
+
+.el-checkbox {
+  color: #ffffff !important;
+  .el-checkbox__label { color: rgba(255, 255, 255, 0.85) !important; }
+}
+
+.el-select-dropdown {
+  background: rgba(17, 24, 39, 0.95) !important;
+  border-color: rgba(0, 212, 255, 0.2) !important;
+  .el-select-dropdown__item { color: rgba(255, 255, 255, 0.8) !important; }
+  .el-select-dropdown__item.hover,
+  .el-select-dropdown__item:hover { background: rgba(0, 212, 255, 0.15) !important; }
+  .el-select-dropdown__item.selected { color: #00d4ff !important; font-weight: 600; }
+}
+
+.el-drawer {
+  background: rgba(17, 24, 39, 0.97) !important;
+  .el-drawer__header { color: #ffffff; border-bottom: 1px solid rgba(0, 212, 255, 0.15); }
+  .el-drawer__body { color: rgba(255, 255, 255, 0.8); }
+}
+
 .el-select {
   .el-select__input {
     color: $text-primary;

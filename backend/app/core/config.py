@@ -21,7 +21,7 @@ class Settings(BaseSettings):
     memgraph_password: str = ""
     memgraph_database: str = "memgraph"
 
-    # Knowledge bases: id → workspace mapping
+    # Knowledge bases: id → workspace mapping (seed data for init_db)
     knowledge_bases: list[dict] = [
         {
             "id": "cai_ji_zi_yu",
@@ -32,6 +32,34 @@ class Settings(BaseSettings):
             "color": "#00d4ff",
         },
     ]
+
+    # ---- Metadata DB ----
+    metadata_db_path: str = "data/knowledge_metadata.db"
+
+    # ---- File Storage ----
+    storage_backend: str = "local"  # "local" or "minio"
+    minio_endpoint: str = "localhost:9000"
+    minio_access_key: str = "minioadmin"
+    minio_secret_key: str = "minioadmin"
+    minio_bucket_prefix: str = "kb-"
+    minio_secure: bool = False
+
+    # ---- Milvus ----
+    milvus_host: str = "localhost"
+    milvus_port: int = 19530
+    milvus_collection_prefix: str = "kb_"
+
+    # ---- Embedding ----
+    embedding_model: str = "text-embedding-v3"
+    embedding_dimension: int = 1024
+
+    # ---- Folder-based Knowledge Base ----
+    knowledge_base_dir: str = "知识库文件夹"
+
+    # ---- Default chunking settings ----
+    default_chunk_size: int = 500
+    default_chunk_overlap: int = 50
+    default_parent_chunk_size: int = 1500
 
     models: list[dict] = [
         {

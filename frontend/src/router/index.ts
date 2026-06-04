@@ -30,6 +30,21 @@ const routes = [
     path: '/knowledge-detail/:id',
     name: 'KnowledgeDetail',
     component: KnowledgeDetail
+  },
+  {
+    path: '/knowledge-create',
+    name: 'KnowledgeCreate',
+    component: () => import('@/views/KnowledgeCreate.vue')
+  },
+  {
+    path: '/knowledge-base/:id',
+    name: 'KnowledgeBaseDetail',
+    component: () => import('@/views/KnowledgeBaseDetail.vue')
+  },
+  {
+    path: '/folder-kb/:name',
+    name: 'FolderKBDetail',
+    component: () => import('@/views/FolderKBDetail.vue')
   }
 ]
 

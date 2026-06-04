@@ -2,7 +2,7 @@
   <div class="chart-card">
     <div class="card-title">
       <span>知识更新趋势</span>
-      <span class="subtitle">(近30天)</span>
+      <span class="subtitle">(按月)</span>
     </div>
     <div ref="chartRef" class="chart-container"></div>
     <div class="trend-summary">
@@ -16,16 +16,16 @@
           </svg>
         </div>
         <div class="summary-info">
-          <div class="summary-label">新增知识</div>
+          <div class="summary-label">本月新增</div>
           <div class="summary-value">
-            <span class="number">568</span>
+            <span class="number">{{ summary.new_count.toLocaleString() }}</span>
             <span class="unit">份</span>
           </div>
-          <div class="summary-trend trend-up">
+          <div class="summary-trend" :class="summary.new_change_pct >= 0 ? 'trend-up' : 'trend-down'">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M5 10l7-7 7 7"/>
+              <path :d="summary.new_change_pct >= 0 ? 'M5 10l7-7 7 7' : 'M19 14l-7 7-7-7'"/>
             </svg>
-            12.5%
+            {{ Math.abs(summary.new_change_pct) }}%
           </div>
         </div>
       </div>
@@ -37,16 +37,16 @@
           </svg>
         </div>
         <div class="summary-info">
-          <div class="summary-label">更新知识</div>
+          <div class="summary-label">近30天更新</div>
           <div class="summary-value">
-            <span class="number">1,245</span>
+            <span class="number">{{ summary.updated_count.toLocaleString() }}</span>
             <span class="unit">份</span>
           </div>
-          <div class="summary-trend trend-up">
+          <div class="summary-trend" :class="summary.updated_change_pct >= 0 ? 'trend-up' : 'trend-down'">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M5 10l7-7 7 7"/>
+              <path :d="summary.updated_change_pct >= 0 ? 'M5 10l7-7 7 7' : 'M19 14l-7 7-7-7'"/>
             </svg>
-            15.3%
+            {{ Math.abs(summary.updated_change_pct) }}%
           </div>
         </div>
       </div>
@@ -57,94 +57,118 @@
 <script setup lang="ts">
 import { ref, onMounted, onBeforeUnmount } from 'vue'
 import * as echarts from 'echarts'
+import { fetchFolderKBTrend, type TrendData, type TrendSummary } from '@/api/knowledge'
 
 const chartRef = ref<HTMLElement | null>(null)
 let chartInstance: echarts.ECharts | null = null
 
-onMounted(() => {
+const defaultSummary: TrendSummary = {
+  new_count: 0,
+  new_change_pct: 0,
+  updated_count: 0,
+  updated_change_pct: 0,
+}
+
+const summary = ref<TrendSummary>({ ...defaultSummary })
+
+onMounted(async () => {
+  let trendData: TrendData | null = null
+
+  try {
+    const data = await fetchFolderKBTrend()
+    if (data && data.months && data.months.length > 0) {
+      trendData = data
+      summary.value = data.summary
+    }
+  } catch {}
+
+  // Fallback default months
+  const months = trendData?.months || _defaultMonths()
+  const series = trendData?.series || _defaultSeries()
+
   if (chartRef.value) {
     chartInstance = echarts.init(chartRef.value)
 
-    const dates = ['03-26', '03-28', '03-30', '04-02', '04-04', '04-06', '04-08', '04-10', '04-12', '04-14', '04-16', '04-18', '04-20', '04-23']
-    const newData = [120, 280, 350, 420, 380, 450, 520, 480, 550, 620, 580, 650, 720, 680]
-    const updateData = [280, 420, 550, 680, 620, 750, 880, 820, 950, 1080, 1020, 1150, 1280, 1245]
+    // Short month labels: "2026-04" → "04月"
+    const monthLabels = months.map((m: string) => {
+      const parts = m.split('-')
+      return parts.length >= 2 ? parts[1] + '月' : m
+    })
 
     const option: echarts.EChartsOption = {
       tooltip: {
         trigger: 'axis',
         backgroundColor: 'rgba(17, 24, 39, 0.95)',
         borderColor: 'rgba(0, 212, 255, 0.3)',
-        textStyle: { color: '#fff' },
-        axisPointer: { type: 'cross' }
+        textStyle: { color: '#fff', fontSize: 12 },
+        axisPointer: { type: 'shadow' },
+        formatter: (params: any) => {
+          if (!Array.isArray(params)) return ''
+          const month = months[params[0]?.dataIndex] || ''
+          let html = `<div style="margin-bottom:4px;font-weight:600">${month}</div>`
+          let total = 0
+          for (const p of params) {
+            total += p.value
+            html += `<div style="display:flex;align-items:center;gap:6px">
+              <span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${p.color}"></span>
+              ${p.seriesName}: <b>${p.value}</b>份
+            </div>`
+          }
+          html += `<div style="margin-top:4px;border-top:1px solid rgba(255,255,255,0.15);padding-top:4px">合计: <b>${total}</b>份</div>`
+          return html
+        },
       },
       legend: {
-        data: ['新增知识', '更新知识'],
+        data: series.map(s => s.name),
         bottom: 0,
-        textStyle: { color: 'rgba(255,255,255,0.7)', fontSize: 12 }
+        textStyle: { color: 'rgba(255,255,255,0.7)', fontSize: 10 },
+        itemWidth: 10,
+        itemHeight: 10,
+        itemGap: 8,
       },
       grid: {
         left: '3%',
         right: '4%',
-        bottom: '15%',
+        bottom: '20%',
         top: '3%',
-        containLabel: true
+        containLabel: true,
       },
       xAxis: {
         type: 'category',
-        boundaryGap: false,
-        data: dates,
+        data: monthLabels,
         axisLine: { lineStyle: { color: 'rgba(0, 212, 255, 0.2)' } },
-        axisLabel: { color: 'rgba(255,255,255,0.5)', fontSize: 11 }
+        axisLabel: { color: 'rgba(255,255,255,0.5)', fontSize: 10 },
+        axisTick: { show: false },
       },
       yAxis: {
         type: 'value',
         axisLine: { show: false },
         axisTick: { show: false },
         splitLine: { lineStyle: { color: 'rgba(255,255,255,0.05)' } },
-        axisLabel: { color: 'rgba(255,255,255,0.5)', fontSize: 11 }
+        axisLabel: { color: 'rgba(255,255,255,0.5)', fontSize: 10 },
       },
-      series: [
-        {
-          name: '新增知识',
-          type: 'line',
-          smooth: true,
-          symbol: 'circle',
-          symbolSize: 6,
-          lineStyle: { width: 2, color: '#00d4ff' },
-          itemStyle: { color: '#00d4ff' },
-          areaStyle: {
-            color: {
-              type: 'linear',
-              x: 0, y: 0, x2: 0, y2: 1,
-              colorStops: [
-                { offset: 0, color: 'rgba(0, 212, 255, 0.2)' },
-                { offset: 1, color: 'rgba(0, 212, 255, 0.05)' }
-              ]
-            }
-          },
-          data: newData
+      series: series.map(s => ({
+        name: s.name,
+        type: 'bar' as const,
+        stack: 'total',
+        barWidth: '50%',
+        itemStyle: {
+          color: s.color,
+          borderRadius: 0,
         },
-        {
-          name: '更新知识',
-          type: 'line',
-          smooth: true,
-          symbol: 'circle',
-          symbolSize: 6,
-          lineStyle: { width: 2, color: '#00ff88' },
-          itemStyle: { color: '#00ff88' },
-          areaStyle: {
-            color: {
-              type: 'linear',
-              x: 0, y: 0, x2: 0, y2: 1,
-              colorStops: [
-                { offset: 0, color: 'rgba(0, 255, 136, 0.2)' },
-                { offset: 1, color: 'rgba(0, 255, 136, 0.05)' }
-              ]
-            }
-          },
-          data: updateData
-        }
-      ]
+        emphasis: {
+          itemStyle: { shadowBlur: 6, shadowColor: 'rgba(0,0,0,0.3)' },
+        },
+        data: s.data,
+      })),
+    }
+
+    // Add rounded corners to the topmost bar of each stack
+    if (option.series && Array.isArray(option.series)) {
+      const lastIndex = option.series.length - 1
+      if ((option.series as any[])[lastIndex]) {
+        (option.series as any[])[lastIndex].itemStyle.borderRadius = [3, 3, 0, 0]
+      }
     }
 
     chartInstance.setOption(option)
@@ -163,6 +187,26 @@ const handleResize = () => {
   if (chartInstance) {
     chartInstance.resize()
   }
+}
+
+function _defaultMonths(): string[] {
+  const now = new Date()
+  const months: string[] = []
+  for (let i = 5; i >= 0; i--) {
+    const d = new Date(now.getFullYear(), now.getMonth() - i, 1)
+    months.push(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`)
+  }
+  return months
+}
+
+function _defaultSeries() {
+  const kbNames = ['计量营销专业知识库', '计量数字讲师', '专家系统知识库', '装表接电知识库', '采集自愈知识库']
+  const colors = ['#00d4ff', '#00ff88', '#a855f7', '#ffaa00', '#ff5555']
+  return kbNames.map((name, i) => ({
+    name,
+    data: [0, 0, 0, 0, 0, 0],
+    color: colors[i],
+  }))
 }
 </script>
 
@@ -256,5 +300,9 @@ const handleResize = () => {
 
 .summary-trend.trend-up {
   color: #00ff88;
+}
+
+.summary-trend.trend-down {
+  color: #ff5555;
 }
 </style>
