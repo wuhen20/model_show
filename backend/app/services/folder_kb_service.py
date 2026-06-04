@@ -318,6 +318,173 @@ def scan_kb_files(
     }
 
 
+def scan_all_kb_files(
+    tab: str = "latest",
+    keyword: str | None = None,
+    category_id: str | None = None,
+    page: int = 1,
+    page_size: int = 20,
+) -> dict:
+    """List files across ALL folder-based knowledge bases with tab filtering.
+
+    Tabs:
+      - latest:  sorted by modified_time descending (most recent first)
+      - popular: sorted by file_size descending (larger = more content = popular proxy)
+      - valuable: files with recognized standard prefixes (JJG, GB, DLT, Q/GDW, etc.)
+      - pending:  files modified in the last 7 days (recently added, awaiting review)
+
+    Returns the same shape as the old /api/knowledge/list endpoint for compatibility.
+    """
+    cached_all = _cached("scan_all_kb_files", ttl=60)
+    if cached_all is None:
+        base_dir = _get_kb_dir()
+        all_items: list[dict] = []
+        if base_dir:
+            kb_list = scan_knowledge_bases()
+            for kb in kb_list:
+                kb_name = kb["name"]
+                kb_dir = os.path.join(base_dir, kb_name)
+                if not os.path.isdir(kb_dir):
+                    continue
+                for root, _dirs, files in os.walk(kb_dir):
+                    for f in files:
+                        if not _is_supported_file(f):
+                            continue
+                        full_path = os.path.join(root, f)
+                        try:
+                            stat = os.stat(full_path)
+                        except OSError:
+                            continue
+                        rel_dir = os.path.relpath(root, kb_dir)
+                        rel_path = os.path.relpath(full_path, kb_dir)
+                        rel_path_fwd = rel_path.replace("\\", "/")
+                        _, ext = os.path.splitext(f)
+                        tags = _path_to_tag_chain(rel_dir)
+                        mtime = stat.st_mtime
+                        dt = datetime.fromtimestamp(mtime)
+
+                        # Infer knowledge type from filename
+                        ktype = _infer_knowledge_type(f)
+                        # Infer source from filename
+                        source = _infer_source_type(f)
+                        # Score: standard docs get 5, guides get 4, others 3
+                        score = 5 if any(k in f.upper() for k in ['JJG', 'GB', 'DLT', 'DL/', 'Q/GDW', 'QGDW']) else (4 if '指导书' in f else 3)
+
+                        # Status: recently modified files = pending, rest = published
+                        now_ts = datetime.now().timestamp()
+                        status = "待审核" if (now_ts - mtime) < 7 * 86400 else "已发布"
+
+                        all_items.append({
+                            "id": _file_id(rel_path_fwd),
+                            "title": f,
+                            "category_id": kb_name,
+                            "category_name": kb_name,
+                            "parent_category": kb_name,
+                            "knowledge_type": ktype,
+                            "source": source,
+                            "score": score,
+                            "status": status,
+                            "update_time": dt.strftime("%Y-%m-%d"),
+                            "file_path": rel_path_fwd,
+                            "description": f"《{f}》，属于{kb_name}，{ktype}类文档。",
+                            "tags": tags,
+                            "file_size": stat.st_size,
+                            "modified_time": dt.isoformat(),
+                        })
+        _set_cache("scan_all_kb_files", all_items)
+        cached_all = all_items
+
+    # Work on a copy
+    items = list(cached_all)
+
+    # Filter by category_id (kb_name match)
+    if category_id:
+        items = [i for i in items if i["category_id"] == category_id or i["parent_category"] == category_id]
+
+    # Filter by keyword
+    if keyword:
+        kw = keyword.lower()
+        items = [i for i in items if kw in i["title"].lower() or kw in i["description"].lower()]
+
+    # Tab-based sorting/filtering
+    if tab == "popular":
+        items.sort(key=lambda x: x["score"], reverse=True)
+    elif tab == "valuable":
+        items = [i for i in items if i["score"] >= 5]
+    elif tab == "pending":
+        items = [i for i in items if i["status"] == "待审核"]
+    else:
+        # latest: sort by update_time descending
+        items.sort(key=lambda x: x["update_time"], reverse=True)
+
+    total = len(items)
+    start = (page - 1) * page_size
+    end = start + page_size
+
+    return {
+        "items": items[start:end],
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+    }
+
+
+def _infer_knowledge_type(filename: str) -> str:
+    """Infer knowledge document type from filename patterns."""
+    upper = filename.upper()
+    if any(k in upper for k in ['JJG']):
+        return '检定规程'
+    if any(k in upper for k in ['GB', 'GBT', 'GB/']):
+        return '国家标准'
+    if any(k in upper for k in ['DLT', 'DL/', 'DL/T']):
+        return '行业标准'
+    if any(k in upper for k in ['Q/GDW', 'QGDW', 'Q／GDW']):
+        return '企业标准'
+    if any(k in upper for k in ['JJF']):
+        return '计量规范'
+    if '指导书' in filename:
+        return '作业指导书'
+    if '管理办法' in filename or '管理规定' in filename:
+        return '管理制度'
+    if '技术规范' in filename:
+        return '技术规范'
+    if '功能规范' in filename or '型式规范' in filename:
+        return '产品规范'
+    if '试题' in filename or '题库' in filename or '计算' in filename or '案例' in filename:
+        return '培训题库'
+    if '手册' in filename or '操作' in filename:
+        return '操作手册'
+    if '方案' in filename:
+        return '技术方案'
+    if '宣贯' in filename or '培训' in filename or '资料' in filename:
+        return '培训资料'
+    if '规程' in filename:
+        return '技术规程'
+    if '条例' in filename or '法' in filename:
+        return '法律法规'
+    return '技术文档'
+
+
+def _infer_source_type(filename: str) -> str:
+    """Infer knowledge source from filename patterns."""
+    upper = filename.upper()
+    if any(k in upper for k in ['JJG', 'JJF']):
+        return '国家计量规程'
+    if any(k in upper for k in ['GB', 'GBT']):
+        return '国家标准'
+    if any(k in upper for k in ['DLT', 'DL/', 'DL/T']):
+        return '电力行业标准'
+    if any(k in upper for k in ['Q/GDW', 'QGDW']):
+        return '国家电网企业标准'
+    if '条例' in filename or '法' in filename:
+        return '国家法律法规'
+    if '指导书' in filename:
+        return '内部文档'
+    if '试题' in filename or '题库' in filename:
+        return '培训资料'
+    return '内部文档'
+
+
 def scan_kb_tags(kb_name: str) -> list[dict]:
     """Return the full tag tree for a folder-based knowledge base.
 

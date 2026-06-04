@@ -245,7 +245,7 @@ def _get_structured_count() -> int:
 
 @router.get("/stats", response_model=dict)
 async def get_knowledge_stats():
-    """Knowledge stats — returns immediately from cache.
+    """Knowledge stats — uses folder KB filesystem scan as the source of truth.
 
     The Memgraph entity count is fetched in the background and cached.
     If Memgraph is down, the default value is used (no blocking).
@@ -259,17 +259,37 @@ async def get_knowledge_stats():
     if _stats_cache is not None and (now - _stats_cache_ts) < _STATS_TTL:
         return {"code": 0, "data": _stats_cache}
 
-    structured = _get_structured_count()
+    # Use folder KB filesystem scan as the source of truth
+    from app.services import folder_kb_service
+    folder_stats = folder_kb_service.scan_kb_asset_stats()
+    total_count = folder_stats["total_count"]
+
+    # Count structured items from folder KB file list
+    structured_count = 0
+    structured_types = {
+        '国家标准', '行业标准', '检定规程', '企业标准', '计量规范',
+        '国家计量规程', '电力行业标准', '国家电网企业标准', '产品规范',
+        '技术规范', '技术规程', '国家法律法规', '法律法规', '管理制度',
+    }
+    try:
+        all_items = folder_kb_service.scan_all_kb_files(tab="latest", page_size=999999)
+        structured_count = sum(1 for item in all_items.get("items", []) if item.get("knowledge_type") in structured_types)
+        # scan_all_kb_files paginates, so count from the full cached list instead
+        cached_all = folder_kb_service._cached("scan_all_kb_files")
+        if cached_all is not None:
+            structured_count = sum(1 for item in cached_all if item.get("knowledge_type") in structured_types)
+    except Exception:
+        pass
 
     # Use cached graph_entities if we have one, else default to 0
     graph_entities = _stats_cache.get("graph_entities", 0) if _stats_cache else 0
 
     data = {
-        "total_count": _total_files,
-        "structured_count": structured,
-        "unstructured_count": _total_files - structured,
+        "total_count": total_count,
+        "structured_count": structured_count,
+        "unstructured_count": total_count - structured_count,
         "graph_entities": graph_entities,
-        "business_domains": len([k for k in _categories_raw if k]),
+        "business_domains": len(folder_stats["categories"]),
         "completeness": 92.5,
         "availability": 95.8,
     }

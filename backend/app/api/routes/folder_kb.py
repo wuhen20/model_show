@@ -38,6 +38,39 @@ async def get_folder_kb_asset_stats():
 
 
 # ---------------------------------------------------------------------------
+# Cross-KB file list (replaces old /api/knowledge/list for folder-based KBs)
+# ---------------------------------------------------------------------------
+
+@router.get("/list", response_model=dict)
+async def list_all_kb_files(
+    tab: str = Query(default="latest"),
+    keyword: str | None = Query(default=None),
+    category_id: str | None = Query(default=None),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=20, ge=1, le=200),
+):
+    """List knowledge items across all folder-based knowledge bases.
+
+    Supports tab-based filtering:
+      - latest:  most recently modified
+      - popular: highest score (standard docs rank higher)
+      - valuable: only high-value standard documents (score >= 5)
+      - pending:  recently added files (modified in last 7 days)
+    """
+    try:
+        result = folder_kb_service.scan_all_kb_files(
+            tab=tab,
+            keyword=keyword,
+            category_id=category_id,
+            page=page,
+            page_size=page_size,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return {"code": 0, "data": result}
+
+
+# ---------------------------------------------------------------------------
 # List all folder-based knowledge bases
 # ---------------------------------------------------------------------------
 

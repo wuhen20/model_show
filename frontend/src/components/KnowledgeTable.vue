@@ -16,17 +16,17 @@
       </el-button>
     </div>
 
-    <el-tabs v-model="activeTab" class="knowledge-tabs" @tab-change="handleTabChange">
+    <el-tabs v-model="activeTab" class="knowledge-tabs">
       <el-tab-pane label="最新知识" name="latest"></el-tab-pane>
       <el-tab-pane label="热门知识" name="popular"></el-tab-pane>
       <el-tab-pane label="高价值知识" name="valuable"></el-tab-pane>
       <el-tab-pane label="待审核知识" name="pending"></el-tab-pane>
     </el-tabs>
 
-    <el-table :data="tableData" style="width: 100%" :header-cell-style="headerCellStyle" @row-click="handleRowClick">
+    <el-table :data="tableData" style="width: 100%" :header-cell-style="headerCellStyle">
       <el-table-column prop="title" label="知识标题" min-width="200">
         <template #default="{ row }">
-          <span class="knowledge-title">{{ row.title }}</span>
+          <span class="knowledge-title-readonly">{{ row.title }}</span>
         </template>
       </el-table-column>
 
@@ -71,20 +71,14 @@
     </el-table>
 
     <div class="table-footer">
-      <router-link to="/knowledge-management" class="view-all-link">
-        查看全部知识
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <path d="M9 18l6-6-6-6"/>
-        </svg>
-      </router-link>
+      <span class="view-all-text">共 {{ totalItems }} 条知识</span>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, onMounted, watch } from 'vue'
-import { useRouter } from 'vue-router'
-import { fetchKnowledgeList, type KnowledgeItem } from '@/api/knowledge'
+import { fetchKnowledgeList, fetchFolderKBFileList, type KnowledgeItem } from '@/api/knowledge'
 
 const props = defineProps<{
   categoryId?: string
@@ -95,7 +89,6 @@ const emit = defineEmits<{
   (e: 'back'): void
 }>()
 
-const router = useRouter()
 const activeTab = ref('latest')
 const tableData = ref<KnowledgeItem[]>([])
 const totalItems = ref(0)
@@ -146,19 +139,49 @@ function statusLabel(status: string): string {
 }
 
 async function loadData() {
+  // If a specific LightRAG workspace is selected, use the legacy API
+  if (props.workspace) {
+    try {
+      const result = await fetchKnowledgeList({
+        tab: activeTab.value,
+        page: 1,
+        page_size: 10,
+        workspace: props.workspace,
+      })
+      tableData.value = result.items
+      totalItems.value = result.total
+    } catch {
+      tableData.value = []
+      totalItems.value = 0
+    }
+    return
+  }
+
+  // Otherwise, use the folder-based KB API (reads from real filesystem)
   try {
-    const result = await fetchKnowledgeList({
+    const result = await fetchFolderKBFileList({
       tab: activeTab.value,
       page: 1,
       page_size: 10,
       category_id: props.categoryId || undefined,
-      workspace: props.workspace || undefined,
     })
     tableData.value = result.items
     totalItems.value = result.total
   } catch {
-    tableData.value = []
-    totalItems.value = 0
+    // Fallback to legacy API if folder API fails
+    try {
+      const result = await fetchKnowledgeList({
+        tab: activeTab.value,
+        page: 1,
+        page_size: 10,
+        category_id: props.categoryId || undefined,
+      })
+      tableData.value = result.items
+      totalItems.value = result.total
+    } catch {
+      tableData.value = []
+      totalItems.value = 0
+    }
   }
 }
 
@@ -174,21 +197,14 @@ watch(() => props.workspace, () => {
   loadData()
 })
 
-function handleTabChange() {
+// Reload data when tab changes
+watch(activeTab, () => {
   loadData()
-}
-
-function handleRowClick(row: KnowledgeItem) {
-  router.push(`/knowledge-detail/${row.id}`)
-}
+})
 
 function handleBack() {
   emit('back')
 }
-
-watch(activeTab, () => {
-  loadData()
-})
 </script>
 
 <style scoped>
@@ -234,13 +250,9 @@ watch(activeTab, () => {
   margin-bottom: 16px;
 }
 
-.knowledge-title {
-  color: #00d4ff;
-  cursor: pointer;
-}
-
-.knowledge-title:hover {
-  text-decoration: underline;
+.knowledge-title-readonly {
+  color: rgba(255, 255, 255, 0.9);
+  cursor: default;
 }
 
 .domain-tag {
@@ -268,7 +280,7 @@ watch(activeTab, () => {
 :deep(.el-table__inner-wrapper) { background: transparent; }
 :deep(.el-table__body-wrapper) { background: transparent; }
 :deep(.el-table__header-wrapper) { background: transparent; }
-:deep(.el-table__body tr) { background: transparent; cursor: pointer; }
+:deep(.el-table__body tr) { background: transparent; cursor: default; }
 :deep(.el-table__body tr:hover > td) { background: rgba(0, 212, 255, 0.08) !important; }
 :deep(.el-table__empty-block) { background: transparent; }
 :deep(.el-table th.el-table__cell) { background: rgba(0, 212, 255, 0.1); }
@@ -286,17 +298,8 @@ watch(activeTab, () => {
   border-top: 1px solid rgba(0, 212, 255, 0.1);
 }
 
-.view-all-link {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  color: #00d4ff;
-  font-size: 13px;
-  text-decoration: none;
-  transition: all 0.3s;
-}
-
-.view-all-link:hover {
-  text-decoration: underline;
+.view-all-text {
+  color: rgba(255, 255, 255, 0.4);
+  font-size: 12px;
 }
 </style>

@@ -545,3 +545,22 @@ export function fetchFolderKBTrend(): Promise<TrendData> {
 export function fetchFolderKBAssetStats(): Promise<AssetStats> {
   return request(`${FOLDER_API_BASE}/asset-stats`)
 }
+
+// --- Folder KB File List (cross-KB) ---
+
+export function fetchFolderKBFileList(params?: {
+  tab?: string
+  keyword?: string
+  category_id?: string
+  page?: number
+  page_size?: number
+}): Promise<{ items: KnowledgeItem[]; total: number; page: number; page_size: number }> {
+  const searchParams = new URLSearchParams()
+  if (params) {
+    Object.entries(params).forEach(([k, v]) => {
+      if (v !== undefined) searchParams.set(k, String(v))
+    })
+  }
+  const qs = searchParams.toString()
+  return request(`${FOLDER_API_BASE}/list${qs ? '?' + qs : ''}`)
+}

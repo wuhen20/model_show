@@ -213,6 +213,13 @@ watch(activeTab, async (tab) => {
   if (tab === 'management' && !folderKBsLoaded.value) {
     await loadFolderKBs()
   }
+  // When switching back to home tab, ECharts charts need a resize
+  // because they were hidden (display:none) while another tab was active
+  if (tab === 'home') {
+    requestAnimationFrame(() => {
+      window.dispatchEvent(new Event('resize'))
+    })
+  }
 })
 
 onMounted(async () => {
@@ -221,7 +228,7 @@ onMounted(async () => {
     stats.value = statsData
   } catch {
     stats.value = {
-      total_count: 2887, structured_count: 505, unstructured_count: 2382,
+      total_count: 3300, structured_count: 425, unstructured_count: 2875,
       graph_entities: 0, business_domains: 5, completeness: 92.5, availability: 95.8
     }
   }
