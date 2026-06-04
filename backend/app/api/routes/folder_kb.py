@@ -40,6 +40,20 @@ async def get_folder_kb_asset_stats():
 # ---------------------------------------------------------------------------
 # Cross-KB file list (replaces old /api/knowledge/list for folder-based KBs)
 # ---------------------------------------------------------------------------
+# Knowledge source distribution (5 major categories from filesystem)
+# ---------------------------------------------------------------------------
+
+@router.get("/source-distribution", response_model=dict)
+async def get_folder_kb_source_distribution():
+    """Knowledge source distribution grouped into 5 major categories.
+
+    Categories: 标准规范体系, 作业指导体系, 培训考试体系, 管理制度体系, 技术文档体系
+    """
+    data = folder_kb_service.scan_kb_source_distribution()
+    return {"code": 0, "data": data}
+
+
+# ---------------------------------------------------------------------------
 
 @router.get("/list", response_model=dict)
 async def list_all_kb_files(

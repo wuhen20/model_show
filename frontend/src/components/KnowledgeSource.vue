@@ -4,7 +4,10 @@
     <div class="source-list">
       <div class="source-item" v-for="item in sourceData" :key="item.name">
         <div class="source-info">
-          <span class="source-name">{{ item.name }}</span>
+          <div class="source-name-group">
+            <span class="source-dot" :style="{ backgroundColor: item.color }"></span>
+            <span class="source-name">{{ item.name }}</span>
+          </div>
           <div class="source-val">
             <span class="source-value">{{ item.value }}%</span>
             <span class="source-count">({{ item.count }}份)</span>
@@ -13,6 +16,7 @@
         <div class="progress-bar">
           <div class="progress-fill" :style="{ width: item.value + '%', backgroundColor: item.color }"></div>
         </div>
+        <div class="source-desc" v-if="item.description">{{ item.description }}</div>
       </div>
     </div>
   </div>
@@ -20,25 +24,46 @@
 
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
-import { fetchSourceDistribution, type SourceDistribution } from '@/api/knowledge'
+import { fetchSourceDistribution, fetchFolderKBSourceDistribution } from '@/api/knowledge'
 
-const defaultData: (SourceDistribution & { count?: number })[] = [
-  { name: '内部文档', value: 42.3, count: 0, color: '#00d4ff' },
-  { name: '电力行业标准', value: 24.8, count: 0, color: '#00ff88' },
-  { name: '国家标准', value: 15.6, count: 0, color: '#a855f7' },
-  { name: '国家电网企业标准', value: 10.2, count: 0, color: '#ffaa00' },
-  { name: '国家计量规程', value: 7.1, count: 0, color: '#ff5555' }
+interface SourceItem {
+  name: string
+  value: number
+  count: number
+  color: string
+  description?: string
+}
+
+const defaultData: SourceItem[] = [
+  { name: '标准规范体系', value: 22.8, count: 751, color: '#00d4ff', description: '国标/行标/企标/检定规程等规范性文件' },
+  { name: '作业指导体系', value: 18.8, count: 621, color: '#00ff88', description: '作业指导书/操作手册/技术方案等操作类文件' },
+  { name: '培训考试体系', value: 1.4, count: 45, color: '#a855f7', description: '培训资料/试题库等培训类文件' },
+  { name: '管理制度体系', value: 4.5, count: 149, color: '#ffaa00', description: '管理办法/管理规定等制度类文件' },
+  { name: '技术文档体系', value: 52.5, count: 1734, color: '#ff5555', description: '通用技术文档/参考资料' },
 ]
 
-const sourceData = ref<(SourceDistribution & { count?: number })[]>(defaultData)
+const sourceData = ref<SourceItem[]>(defaultData)
 
 onMounted(async () => {
   try {
-    const data = await fetchSourceDistribution()
+    const data = await fetchFolderKBSourceDistribution()
     if (data && data.length > 0) {
       sourceData.value = data
     }
-  } catch {}
+  } catch {
+    // Fallback to old API
+    try {
+      const data = await fetchSourceDistribution()
+      if (data && data.length > 0) {
+        sourceData.value = data.map(d => ({
+          name: d.name,
+          value: d.value,
+          count: d.count,
+          color: d.color,
+        }))
+      }
+    } catch {}
+  }
 })
 </script>
 
@@ -60,7 +85,7 @@ onMounted(async () => {
 .source-list {
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 14px;
 }
 
 .source-item {
@@ -75,19 +100,34 @@ onMounted(async () => {
   align-items: center;
 }
 
+.source-name-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  flex: 1;
+}
+
+.source-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
 .source-name {
   font-size: 13px;
   color: rgba(255, 255, 255, 0.7);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  max-width: 60%;
 }
 
 .source-val {
   display: flex;
   align-items: baseline;
   gap: 4px;
+  flex-shrink: 0;
 }
 
 .source-value {
@@ -112,5 +152,11 @@ onMounted(async () => {
   height: 100%;
   border-radius: 4px;
   transition: width 0.6s ease;
+}
+
+.source-desc {
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.35);
+  line-height: 1.4;
 }
 </style>

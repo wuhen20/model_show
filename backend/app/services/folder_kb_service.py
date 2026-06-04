@@ -910,6 +910,98 @@ def _empty_asset_stats() -> dict:
     }
 
 
+# ── Knowledge source distribution ────────────────────────────────────────
+
+# Mapping from fine-grained knowledge_type to 5 major source categories
+_SOURCE_GROUPS: list[dict] = [
+    {
+        "name": "标准规范体系",
+        "types": ["行业标准", "企业标准", "国家标准", "检定规程", "计量规范",
+                  "能源行业标准", "技术规程", "产品规范", "技术规范"],
+        "color": "#00d4ff",
+        "description": "国标/行标/企标/检定规程等规范性文件",
+    },
+    {
+        "name": "作业指导体系",
+        "types": ["作业指导书", "操作手册", "技术方案", "法律法规"],
+        "color": "#00ff88",
+        "description": "作业指导书/操作手册/技术方案等操作类文件",
+    },
+    {
+        "name": "培训考试体系",
+        "types": ["培训题库", "培训资料"],
+        "color": "#a855f7",
+        "description": "培训资料/试题库等培训类文件",
+    },
+    {
+        "name": "管理制度体系",
+        "types": ["管理制度"],
+        "color": "#ffaa00",
+        "description": "管理办法/管理规定等制度类文件",
+    },
+    {
+        "name": "技术文档体系",
+        "types": ["技术文档"],
+        "color": "#ff5555",
+        "description": "通用技术文档/参考资料",
+    },
+]
+
+
+def scan_kb_source_distribution() -> list[dict]:
+    """Knowledge source distribution across 5 major categories.
+
+    Groups the fine-grained knowledge_type of all files into 5 categories:
+      1. 标准规范体系 — 国标/行标/企标/检定规程等
+      2. 作业指导体系 — 作业指导书/操作手册/技术方案等
+      3. 培训考试体系 — 培训资料/试题库等
+      4. 管理制度体系 — 管理办法/管理规定等
+      5. 技术文档体系 — 通用技术文档
+
+    Cached for 60 seconds.
+    """
+    cached = _cached("scan_kb_source_distribution", ttl=60)
+    if cached is not None:
+        return cached
+
+    # Reuse the cached all-files list if available
+    all_files = _cached("scan_all_kb_files", ttl=60)
+    if all_files is None:
+        # Force a scan
+        scan_all_kb_files(tab="latest", page_size=99999)
+        all_files = _cached("scan_all_kb_files", ttl=60)
+
+    from collections import Counter
+    type_counts: Counter = Counter()
+    total = 0
+    if all_files is not None:
+        for item in all_files:
+            type_counts[item.get("knowledge_type", "技术文档")] += 1
+            total += 1
+
+    # Build the mapping from type to group
+    type_to_group: dict[str, str] = {}
+    for group in _SOURCE_GROUPS:
+        for t in group["types"]:
+            type_to_group[t] = group["name"]
+
+    # Aggregate per group
+    result = []
+    for group in _SOURCE_GROUPS:
+        count = sum(type_counts.get(t, 0) for t in group["types"])
+        pct = round(count / total * 100, 1) if total > 0 else 0
+        result.append({
+            "name": group["name"],
+            "value": pct,
+            "count": count,
+            "color": group["color"],
+            "description": group["description"],
+        })
+
+    _set_cache("scan_kb_source_distribution", result)
+    return result
+
+
 def invalidate_cache():
     """Clear the scan cache. Call when files change on disk."""
     _cache.clear()

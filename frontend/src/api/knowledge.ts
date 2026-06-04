@@ -564,3 +564,17 @@ export function fetchFolderKBFileList(params?: {
   const qs = searchParams.toString()
   return request(`${FOLDER_API_BASE}/list${qs ? '?' + qs : ''}`)
 }
+
+// --- Folder KB Source Distribution ---
+
+export interface FolderSourceItem {
+  name: string
+  value: number
+  count: number
+  color: string
+  description?: string
+}
+
+export function fetchFolderKBSourceDistribution(): Promise<FolderSourceItem[]> {
+  return request(`${FOLDER_API_BASE}/source-distribution`)
+}
