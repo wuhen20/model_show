@@ -6,7 +6,13 @@ dist
 backend/uploads/
 backend/__pycache__/
 backend/app/**/__pycache__/
+__pycache__/
 *.pyc
 *.pyo
 .venv
 venv
+.idea/
+
+# 时序功能运行期数据（用户上传/处理产物，不纳入版本控制；保留目录占位）
+backend/data/*/*
+!backend/data/*/.gitkeep

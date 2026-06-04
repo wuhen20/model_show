@@ -5,3 +5,21 @@ python-multipart>=0.0.12
 python-dotenv>=1.0.1
 pydantic>=2.0.0
 pydantic-settings>=2.0.0
+
+# ===== 时序样本/预测/分析功能依赖（集成自 data-analysis）=====
+# 数据处理
+pandas>=2.2.2
+openpyxl>=3.1.2
+xlrd>=2.0.1
+aiofiles>=23.2.1
+
+# AI 预测模型（Chronos-2）
+chronos-forecasting>=2.2.2
+
+# PyTorch（GPU 加速）
+# 注意：直接 `pip install torch` 在 Windows 下默认安装 CPU 版，无法使用 GPU。
+#   · RTX 50 系（Blackwell / sm_120）：需 cu128 及以上
+#       pip install torch>=2.7.0 torchvision>=0.22.0 --index-url https://download.pytorch.org/whl/cu128
+#   · 其它显卡请在 https://pytorch.org/get-started/locally/ 选择对应 CUDA 版本
+torch>=2.7.0
+torchvision>=0.22.0
