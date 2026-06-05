@@ -47,11 +47,12 @@
 
 ## 系统概述
 
-本系统是 AI 平台的**知识管理模块**，从文件夹知识库中提取文档，通过 LightRAG + LLM 自动生成知识图谱，存入 Memgraph 图数据库，并在前端页面实时展示。首页数据完全基于文件系统实时扫描，确保数据一致性。
+本系统是 AI 平台的**知识管理模块**，从文件夹知识库中提取文档，通过 LightRAG + LLM 自动生成知识图谱，存入 Memgraph 图数据库，并在前端页面实时展示。首页数据完全基于文件系统实时扫描，确保数据一致性。支持 **FAKE_MODE 演示模式**——开启后非图谱 API 返回可配置的假数据，图谱始终使用真实数据。
 
 ```
 原始文档 → LightRAG(LLM抽取) → Memgraph(存储) → FastAPI(API) → Vue3(展示)
                 ↘ 文件系统扫描 → 统计/趋势/资产数据 → 前端展示
+                                               ↘ FAKE_MODE → 配置文件假数据（图谱除外）
 ```
 
 ---
@@ -131,6 +132,14 @@
     │   │   │   ├── memgraph_service.py   # Memgraph查询
     │   │   │   ├── lightrag_service.py   # LightRAG代理
     │   │   │   ├── folder_kb_service.py  # 文件夹KB扫描（核心数据源）
+    │   │   │   ├── fake_data.py          # FAKE_MODE 假数据服务（加载配置+派生计算）
+    │   │   │   ├── db_service.py         # SQLite数据服务（KB/标签/文档/切片CRUD）
+    │   │   │   ├── storage_service.py    # 文件存储抽象（本地/MinIO）
+    │   │   │   └── sync_service.py       # LightRAG增量同步
+    │   │   ├── services/
+    │   │   │   ├── memgraph_service.py   # Memgraph查询
+    │   │   │   ├── lightrag_service.py   # LightRAG代理
+    │   │   │   ├── folder_kb_service.py  # 文件夹KB扫描（核心数据源）
     │   │   │   ├── db_service.py         # SQLite数据服务（KB/标签/文档/切片CRUD）
     │   │   │   ├── storage_service.py    # 文件存储抽象（本地/MinIO）
     │   │   │   └── sync_service.py       # LightRAG增量同步
@@ -141,6 +150,7 @@
     │   │   └── core/
     │   │       └── config.py             # 全局配置（Pydantic Settings）
     │   ├── data/
+    │   │   ├── fake_data_config.json     # FAKE_MODE 配置文件（可自定义演示数据）
     │   │   └── knowledge_metadata.db     # SQLite 元数据库
     │   ├── uploads/                      # 上传文件存储目录
     │   └── .env                          # 后端配置
@@ -264,8 +274,42 @@
 | `memgraph_username` | 空 | Memgraph 用户名 |
 | `memgraph_password` | 空 | Memgraph 密码 |
 | `knowledge_base_dir` | 知识库文件夹 | 文件夹KB根目录 |
+| `fake_mode` | False | 演示模式——开启后非图谱端点返回配置文件假数据 |
+| `fake_data_config_path` | data/fake_data_config.json | 假数据配置文件路径 |
 
 ---
+
+## FAKE_MODE 演示模式
+
+当 `FAKE_MODE=true` 时，大部分读接口返回 `data/fake_data_config.json` 中的预配置数据，而非真实文件系统扫描结果。图谱接口始终使用真实数据。
+
+### 受 FAKE_MODE 影响的接口
+
+| 接口 | 端点 | 说明 |
+|------|------|------|
+| 知识统计 | `/stats` | 假数据（21386、2714 等） |
+| 资产统计 | `/folder/asset-stats` | 假数据（5 个子库数量） |
+| 来源分布 | `/folder/source-distribution` | 假数据（6 大来源体系） |
+| 趋势 | `/folder/trend` | 假数据（12 个月） |
+| 质量度量 | `/quality-metrics` | 假数据 |
+| 知识库列表 | `/folder/bases` | 假数据 |
+| 文档标签 | `/bases/{name}/tags`（folder） | **始终真实数据** |
+| 标签树 | `/bases/{id}/tags`（DB） | **始终真实数据** |
+| KB 详情 | `/bases/{id}` | **始终真实数据** |
+
+### 不受 FAKE_MODE 影响的接口
+
+| 接口 | 说明 |
+|------|------|
+| 所有图谱接口 | `/graph`、`/lightrag/graph`、`/bases/{name}/graph` |
+| 所有写操作 | POST / PUT / DELETE |
+| 文件预览 | `/preview/{path}` |
+| 文档列表/详情 | `/list`、`/detail/{id}`、文档 CRUD |
+| 处理状态 | `/pipeline-status`、`/sync-status` |
+
+### 配置假数据
+
+编辑 `data/fake_data_config.json`，按端点路径组织。派生值（总数、百分比等）由 `_compute_derived()` 自动计算。
 
 ## 外部组件配置
 
@@ -590,16 +634,16 @@ RETURN a.entity_id, r.description, b.entity_id;
 GET /api/knowledge/stats
 ```
 
-返回：
+返回（FAKE_MODE=false 时来自文件系统扫描，FAKE_MODE=true 时来自配置文件）：
 ```json
 {
-  "total_count": 3300,
-  "structured_count": 994,
-  "unstructured_count": 2306,
-  "graph_entities": 5274,       ← 从 Memgraph 实时查询
+  "total_count": 21386,
+  "structured_count": 2714,
+  "unstructured_count": 18672,
+  "graph_entities": 1286,       ← 从 Memgraph 实时查询
   "business_domains": 5,
-  "completeness": 92.5,
-  "availability": 95.8
+  "completeness": 94.2,
+  "availability": 97.1
 }
 ```
 
@@ -672,13 +716,13 @@ GET /api/knowledge/folder/trend
 GET /api/knowledge/folder/asset-stats
 ```
 
-返回每个KB的文件数、总大小、文件类型分布：
+返回每个KB的文件数、总大小、文件类型分布（FAKE_MODE=true 时从配置文件读取）：
 ```json
 {
-  "total_count": 3300,
-  "total_size": 4363727811,
+  "total_count": 21386,
+  "total_size": 11447285760,
   "categories": [
-    {"name": "计量营销专业知识库", "count": 2233, "size": 2045234207, "value": 67.7, "color": "#00d4ff",
+    {"name": "计量营销专业知识库", "count": 13427, "size": 11447285760, "value": 62.8, "color": "#00d4ff",
      "extensions": [{"ext": ".docx", "count": 2212}, {"ext": ".txt", "count": 10}, ...]},
     ...
   ],
@@ -792,7 +836,7 @@ GET /api/knowledge/graph?full=true            # 返回完整图谱（最多5000�
 |------|------|------|
 | 知识管理首页 | `/knowledge-management` | 统计卡片 + 趋势图 + 资产图 + 质量度量 + 资产表 + 图谱 |
 | 知识库管理 | `/knowledge-management?tab=management` | 文件夹KB卡片列表 + 创建KB入口 |
-| 知识能力工具 | `/knowledge-management?tab=tools` | 工具集 |
+| ~~知识能力工具~~ | ~~`/knowledge-management?tab=tools`~~ | **已隐藏** |
 | 知识详情 | `/knowledge-detail/:id` | 单条知识详情页 |
 | 创建知识库 | `/knowledge-create` | 三步创建向导 |
 | 用户自建KB详情 | `/knowledge-base/:id` | 文档上传 + 管理 + 切片 + LightRAG同步 |
@@ -822,12 +866,12 @@ GET /api/knowledge/graph?full=true            # 返回完整图谱（最多5000�
 进入知识库详情后，左侧展示基本信息和标签体系，右侧展示文件列表与图谱。
 
 **标签体系：** 目录结构自动解析为多层级标签树，以 chip/药片样式渲染（FolderTagItem 组件），颜色按层级区分：
-- L1（一级）→ 青色 `#00d4ff`
-- L2（二级）→ 绿色 `#00ff88`
+- L1（一级）→ 青色 `#00d4ff`（加粗、可折叠/展开）
+- L2（二级）→ 绿色 `#00ff88`（带深度圆点 + 发光效果）
 - L3（三级）→ 紫色 `#c084fc`
 - L4+（四级及以上）→ 琥珀色 `#ffaa00`
 
-文件列表中的"关联标签"也使用相同配色，与标签体系统一。
+一级标签带展开/折叠箭头，子树有左侧竖线连接，hover 时 chip 发光高亮。文件列表中的"关联标签"也使用相同配色，与标签体系统一。
 
 **文件下钻与预览：** 点击文件列表中任意行，进入文件详情视图，展示文件元数据和在线预览。文件元数据包含：文件大小、修改时间、知识类型、知识来源、知识评分（星级展示）、相对路径、关联标签。不同格式使用对应的预览组件：
 
@@ -843,7 +887,9 @@ GET /api/knowledge/graph?full=true            # 返回完整图谱（最多5000�
 
 预览实现：前端 `fetch` 后端 `/preview/` 接口获取 ArrayBuffer，传递给 `@vue-office` 组件渲染。这样做避免了 CORS 和响应头兼容性问题。
 
-**图谱全屏视图**（GraphDetailModal）：点击图谱"查看详情"打开，支持拖拽、缩放、点击节点查看实体详情，最多显示5000节点。
+**图谱全屏视图**（GraphDetailModal）：点击图谱"查看详情"打开，支持拖拽、缩放、点击节点查看实体详情，最多显示5000节点。预览界面始终只展示少量节点的预览图谱，点击"查看详情"时才在弹窗中加载完整图谱数据。
+
+**图谱预览与刷新逻辑：** 预览和详情数据完全隔离——预览始终使用少量节点（首页100个，文件夹KB页80个），点击"查看详情"弹窗时异步加载完整图谱。从文件详情返回后自动重建图表实例，解决 v-if 切换导致的 ECharts 实例失效问题。
 
 ### 用户自建知识库详情页（KnowledgeBaseDetail）
 
@@ -872,7 +918,7 @@ GET /api/knowledge/graph?full=true            # 返回完整图谱（最多5000�
 | KnowledgeQuality.vue | 知识质量概览（五维评估雷达） |
 | KnowledgeTools.vue | 知识能力工具面板 |
 | GraphDetailModal.vue | 图谱全屏详情模态框 |
-| FolderTagItem.vue | 文件夹标签药片组件 |
+| FolderTagItem.vue | 文件夹标签药片组件（支持折叠/展开、树线、深度圆点） |
 | StatsCard.vue | 统计数据卡片 |
 | ColorSelector.vue | 颜色选择器 |
 | IconSelector.vue | 图标选择器 |
@@ -883,16 +929,26 @@ GET /api/knowledge/graph?full=true            # 返回完整图谱（最多5000�
 
 ### 图谱展示逻辑
 
+**预览与详情隔离：** 预览卡片始终只渲染少量节点（首页100个，KB详情页80个），点击"查看详情"在弹窗中加载完整图谱。两者数据完全隔离，互不影响。
+
 ```
 页面加载
   │
-  ├─ 首页图谱 → fetchKnowledgeGraph()（无kb_name，合并所有KB）
+  ├─ 首页图谱 → fetchKnowledgeGraph()（无kb_name，合并所有KB，limit=100）
+  │     │
+  │     └─ 点击"查看详情" → 弹窗加载完整图谱（limit=5000, full=true）
+  │           │
+  │           └─ 弹窗关闭 → 预览图表保持原样，无需恢复
   │
-  └─ KB详情图谱 → fetchKnowledgeGraph(kb_name)
+  └─ KB详情图谱 → fetchKnowledgeGraph(kb_name, limit=80)
        │
-       ├─ Memgraph有数据？→ 用真实实体/关系渲染 ✓
+       ├─ 进入文件详情 → 图谱区域隐藏（v-if）
+       │     │
+       │     └─ 返回文件列表 → 重建 ECharts 实例 + 渲染预览数据
        │
-       └─ Memgraph无数据？→ fallback到目录结构合成图
+       └─ 点击"查看详情" → 弹窗加载完整图谱
+             │
+             └─ 弹窗关闭 → 预览保持不变
 ```
 
 ### 统计数据来源

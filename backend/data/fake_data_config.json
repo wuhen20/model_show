@@ -2,10 +2,10 @@
   "_comment": "FAKE_MODE 配置文件 — 编辑此文件自定义演示数据。派生值（总数、百分比、趋势摘要等）在加载时自动计算，无需手动维护一致性。",
 
   "/stats": {
-    "total_count": 20000,
-    "structured_count": 2580,
+    "total_count": 21386,
+    "structured_count": 2714,
     "unstructured_count": 0,
-    "graph_entities": 0,
+    "graph_entities": 1286,
     "business_domains": 5,
     "completeness": 94.2,
     "availability": 97.1
@@ -15,64 +15,64 @@
     "categories": [
       {
         "name": "计量营销专业知识库",
-        "count": 12500,
+        "count": 13427,
         "size": 11447285760,
         "color": "#00d4ff",
         "extensions": [
-          { "ext": ".docx", "count": 11850 },
-          { "ext": ".txt", "count": 280 },
-          { "ext": ".xlsx", "count": 180 },
-          { "ext": ".xls", "count": 120 },
-          { "ext": ".pdf", "count": 70 }
+          { "ext": ".docx", "count": 12718 },
+          { "ext": ".txt", "count": 315 },
+          { "ext": ".xlsx", "count": 198 },
+          { "ext": ".xls", "count": 117 },
+          { "ext": ".pdf", "count": 79 }
         ]
       },
       {
         "name": "计量数字讲师",
-        "count": 3800,
+        "count": 4013,
         "size": 3891200000,
         "color": "#00ff88",
         "extensions": [
-          { "ext": ".docx", "count": 3420 },
-          { "ext": ".txt", "count": 180 },
-          { "ext": ".xlsx", "count": 120 },
-          { "ext": ".pdf", "count": 80 }
+          { "ext": ".docx", "count": 3612 },
+          { "ext": ".txt", "count": 192 },
+          { "ext": ".xlsx", "count": 128 },
+          { "ext": ".pdf", "count": 81 }
         ]
       },
       {
         "name": "专家系统知识库",
-        "count": 2100,
+        "count": 2215,
         "size": 2123360000,
         "color": "#a855f7",
         "extensions": [
-          { "ext": ".docx", "count": 1890 },
-          { "ext": ".txt", "count": 95 },
-          { "ext": ".xlsx", "count": 65 },
-          { "ext": ".pdf", "count": 50 }
+          { "ext": ".docx", "count": 1997 },
+          { "ext": ".txt", "count": 98 },
+          { "ext": ".xlsx", "count": 68 },
+          { "ext": ".pdf", "count": 52 }
         ]
       },
       {
         "name": "装表接电知识库",
-        "count": 980,
+        "count": 1073,
         "size": 948224000,
         "color": "#ffaa00",
         "extensions": [
-          { "ext": ".docx", "count": 780 },
-          { "ext": ".txt", "count": 85 },
-          { "ext": ".xlsx", "count": 60 },
-          { "ext": ".doc", "count": 35 },
-          { "ext": ".pdf", "count": 20 }
+          { "ext": ".docx", "count": 857 },
+          { "ext": ".txt", "count": 91 },
+          { "ext": ".xlsx", "count": 65 },
+          { "ext": ".doc", "count": 38 },
+          { "ext": ".pdf", "count": 22 }
         ]
       },
       {
         "name": "采集自愈知识库",
-        "count": 620,
+        "count": 658,
         "size": 597504000,
         "color": "#ff5555",
         "extensions": [
-          { "ext": ".docx", "count": 520 },
-          { "ext": ".txt", "count": 45 },
-          { "ext": ".xlsx", "count": 30 },
-          { "ext": ".pdf", "count": 25 }
+          { "ext": ".docx", "count": 552 },
+          { "ext": ".txt", "count": 47 },
+          { "ext": ".xlsx", "count": 33 },
+          { "ext": ".pdf", "count": 26 }
         ]
       }
     ]
@@ -81,37 +81,37 @@
   "/folder/source-distribution": [
     {
       "name": "标准规范体系",
-      "count": 4520,
+      "count": 4837,
       "color": "#00d4ff",
       "description": "国标/行标/企标/检定规程等规范性文件"
     },
     {
       "name": "作业指导体系",
-      "count": 3180,
+      "count": 3412,
       "color": "#00ff88",
       "description": "作业指导书/操作手册/技术方案等操作类文件"
     },
     {
       "name": "政策文档体系",
-      "count": 568,
+      "count": 607,
       "color": "#6366f1",
       "description": "法律/法规/条例等政策性文件"
     },
     {
       "name": "培训考试体系",
-      "count": 272,
+      "count": 291,
       "color": "#a855f7",
       "description": "培训资料/试题库等培训类文件"
     },
     {
       "name": "管理制度体系",
-      "count": 900,
+      "count": 963,
       "color": "#ffaa00",
       "description": "管理办法/管理规定等制度类文件"
     },
     {
       "name": "技术文档体系",
-      "count": 10560,
+      "count": 11276,
       "color": "#ff5555",
       "description": "通用技术文档/参考资料"
     }
@@ -125,12 +125,12 @@
     "series": [
       {
         "name": "新增知识",
-        "data": [680, 520, 610, 490, 750, 580, 420, 550, 640, 470, 380, 260],
+        "data": [726, 557, 653, 524, 801, 620, 449, 588, 684, 502, 406, 278],
         "color": "#00d4ff"
       },
       {
         "name": "更新知识",
-        "data": [450, 620, 360, 530, 400, 490, 310, 390, 510, 340, 270, 190],
+        "data": [481, 663, 385, 567, 427, 524, 331, 417, 545, 363, 289, 203],
         "color": "#00ff88"
       }
     ]
@@ -579,34 +579,34 @@
         "update_time": "2026-01-25"
       }
     ],
-    "total": 20000
+    "total": 21386
   },
 
   "/folder/bases": {
     "bases": [
       {
         "name": "计量营销专业知识库",
-        "doc_count": 12500,
+        "doc_count": 13427,
         "top_tags": ["标准规范", "作业指导", "管理制度", "法律法规"]
       },
       {
         "name": "计量数字讲师",
-        "doc_count": 3800,
+        "doc_count": 4013,
         "top_tags": ["培训资料", "操作手册", "技术方案", "作业指导"]
       },
       {
         "name": "专家系统知识库",
-        "doc_count": 2100,
+        "doc_count": 2215,
         "top_tags": ["运维规程", "技术规范", "培训资料", "技术方案"]
       },
       {
         "name": "装表接电知识库",
-        "doc_count": 980,
+        "doc_count": 1073,
         "top_tags": ["作业指导", "安全规程", "操作手册", "行业标准"]
       },
       {
         "name": "采集自愈知识库",
-        "doc_count": 620,
+        "doc_count": 658,
         "top_tags": ["故障处理", "技术方案", "运维规程", "操作手册"]
       }
     ]
@@ -713,7 +713,7 @@
             "score": 4
           }
         ],
-        "total": 12500
+        "total": 13427
       },
       "计量数字讲师": {
         "items": [
@@ -790,7 +790,7 @@
             "score": 3
           }
         ],
-        "total": 3800
+        "total": 4013
       },
       "专家系统知识库": {
         "items": [
@@ -843,7 +843,7 @@
             "score": 3
           }
         ],
-        "total": 2100
+        "total": 2215
       },
       "装表接电知识库": {
         "items": [
@@ -896,7 +896,7 @@
             "score": 4
           }
         ],
-        "total": 980
+        "total": 1073
       },
       "采集自愈知识库": {
         "items": [
@@ -949,7 +949,7 @@
             "score": 4
           }
         ],
-        "total": 620
+        "total": 658
       }
     },
     "tags": {
@@ -958,36 +958,78 @@
           "name": "标准规范",
           "level": 1,
           "children": [
-            { "name": "JJG检定规程", "level": 2, "children": [] },
-            { "name": "GB国标", "level": 2, "children": [] },
-            { "name": "DL行标", "level": 2, "children": [] },
-            { "name": "Q企标", "level": 2, "children": [] },
-            { "name": "计量规范", "level": 2, "children": [] }
+            { "name": "JJG检定规程", "level": 2, "children": [
+              { "name": "电能表检定", "level": 3, "children": [
+                { "name": "单相电能表", "level": 4, "children": [] },
+                { "name": "三相电能表", "level": 4, "children": [] }
+              ]},
+              { "name": "互感器检定", "level": 3, "children": [] },
+              { "name": "测量设备检定", "level": 3, "children": [] }
+            ]},
+            { "name": "GB国标", "level": 2, "children": [
+              { "name": "基础通用", "level": 3, "children": [] },
+              { "name": "产品标准", "level": 3, "children": [] },
+              { "name": "方法标准", "level": 3, "children": [] }
+            ]},
+            { "name": "DL行标", "level": 2, "children": [
+              { "name": "电力行业标准", "level": 3, "children": [] },
+              { "name": "能源行业标准", "level": 3, "children": [] }
+            ]},
+            { "name": "Q企标", "level": 2, "children": [
+              { "name": "国网企标", "level": 3, "children": [] },
+              { "name": "省公司标准", "level": 3, "children": [] }
+            ]},
+            { "name": "计量规范", "level": 2, "children": [
+              { "name": "通用规范", "level": 3, "children": [] },
+              { "name": "专用规范", "level": 3, "children": [] }
+            ]}
           ]
         },
         {
           "name": "管理制度",
           "level": 1,
           "children": [
-            { "name": "管理办法", "level": 2, "children": [] },
-            { "name": "管理规定", "level": 2, "children": [] },
-            { "name": "实施细则", "level": 2, "children": [] }
+            { "name": "管理办法", "level": 2, "children": [
+              { "name": "计量管理", "level": 3, "children": [] },
+              { "name": "设备管理", "level": 3, "children": [] },
+              { "name": "人员管理", "level": 3, "children": [] }
+            ]},
+            { "name": "管理规定", "level": 2, "children": [
+              { "name": "工作规定", "level": 3, "children": [] },
+              { "name": "考核规定", "level": 3, "children": [] }
+            ]},
+            { "name": "实施细则", "level": 2, "children": [
+              { "name": "检定实施细则", "level": 3, "children": [] },
+              { "name": "核查实施细则", "level": 3, "children": [] }
+            ]}
           ]
         },
         {
           "name": "法律法规",
           "level": 1,
           "children": [
-            { "name": "国家法律", "level": 2, "children": [] },
-            { "name": "行政法规", "level": 2, "children": [] }
+            { "name": "国家法律", "level": 2, "children": [
+              { "name": "计量法", "level": 3, "children": [] },
+              { "name": "电力法", "level": 3, "children": [] }
+            ]},
+            { "name": "行政法规", "level": 2, "children": [
+              { "name": "计量法实施细则", "level": 3, "children": [] },
+              { "name": "强制检定目录", "level": 3, "children": [] }
+            ]}
           ]
         },
         {
           "name": "技术规范",
           "level": 1,
           "children": [
-            { "name": "技术导则", "level": 2, "children": [] },
-            { "name": "技术规程", "level": 2, "children": [] }
+            { "name": "技术导则", "level": 2, "children": [
+              { "name": "设计导则", "level": 3, "children": [] },
+              { "name": "验收导则", "level": 3, "children": [] }
+            ]},
+            { "name": "技术规程", "level": 2, "children": [
+              { "name": "运行规程", "level": 3, "children": [] },
+              { "name": "检修规程", "level": 3, "children": [] }
+            ]}
           ]
         }
       ],
@@ -996,97 +1038,33 @@
           "name": "培训资料",
           "level": 1,
           "children": [
-            { "name": "培训教材", "level": 2, "children": [] },
-            { "name": "试题库", "level": 2, "children": [] }
+            { "name": "培训教材", "level": 2, "children": [
+              { "name": "基础知识", "level": 3, "children": [
+                { "name": "电工基础", "level": 4, "children": [] },
+                { "name": "计量基础", "level": 4, "children": [] }
+              ]},
+              { "name": "专业技能", "level": 3, "children": [] },
+              { "name": "综合知识", "level": 3, "children": [] }
+            ]},
+            { "name": "试题库", "level": 2, "children": [
+              { "name": "理论试题", "level": 3, "children": [] },
+              { "name": "实操试题", "level": 3, "children": [] },
+              { "name": "竞赛试题", "level": 3, "children": [] }
+            ]}
           ]
         },
         {
           "name": "操作手册",
           "level": 1,
           "children": [
-            { "name": "系统操作", "level": 2, "children": [] },
-            { "name": "设备操作", "level": 2, "children": [] }
-          ]
-        },
-        {
-          "name": "技术方案",
-          "level": 1,
-          "children": []
-        },
-        {
-          "name": "作业指导",
-          "level": 1,
-          "children": [
-            { "name": "检定作业", "level": 2, "children": [] },
-            { "name": "安装作业", "level": 2, "children": [] }
-          ]
-        }
-      ],
-      "专家系统知识库": [
-        {
-          "name": "运维规程",
-          "level": 1,
-          "children": [
-            { "name": "系统运维", "level": 2, "children": [] },
-            { "name": "设备运维", "level": 2, "children": [] }
-          ]
-        },
-        {
-          "name": "技术规范",
-          "level": 1,
-          "children": [
-            { "name": "接口规范", "level": 2, "children": [] },
-            { "name": "数据规范", "level": 2, "children": [] }
-          ]
-        },
-        {
-          "name": "培训资料",
-          "level": 1,
-          "children": []
-        },
-        {
-          "name": "技术方案",
-          "level": 1,
-          "children": []
-        }
-      ],
-      "装表接电知识库": [
-        {
-          "name": "作业指导",
-          "level": 1,
-          "children": [
-            { "name": "安装指导", "level": 2, "children": [] },
-            { "name": "检测指导", "level": 2, "children": [] },
-            { "name": "接线指导", "level": 2, "children": [] }
-          ]
-        },
-        {
-          "name": "安全规程",
-          "level": 1,
-          "children": [
-            { "name": "作业安全", "level": 2, "children": [] },
-            { "name": "防护规程", "level": 2, "children": [] }
-          ]
-        },
-        {
-          "name": "操作手册",
-          "level": 1,
-          "children": []
-        },
-        {
-          "name": "行业标准",
-          "level": 1,
-          "children": []
-        }
-      ],
-      "采集自愈知识库": [
-        {
-          "name": "故障处理",
-          "level": 1,
-          "children": [
-            { "name": "采集故障", "level": 2, "children": [] },
-            { "name": "通信故障", "level": 2, "children": [] },
-            { "name": "终端故障", "level": 2, "children": [] }
+            { "name": "系统操作", "level": 2, "children": [
+              { "name": "营销系统", "level": 3, "children": [] },
+              { "name": "采集系统", "level": 3, "children": [] }
+            ]},
+            { "name": "设备操作", "level": 2, "children": [
+              { "name": "校验台操作", "level": 3, "children": [] },
+              { "name": "现场终端操作", "level": 3, "children": [] }
+            ]}
           ]
         },
         {
@@ -1098,14 +1076,176 @@
           ]
         },
         {
+          "name": "作业指导",
+          "level": 1,
+          "children": [
+            { "name": "检定作业", "level": 2, "children": [
+              { "name": "首检作业", "level": 3, "children": [] },
+              { "name": "周检作业", "level": 3, "children": [] }
+            ]},
+            { "name": "安装作业", "level": 2, "children": [
+              { "name": "新装作业", "level": 3, "children": [] },
+              { "name": "换装作业", "level": 3, "children": [] }
+            ]}
+          ]
+        }
+      ],
+      "专家系统知识库": [
+        {
           "name": "运维规程",
           "level": 1,
-          "children": []
+          "children": [
+            { "name": "系统运维", "level": 2, "children": [
+              { "name": "日常巡检", "level": 3, "children": [] },
+              { "name": "故障处理", "level": 3, "children": [
+                { "name": "紧急故障", "level": 4, "children": [] },
+                { "name": "一般故障", "level": 4, "children": [] }
+              ]},
+              { "name": "版本升级", "level": 3, "children": [] }
+            ]},
+            { "name": "设备运维", "level": 2, "children": [
+              { "name": "终端运维", "level": 3, "children": [] },
+              { "name": "采集器运维", "level": 3, "children": [] }
+            ]}
+          ]
+        },
+        {
+          "name": "技术规范",
+          "level": 1,
+          "children": [
+            { "name": "接口规范", "level": 2, "children": [
+              { "name": "数据接口", "level": 3, "children": [] },
+              { "name": "通信接口", "level": 3, "children": [] }
+            ]},
+            { "name": "数据规范", "level": 2, "children": [
+              { "name": "数据格式", "level": 3, "children": [] },
+              { "name": "编码规则", "level": 3, "children": [] }
+            ]}
+          ]
+        },
+        {
+          "name": "培训资料",
+          "level": 1,
+          "children": [
+            { "name": "操作培训", "level": 2, "children": [] },
+            { "name": "技能培训", "level": 2, "children": [] }
+          ]
+        },
+        {
+          "name": "技术方案",
+          "level": 1,
+          "children": [
+            { "name": "架构方案", "level": 2, "children": [] },
+            { "name": "部署方案", "level": 2, "children": [] }
+          ]
+        }
+      ],
+      "装表接电知识库": [
+        {
+          "name": "作业指导",
+          "level": 1,
+          "children": [
+            { "name": "安装指导", "level": 2, "children": [
+              { "name": "单相安装", "level": 3, "children": [] },
+              { "name": "三相安装", "level": 3, "children": [
+                { "name": "高压计量", "level": 4, "children": [] },
+                { "name": "低压计量", "level": 4, "children": [] }
+              ]}
+            ]},
+            { "name": "检测指导", "level": 2, "children": [
+              { "name": "投运检测", "level": 3, "children": [] },
+              { "name": "故障检测", "level": 3, "children": [] }
+            ]},
+            { "name": "接线指导", "level": 2, "children": [
+              { "name": "直接接入", "level": 3, "children": [] },
+              { "name": "经互感器接入", "level": 3, "children": [] }
+            ]}
+          ]
+        },
+        {
+          "name": "安全规程",
+          "level": 1,
+          "children": [
+            { "name": "作业安全", "level": 2, "children": [
+              { "name": "停电作业", "level": 3, "children": [] },
+              { "name": "带电作业", "level": 3, "children": [] }
+            ]},
+            { "name": "防护规程", "level": 2, "children": [
+              { "name": "个人防护", "level": 3, "children": [] },
+              { "name": "设备防护", "level": 3, "children": [] }
+            ]}
+          ]
         },
         {
           "name": "操作手册",
           "level": 1,
-          "children": []
+          "children": [
+            { "name": "标准操作", "level": 2, "children": [] },
+            { "name": "应急操作", "level": 2, "children": [] }
+          ]
+        },
+        {
+          "name": "行业标准",
+          "level": 1,
+          "children": [
+            { "name": "施工标准", "level": 2, "children": [] },
+            { "name": "验收标准", "level": 2, "children": [] }
+          ]
+        }
+      ],
+      "采集自愈知识库": [
+        {
+          "name": "故障处理",
+          "level": 1,
+          "children": [
+            { "name": "采集故障", "level": 2, "children": [
+              { "name": "数据异常", "level": 3, "children": [
+                { "name": "电量突增", "level": 4, "children": [] },
+                { "name": "电量突减", "level": 4, "children": [] }
+              ]},
+              { "name": "通信中断", "level": 3, "children": [] },
+              { "name": "采集失败", "level": 3, "children": [] }
+            ]},
+            { "name": "通信故障", "level": 2, "children": [
+              { "name": "载波通信", "level": 3, "children": [] },
+              { "name": "无线通信", "level": 3, "children": [] },
+              { "name": "光纤通信", "level": 3, "children": [] }
+            ]},
+            { "name": "终端故障", "level": 2, "children": [
+              { "name": "集中器故障", "level": 3, "children": [] },
+              { "name": "采集器故障", "level": 3, "children": [] }
+            ]}
+          ]
+        },
+        {
+          "name": "技术方案",
+          "level": 1,
+          "children": [
+            { "name": "升级方案", "level": 2, "children": [
+              { "name": "固件升级", "level": 3, "children": [] },
+              { "name": "协议升级", "level": 3, "children": [] }
+            ]},
+            { "name": "改造方案", "level": 2, "children": [
+              { "name": "台区改造", "level": 3, "children": [] },
+              { "name": "线路改造", "level": 3, "children": [] }
+            ]}
+          ]
+        },
+        {
+          "name": "运维规程",
+          "level": 1,
+          "children": [
+            { "name": "日常运维", "level": 2, "children": [] },
+            { "name": "专项运维", "level": 2, "children": [] }
+          ]
+        },
+        {
+          "name": "操作手册",
+          "level": 1,
+          "children": [
+            { "name": "故障排查手册", "level": 2, "children": [] },
+            { "name": "自愈操作手册", "level": 2, "children": [] }
+          ]
         }
       ]
     }
@@ -1143,7 +1283,7 @@
         "description": "电力采集消缺与自愈恢复经验知识，涵盖采集终端故障处理、远程升级、自愈恢复等技术方案",
         "icon": "plug",
         "color": "#ff5555",
-        "doc_count": 620,
+        "doc_count": 658,
         "tags": [
           {
             "id": "t001",
@@ -1249,9 +1389,19 @@
           "name": "故障处理",
           "parent_tag_id": null,
           "children": [
-            { "id": "t002", "level": 2, "name": "采集故障", "parent_tag_id": "t001", "children": [] },
-            { "id": "t003", "level": 2, "name": "通信故障", "parent_tag_id": "t001", "children": [] },
-            { "id": "t004", "level": 2, "name": "终端故障", "parent_tag_id": "t001", "children": [] }
+            { "id": "t002", "level": 2, "name": "采集故障", "parent_tag_id": "t001", "children": [
+              { "id": "t002a", "level": 3, "name": "数据异常", "parent_tag_id": "t002", "children": [] },
+              { "id": "t002b", "level": 3, "name": "通信中断", "parent_tag_id": "t002", "children": [] },
+              { "id": "t002c", "level": 3, "name": "采集失败", "parent_tag_id": "t002", "children": [] }
+            ]},
+            { "id": "t003", "level": 2, "name": "通信故障", "parent_tag_id": "t001", "children": [
+              { "id": "t003a", "level": 3, "name": "载波通信", "parent_tag_id": "t003", "children": [] },
+              { "id": "t003b", "level": 3, "name": "无线通信", "parent_tag_id": "t003", "children": [] }
+            ]},
+            { "id": "t004", "level": 2, "name": "终端故障", "parent_tag_id": "t001", "children": [
+              { "id": "t004a", "level": 3, "name": "集中器故障", "parent_tag_id": "t004", "children": [] },
+              { "id": "t004b", "level": 3, "name": "采集器故障", "parent_tag_id": "t004", "children": [] }
+            ]}
           ]
         },
         {
@@ -1260,8 +1410,14 @@
           "name": "技术方案",
           "parent_tag_id": null,
           "children": [
-            { "id": "t006", "level": 2, "name": "升级方案", "parent_tag_id": "t005", "children": [] },
-            { "id": "t007", "level": 2, "name": "改造方案", "parent_tag_id": "t005", "children": [] }
+            { "id": "t006", "level": 2, "name": "升级方案", "parent_tag_id": "t005", "children": [
+              { "id": "t006a", "level": 3, "name": "固件升级", "parent_tag_id": "t006", "children": [] },
+              { "id": "t006b", "level": 3, "name": "协议升级", "parent_tag_id": "t006", "children": [] }
+            ]},
+            { "id": "t007", "level": 2, "name": "改造方案", "parent_tag_id": "t005", "children": [
+              { "id": "t007a", "level": 3, "name": "台区改造", "parent_tag_id": "t007", "children": [] },
+              { "id": "t007b", "level": 3, "name": "线路改造", "parent_tag_id": "t007", "children": [] }
+            ]}
           ]
         },
         {
@@ -1269,7 +1425,10 @@
           "level": 1,
           "name": "运维规程",
           "parent_tag_id": null,
-          "children": []
+          "children": [
+            { "id": "t008a", "level": 2, "name": "日常运维", "parent_tag_id": "t008", "children": [] },
+            { "id": "t008b", "level": 2, "name": "专项运维", "parent_tag_id": "t008", "children": [] }
+          ]
         }
       ]
     },

@@ -87,9 +87,6 @@ async def list_all_kb_files(
       - valuable: only high-value standard documents (score >= 5)
       - pending:  recently added files (modified in last 3 days)
     """
-    if settings.fake_mode:
-        return {"code": 0, "data": fake_data.get_fake_response("/folder/list", page=page, page_size=page_size)}
-
     try:
         result = folder_kb_service.scan_all_kb_files(
             tab=tab,
@@ -138,9 +135,6 @@ async def list_folder_kb_files(
     keyword: str | None = Query(default=None),
 ):
     """List files in a folder-based knowledge base with pagination."""
-    if settings.fake_mode:
-        return {"code": 0, "data": fake_data.get_fake_response("/folder/bases/{name}/files", kb_name=kb_name, page=page, page_size=page_size)}
-
     try:
         result = folder_kb_service.scan_kb_files(kb_name, page, page_size, keyword)
     except ValueError as e:
@@ -155,9 +149,6 @@ async def list_folder_kb_files(
 @router.get("/bases/{kb_name:path}/tags", response_model=dict)
 async def list_folder_kb_tags(kb_name: str):
     """Get the tag tree for a folder-based knowledge base."""
-    if settings.fake_mode:
-        return {"code": 0, "data": fake_data.get_fake_response("/folder/bases/{name}/tags", kb_name=kb_name)}
-
     try:
         tags = folder_kb_service.scan_kb_tags(kb_name)
     except ValueError as e:

@@ -2,7 +2,7 @@
   <div class="knowledge-graph-card">
     <div class="graph-title-row">
       <div class="card-title">
-        <template v-if="categoryId">{{ categoryId }} · </template>知识图谱
+        <template v-if="categoryId">{{ categoryId }} · </template>知识图谱预览
       </div>
       <div class="graph-title-actions">
         <el-button text size="small" class="graph-detail-btn" @click="openFullGraph">
@@ -21,15 +21,7 @@
       </div>
     </div>
 
-    <div class="graph-body" @click="onGraphAreaClick">
-      <!-- Loading overlay for full graph -->
-      <div v-if="fullGraphLoading" class="graph-loading-overlay">
-        <div class="graph-loading-spinner">
-          <div class="spinner-ring"></div>
-          <span class="spinner-text">加载完整图谱中...</span>
-        </div>
-      </div>
-
+    <div class="graph-body">
       <div ref="chartRef" class="graph-chart" v-loading="overviewLoading" element-loading-text="加载图谱..."
         element-loading-background="rgba(17,24,39,0.8)"></div>
       <div class="graph-sidebar">
@@ -104,8 +96,6 @@ const graphStats = reactive({
 // Overview (partial) vs full graph
 const PREVIEW_MAX_NODES = 100
 const overviewLoading = ref(false)
-const fullGraphLoading = ref(false)
-const fullGraphLoaded = ref(false)         // whether full graph has been loaded into the inline chart
 
 // Store full graph data for the detail modal
 const graphNodes = ref<GraphNode[]>([])
@@ -281,49 +271,6 @@ async function loadPartialGraph() {
   overviewLoading.value = false
 }
 
-/** Load the full graph (all nodes) and re-render the inline chart */
-async function loadFullGraph() {
-  if (fullGraphLoaded.value) return   // already loaded
-  fullGraphLoading.value = true
-  try {
-    const data = await fetchKnowledgeGraph(
-      props.workspace || undefined,
-      props.kbName || props.categoryId || undefined,
-      5000,
-      true,  // full=true: return all nodes without per-KB cap
-    )
-    if (data && data.nodes && data.nodes.length > 0) {
-      graphNodes.value = data.nodes
-      graphLinks.value = data.links
-      // Update stats to match actual returned data (full=true returns deduped counts)
-      if (data.stats) {
-        graphStats.entityCount = data.stats.entity_count
-        graphStats.relationCount = data.stats.relation_count
-        graphStats.coverage = data.stats.coverage
-      }
-      graphStats.renderedNodes = data.nodes.length
-      graphStats.renderedLinks = data.links.length
-      initChart(data.nodes, data.links)
-      fullGraphLoaded.value = true
-    }
-  } catch (e) {
-    console.warn('[KnowledgeGraph] Failed to load full graph:', e)
-  } finally {
-    fullGraphLoading.value = false
-  }
-}
-
-/** Click on graph area (not on a node) → load full graph */
-function onGraphAreaClick(e: MouseEvent) {
-  // If click is on a node (draggable), let ECharts handle it; only load full on empty-area click
-  const target = e.target as HTMLElement
-  if (target.tagName === 'CANVAS' || target.closest('.graph-chart')) {
-    if (!fullGraphLoaded.value && !fullGraphLoading.value) {
-      loadFullGraph()
-    }
-  }
-}
-
 /** Open the detail modal, loading full data if needed */
 function openFullGraph() {
   showDetail.value = true
@@ -336,20 +283,22 @@ onMounted(async () => {
 })
 
 watch(() => props.workspace, () => {
-  fullGraphLoaded.value = false
   detailLoaded = false
   loadPartialGraph()
 })
 
 watch(() => props.categoryId, () => {
-  fullGraphLoaded.value = false
   detailLoaded = false
   loadPartialGraph()
 })
 
-// When detail modal opens, load full graph data if not already loaded
+// When detail modal opens, load full graph data for the modal only
 watch(showDetail, async (val) => {
   if (val && !detailLoaded) {
+    // Start with preview data in the modal (quick display)
+    detailNodes.value = previewNodes.value
+    detailLinks.value = previewLinks.value
+    detailStats.value = { entity_count: graphStats.entityCount, relation_count: graphStats.relationCount, coverage: graphStats.coverage }
     try {
       // Request full data for detail view (full=true lifts per-KB cap)
       const data = await fetchKnowledgeGraph(
@@ -363,40 +312,22 @@ watch(showDetail, async (val) => {
         detailLinks.value = data.links
         detailStats.value = data.stats || null
         detailLoaded = true
-        // Also update the inline chart with full data so user sees the full graph
-        if (!fullGraphLoaded.value) {
-          graphNodes.value = data.nodes
-          graphLinks.value = data.links
-          if (data.stats) {
-            graphStats.entityCount = data.stats.entity_count
-            graphStats.relationCount = data.stats.relation_count
-            graphStats.coverage = data.stats.coverage
-          }
-          graphStats.renderedNodes = data.nodes.length
-          graphStats.renderedLinks = data.links.length
-          initChart(data.nodes, data.links)
-          fullGraphLoaded.value = true
+        // Update total stats (entityCount etc) from full data, but keep inline chart as preview
+        if (data.stats) {
+          graphStats.entityCount = data.stats.entity_count
+          graphStats.relationCount = data.stats.relation_count
+          graphStats.coverage = data.stats.coverage
         }
       }
     } catch (e) {
-      // Fallback: use same data as overview
-      detailNodes.value = graphNodes.value
-      detailLinks.value = graphLinks.value
-      detailStats.value = { entity_count: graphStats.entityCount, relation_count: graphStats.relationCount, coverage: graphStats.coverage }
+      // Fallback: keep preview data in modal
     }
   } else if (val) {
     detailNodes.value = graphNodes.value
     detailLinks.value = graphLinks.value
     detailStats.value = { entity_count: graphStats.entityCount, relation_count: graphStats.relationCount, coverage: graphStats.coverage }
-  } else if (!val && previewNodes.value.length) {
-    // Modal closed — restore the inline chart to the preview (partial) graph
-    graphNodes.value = previewNodes.value
-    graphLinks.value = previewLinks.value
-    graphStats.renderedNodes = previewNodes.value.length
-    graphStats.renderedLinks = previewLinks.value.length
-    fullGraphLoaded.value = false
-    initChart(previewNodes.value, previewLinks.value)
   }
+  // When modal closes, inline chart remains showing preview — no restore needed
 })
 
 onBeforeUnmount(() => {

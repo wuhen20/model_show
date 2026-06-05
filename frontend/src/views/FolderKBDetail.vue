@@ -327,7 +327,7 @@
             <!-- Graph section (only show in file list view) -->
             <div v-if="!selectedFile" class="graph-section">
               <div class="section-header">
-                <h2>目录知识图谱</h2>
+                <h2>目录知识图谱预览</h2>
                 <el-button text size="small" class="graph-detail-btn" @click="openGraphDetail">
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin-right:3px">
                     <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
@@ -336,14 +336,7 @@
                   查看详情
                 </el-button>
               </div>
-              <div class="graph-card" v-loading="graphLoading" @click="onGraphAreaClick">
-                <!-- Loading overlay for full graph -->
-                <div v-if="fullGraphLoading" class="graph-loading-overlay">
-                  <div class="graph-loading-spinner">
-                    <div class="spinner-ring"></div>
-                    <span class="spinner-text">加载完整图谱中...</span>
-                  </div>
-                </div>
+              <div class="graph-card" v-loading="graphLoading">
                 <div ref="graphRef" class="graph-chart"></div>
                 <div class="graph-stats" v-if="graphStats">
                   <div class="graph-stat-item">
@@ -364,9 +357,9 @@
         <GraphDetailModal
           v-model="showGraphDetail"
           :title="`${kbName} · 目录知识图谱详情`"
-          :nodes="graphNodes"
-          :links="graphLinks"
-          :stats="graphStats"
+          :nodes="detailNodes"
+          :links="detailLinks"
+          :stats="detailStats"
         />
       </main>
     </div>
@@ -418,9 +411,7 @@ const files = ref<FolderDocumentResponse[]>([])
 const tags = ref<FolderTagResponse[]>([])
 const filesLoading = ref(false)
 const graphLoading = ref(false)
-const fullGraphLoading = ref(false)
-const fullGraphLoaded = ref(false)       // whether full graph has been loaded into inline chart
-const GRAPH_PREVIEW_MAX_NODES = 30
+const GRAPH_PREVIEW_MAX_NODES = 80
 const searchKeyword = ref('')
 const currentPage = ref(1)
 const pageSize = 50
@@ -431,9 +422,15 @@ const graphStats = ref<GraphStats | null>(null)
 const graphRef = ref<HTMLElement>()
 let chartInstance: echarts.ECharts | null = null
 
-// Graph detail modal state
-const graphNodes = ref<GraphNode[]>([])
-const graphLinks = ref<GraphLink[]>([])
+// Preview graph data (always stays as the small preview)
+const previewNodes = ref<GraphNode[]>([])
+const previewLinks = ref<GraphLink[]>([])
+
+// Detail modal graph data (full graph, only shown in the modal)
+const detailNodes = ref<GraphNode[]>([])
+const detailLinks = ref<GraphLink[]>([])
+const detailStats = ref<GraphStats | null>(null)
+
 const showGraphDetail = ref(false)
 let detailDataLoaded = false                // avoid duplicate fetch for detail modal
 
@@ -570,6 +567,19 @@ function closeFileDetail() {
   previewUrl.value = ''
   officePreviewSrc.value = ''
   previewLoading.value = false
+  // Re-render graph chart after the graph section becomes visible again.
+  // The v-if toggling destroys the DOM element, so we must dispose the old
+  // chartInstance and re-create it on the new graphRef element.
+  nextTick(() => {
+    if (previewNodes.value.length) {
+      // Dispose old instance that was bound to the now-destroyed DOM
+      if (chartInstance) {
+        chartInstance.dispose()
+        chartInstance = null
+      }
+      renderGraph({ nodes: previewNodes.value, links: previewLinks.value })
+    }
+  })
 }
 
 function openPreviewNewTab() {
@@ -661,8 +671,8 @@ async function loadGraph(maxNodes?: number) {
     const memgraphData = await fetchKnowledgeGraph(undefined, kbName.value, maxNodes)
     if (memgraphData && memgraphData.nodes && memgraphData.nodes.length > 0) {
       graphStats.value = memgraphData.stats
-      graphNodes.value = memgraphData.nodes
-      graphLinks.value = memgraphData.links
+      previewNodes.value = memgraphData.nodes
+      previewLinks.value = memgraphData.links
       await nextTick()
       renderGraph(memgraphData)
       graphLoading.value = false
@@ -676,8 +686,8 @@ async function loadGraph(maxNodes?: number) {
   try {
     const data = await fetchFolderKBGraph(kbName.value)
     graphStats.value = data.stats
-    graphNodes.value = data.nodes
-    graphLinks.value = data.links
+    previewNodes.value = data.nodes
+    previewLinks.value = data.links
     await nextTick()
     renderGraph(data)
   } catch {
@@ -687,67 +697,37 @@ async function loadGraph(maxNodes?: number) {
   }
 }
 
-/** Load the full graph and re-render */
-async function loadFullGraph() {
-  if (fullGraphLoaded.value) return
-  fullGraphLoading.value = true
-  try {
-    const memgraphData = await fetchKnowledgeGraph(undefined, kbName.value, 5000, true)  // full=true
-    if (memgraphData && memgraphData.nodes && memgraphData.nodes.length > 0) {
-      graphNodes.value = memgraphData.nodes
-      graphLinks.value = memgraphData.links
-      if (memgraphData.stats) graphStats.value = memgraphData.stats
-      await nextTick()
-      renderGraph(memgraphData)
-      fullGraphLoaded.value = true
-      return
-    }
-  } catch {
-    // fall through
-  }
-  try {
-    const data = await fetchFolderKBGraph(kbName.value)
-    graphNodes.value = data.nodes
-    graphLinks.value = data.links
-    await nextTick()
-    renderGraph(data)
-    fullGraphLoaded.value = true
-  } catch {
-    // ignore
-  } finally {
-    fullGraphLoading.value = false
-  }
-}
-
-/** Click on graph card area -> load full graph */
-function onGraphAreaClick(e: MouseEvent) {
-  const target = e.target as HTMLElement
-  if (target.tagName === 'CANVAS' || target.closest('.graph-chart')) {
-    if (!fullGraphLoaded.value && !fullGraphLoading.value) {
-      loadFullGraph()
-    }
-  }
-}
-
-/** Open the detail modal - load full data if not yet */
+/** Open the detail modal - load full graph data for the modal only */
 async function openGraphDetail() {
+  // Always start with preview data in the modal (quick display)
+  detailNodes.value = previewNodes.value
+  detailLinks.value = previewLinks.value
+  detailStats.value = graphStats.value
   showGraphDetail.value = true
+
+  // Then load full data if not yet fetched
   if (!detailDataLoaded) {
     try {
-      const data = await fetchKnowledgeGraph(undefined, kbName.value, 5000, true)  // full=true
+      const data = await fetchKnowledgeGraph(undefined, kbName.value, 5000, true)
       if (data && data.nodes && data.nodes.length > 0) {
-        graphNodes.value = data.nodes
-        graphLinks.value = data.links
+        detailNodes.value = data.nodes
+        detailLinks.value = data.links
+        detailStats.value = data.stats || graphStats.value
         if (data.stats) graphStats.value = data.stats
         detailDataLoaded = true
-        if (!fullGraphLoaded.value) {
-          await nextTick()
-          renderGraph(data)
-          fullGraphLoaded.value = true
-        }
+        return
       }
     } catch {
-      // fallback: reuse existing partial data
+      // fall through to synthetic graph
+    }
+    try {
+      const data = await fetchFolderKBGraph(kbName.value)
+      detailNodes.value = data.nodes
+      detailLinks.value = data.links
+      detailStats.value = data.stats || graphStats.value
+      detailDataLoaded = true
+    } catch {
+      // keep preview data as fallback
     }
   }
 }
@@ -840,9 +820,9 @@ watch(kbName, () => {
   if (kbName.value) {
     loading.value = true
     selectedFile.value = null
-    fullGraphLoaded.value = false
     detailDataLoaded = false
-    Promise.all([loadFiles(), loadTags(), loadGraph(GRAPH_PREVIEW_MAX_NODES)]).finally(() => { loading.value = false })
+    Promise.all([loadFiles(), loadTags(), loadGraph(GRAPH_PREVIEW_MAX_NODES)])
+      .finally(() => { loading.value = false })
   }
 })
 </script>

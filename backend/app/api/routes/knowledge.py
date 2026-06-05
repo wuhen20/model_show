@@ -379,9 +379,6 @@ async def get_knowledge_list(
 ):
     """Knowledge list — if *workspace* is given, data comes from LightRAG;
     otherwise falls back to the static parsed_data.json."""
-    if settings.fake_mode:
-        return {"code": 0, "data": fake_data.get_fake_response("/folder/list", page=page, page_size=page_size)}
-
     if workspace:
         try:
             lr_data = await lightrag_service.get_documents_paginated(
@@ -464,9 +461,6 @@ async def get_knowledge_list(
 
 @router.get("/detail/{item_id}", response_model=dict)
 def get_knowledge_detail(item_id: str):
-    if settings.fake_mode:
-        return {"code": 0, "data": fake_data.get_fake_response("/detail/{id}", item_id=item_id)}
-
     for item in _all_items:
         if item['id'] == item_id:
             detail = {**item}

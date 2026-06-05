@@ -70,7 +70,7 @@ onMounted(async () => {
       totalCount.value = data.total_count
       totalSize.value = data.total_size
     }
-  } catch {}
+  } catch (e) { console.warn('[KnowledgeCharts] asset-stats failed:', e) }
 
   if (chartRef.value) {
     chartInstance = echarts.init(chartRef.value)

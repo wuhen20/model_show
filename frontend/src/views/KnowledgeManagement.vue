@@ -142,21 +142,7 @@
               </div>
             </el-tab-pane>
 
-            <!-- Tab 3: 知识能力工具 -->
-            <el-tab-pane name="tools">
-              <template #label>
-                <span class="tab-label">
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin-right:5px">
-                    <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/>
-                  </svg>
-                  知识能力工具
-                </span>
-              </template>
-
-              <div class="tab-content">
-                <KnowledgeTools />
-              </div>
-            </el-tab-pane>
+            <!-- Tab 3: 知识能力工具 — 已隐藏 -->
           </el-tabs>
         </div>
       </main>
@@ -174,7 +160,6 @@ import KnowledgeSource from '@/components/KnowledgeSource.vue'
 import KnowledgeTrend from '@/components/KnowledgeTrend.vue'
 import KnowledgeTable from '@/components/KnowledgeTable.vue'
 import KnowledgeGraph from '@/components/KnowledgeGraph.vue'
-import KnowledgeTools from '@/components/KnowledgeTools.vue'
 import { fetchKnowledgeStats, type KnowledgeStats } from '@/api/knowledge'
 import { fetchFolderKBs, type FolderKBResponse } from '@/api/knowledge'
 
@@ -199,7 +184,6 @@ watch(() => route.query.workspace, (val) => {
 // Switch to management tab when a query param is present
 watch(() => route.query.tab, (val) => {
   if (val === 'management') activeTab.value = 'management'
-  else if (val === 'tools') activeTab.value = 'tools'
   else if (val === 'home') activeTab.value = 'home'
 }, { immediate: true })
 
@@ -226,7 +210,8 @@ onMounted(async () => {
   try {
     const statsData = await fetchKnowledgeStats()
     stats.value = statsData
-  } catch {
+  } catch (e) {
+    console.warn('[KnowledgeManagement] fetchKnowledgeStats failed:', e)
     stats.value = {
       total_count: 3300, structured_count: 425, unstructured_count: 2875,
       graph_entities: 0, business_domains: 5, completeness: 92.5, availability: 95.8
