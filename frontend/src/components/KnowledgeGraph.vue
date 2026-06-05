@@ -102,7 +102,7 @@ const graphStats = reactive({
 })
 
 // Overview (partial) vs full graph
-const PREVIEW_MAX_NODES = 30
+const PREVIEW_MAX_NODES = 100
 const overviewLoading = ref(false)
 const fullGraphLoading = ref(false)
 const fullGraphLoaded = ref(false)         // whether full graph has been loaded into the inline chart
