@@ -13,11 +13,11 @@
       <!-- Stats bar -->
       <div class="stats-bar">
         <div class="stat-chip">
-          <span class="stat-val">{{ nodes.length }}</span>
+          <span class="stat-val">{{ stats?.entity_count ?? nodes.length }}</span>
           <span class="stat-lbl">节点</span>
         </div>
         <div class="stat-chip">
-          <span class="stat-val">{{ links.length }}</span>
+          <span class="stat-val">{{ stats?.relation_count ?? links.length }}</span>
           <span class="stat-lbl">边</span>
         </div>
         <div class="stats-spacer"></div>
@@ -29,7 +29,15 @@
       </div>
 
       <!-- Full-size ECharts graph -->
-      <div ref="chartRef" class="detail-graph-chart"></div>
+      <div class="detail-chart-wrapper">
+        <div v-if="chartLoading" class="detail-loading">
+          <div class="detail-loading-spinner">
+            <div class="spinner-ring"></div>
+            <span class="spinner-text">渲染图谱中...</span>
+          </div>
+        </div>
+        <div ref="chartRef" class="detail-graph-chart"></div>
+      </div>
     </div>
   </el-dialog>
 </template>
@@ -37,13 +45,14 @@
 <script setup lang="ts">
 import { ref, computed, watch, nextTick, onBeforeUnmount } from 'vue'
 import * as echarts from 'echarts'
-import type { GraphNode, GraphLink } from '@/api/knowledge'
+import type { GraphNode, GraphLink, GraphStats } from '@/api/knowledge'
 
 const props = defineProps<{
   modelValue: boolean
   title: string
   nodes: GraphNode[]
   links: GraphLink[]
+  stats?: GraphStats | null
 }>()
 
 const emit = defineEmits<{
@@ -56,6 +65,7 @@ const visible = computed({
 })
 
 const chartRef = ref<HTMLElement | null>(null)
+const chartLoading = ref(false)
 let chartInstance: echarts.ECharts | null = null
 
 function initDetailChart() {
@@ -67,6 +77,7 @@ function initDetailChart() {
     chartInstance.dispose()
   }
 
+  chartLoading.value = true
   chartInstance = echarts.init(el, 'dark')
 
   const categories = [
@@ -165,6 +176,11 @@ function initDetailChart() {
       },
     }],
   }, true)
+
+  // Mark loading done after a short delay to let ECharts finish rendering
+  setTimeout(() => {
+    chartLoading.value = false
+  }, 300)
 }
 
 function handleResize() {
@@ -285,9 +301,54 @@ onBeforeUnmount(() => {
 }
 
 /* ── Graph ── */
-.detail-graph-chart {
+.detail-chart-wrapper {
+  position: relative;
   height: calc(80vh - 100px);
   min-height: 500px;
+}
+
+.detail-loading {
+  position: absolute;
+  inset: 0;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(17,24,39,0.8);
+  border: 1px solid rgba(0,212,255,0.12);
+  border-radius: 10px;
+  backdrop-filter: blur(2px);
+  animation: detailFadeIn 0.2s ease;
+}
+
+@keyframes detailFadeIn { from { opacity: 0; } to { opacity: 1; } }
+
+.detail-loading-spinner {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+}
+
+.spinner-ring {
+  width: 40px;
+  height: 40px;
+  border: 3px solid rgba(0,212,255,0.15);
+  border-top-color: #00d4ff;
+  border-radius: 50%;
+  animation: detailSpin 0.8s linear infinite;
+}
+
+@keyframes detailSpin { to { transform: rotate(360deg); } }
+
+.spinner-text {
+  font-size: 13px;
+  color: rgba(255,255,255,0.7);
+  letter-spacing: 0.5px;
+}
+
+.detail-graph-chart {
+  height: 100%;
   width: 100%;
   border: 1px solid rgba(0,212,255,0.12);
   border-radius: 10px;

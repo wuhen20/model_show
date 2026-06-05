@@ -191,11 +191,12 @@ export interface KnowledgeGraph {
   stats: GraphStats
 }
 
-export function fetchKnowledgeGraph(workspace?: string, kbName?: string, maxNodes?: number): Promise<KnowledgeGraph> {
+export function fetchKnowledgeGraph(workspace?: string, kbName?: string, maxNodes?: number, full?: boolean): Promise<KnowledgeGraph> {
   const params = new URLSearchParams()
   if (workspace) params.set('workspace', workspace)
   if (kbName) params.set('kb_name', kbName)
   if (maxNodes) params.set('max_nodes', String(maxNodes))
+  if (full) params.set('full', 'true')
   const qs = params.toString()
   return request(`${API_BASE}/graph${qs ? '?' + qs : ''}`)
 }
@@ -486,6 +487,16 @@ export function importFolderKB(kbName: string, data: ImportFolderKBRequest): Pro
     method: 'POST',
     body: JSON.stringify(data),
   })
+}
+
+/** Build a file preview URL for a folder KB file.
+ *  Returns a URL that can be used as <iframe src> or <a href>.
+ *  Note: relativePath segments are individually encoded but '/' separators are preserved
+ *  so FastAPI's {file_path:path} parameter can match correctly.
+ */
+export function getFolderFilePreviewUrl(kbName: string, relativePath: string): string {
+  const encodedPath = relativePath.split('/').map(s => encodeURIComponent(s)).join('/')
+  return `${FOLDER_API_BASE}/bases/${encodeURIComponent(kbName)}/preview/${encodedPath}`
 }
 
 // ===========================================================================

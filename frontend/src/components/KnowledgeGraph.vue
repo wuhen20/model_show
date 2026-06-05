@@ -5,7 +5,7 @@
         <template v-if="categoryId">{{ categoryId }} · </template>知识图谱
       </div>
       <div class="graph-title-actions">
-        <el-button text size="small" class="graph-detail-btn" @click="showDetail = true">
+        <el-button text size="small" class="graph-detail-btn" @click="openFullGraph">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin-right:3px">
             <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
             <circle cx="12" cy="12" r="3"/>
@@ -21,8 +21,17 @@
       </div>
     </div>
 
-    <div class="graph-body">
-      <div ref="chartRef" class="graph-chart"></div>
+    <div class="graph-body" @click="onGraphAreaClick">
+      <!-- Loading overlay for full graph -->
+      <div v-if="fullGraphLoading" class="graph-loading-overlay">
+        <div class="graph-loading-spinner">
+          <div class="spinner-ring"></div>
+          <span class="spinner-text">加载完整图谱中...</span>
+        </div>
+      </div>
+
+      <div ref="chartRef" class="graph-chart" v-loading="overviewLoading" element-loading-text="加载图谱..."
+        element-loading-background="rgba(17,24,39,0.8)"></div>
       <div class="graph-sidebar">
         <div class="stat-block">
           <div class="stat-num">{{ formatNum(graphStats.entityCount) }}</div>
@@ -61,6 +70,7 @@
       :title="detailTitle"
       :nodes="detailNodes"
       :links="detailLinks"
+      :stats="detailStats"
     />
   </div>
 </template>
@@ -69,7 +79,7 @@
 import { ref, reactive, computed, onMounted, onBeforeUnmount, watch } from 'vue'
 import * as echarts from 'echarts'
 import { fetchKnowledgeGraph } from '@/api/knowledge'
-import type { GraphNode, GraphLink } from '@/api/knowledge'
+import type { GraphNode, GraphLink, GraphStats } from '@/api/knowledge'
 import GraphDetailModal from '@/components/GraphDetailModal.vue'
 
 const chartRef = ref<HTMLElement | null>(null)
@@ -91,11 +101,21 @@ const graphStats = reactive({
   renderedNodes: 0, renderedLinks: 0,  // actually rendered in chart
 })
 
+// Overview (partial) vs full graph
+const PREVIEW_MAX_NODES = 30
+const overviewLoading = ref(false)
+const fullGraphLoading = ref(false)
+const fullGraphLoaded = ref(false)         // whether full graph has been loaded into the inline chart
+
 // Store full graph data for the detail modal
 const graphNodes = ref<GraphNode[]>([])
 const graphLinks = ref<GraphLink[]>([])
+// Preview data — saved when partial graph loads, used to restore inline chart after modal closes
+const previewNodes = ref<GraphNode[]>([])
+const previewLinks = ref<GraphLink[]>([])
 const detailNodes = ref<GraphNode[]>([])   // full data for detail modal
 const detailLinks = ref<GraphLink[]>([])
+const detailStats = ref<GraphStats | null>(null)  // real stats (may exceed nodes.length in demo mode)
 const showDetail = ref(false)
 let detailLoaded = false                    // avoid duplicate fetch
 
@@ -215,12 +235,15 @@ function initChart(nodes: GraphNode[], links: GraphLink[]) {
   chartInstance.setOption(option)
 }
 
-async function loadGraph() {
+/** Load partial (preview) graph — only a few nodes for the overview card */
+async function loadPartialGraph() {
+  overviewLoading.value = true
   try {
-    // Query Memgraph via backend API — pass kbName for per-KB filter
+    // Query Memgraph via backend API — pass kbName for per-KB filter, limit nodes
     const data = await fetchKnowledgeGraph(
       props.workspace || undefined,
       props.kbName || props.categoryId || undefined,
+      PREVIEW_MAX_NODES,
     )
     if (data && data.nodes && data.nodes.length > 0) {
       const s = data.stats
@@ -233,6 +256,8 @@ async function loadGraph() {
       graphStats.renderedLinks = data.links.length
       graphNodes.value = data.nodes
       graphLinks.value = data.links
+      previewNodes.value = data.nodes    // save preview for restoring after modal close
+      previewLinks.value = data.links
       initChart(data.nodes, data.links)
       return
     }
@@ -244,6 +269,8 @@ async function loadGraph() {
   const fb = buildFallbackData()
   graphNodes.value = fb.nodes
   graphLinks.value = fb.links
+  previewNodes.value = fb.nodes
+  previewLinks.value = fb.links
   initChart(fb.nodes, fb.links)
   // Use real stats from backend only if available, otherwise show 0
   graphStats.entityCount = 0
@@ -251,41 +278,124 @@ async function loadGraph() {
   graphStats.coverage = 0
   graphStats.renderedNodes = 0
   graphStats.renderedLinks = 0
+  overviewLoading.value = false
+}
+
+/** Load the full graph (all nodes) and re-render the inline chart */
+async function loadFullGraph() {
+  if (fullGraphLoaded.value) return   // already loaded
+  fullGraphLoading.value = true
+  try {
+    const data = await fetchKnowledgeGraph(
+      props.workspace || undefined,
+      props.kbName || props.categoryId || undefined,
+      5000,
+      true,  // full=true: return all nodes without per-KB cap
+    )
+    if (data && data.nodes && data.nodes.length > 0) {
+      graphNodes.value = data.nodes
+      graphLinks.value = data.links
+      // Update stats to match actual returned data (full=true returns deduped counts)
+      if (data.stats) {
+        graphStats.entityCount = data.stats.entity_count
+        graphStats.relationCount = data.stats.relation_count
+        graphStats.coverage = data.stats.coverage
+      }
+      graphStats.renderedNodes = data.nodes.length
+      graphStats.renderedLinks = data.links.length
+      initChart(data.nodes, data.links)
+      fullGraphLoaded.value = true
+    }
+  } catch (e) {
+    console.warn('[KnowledgeGraph] Failed to load full graph:', e)
+  } finally {
+    fullGraphLoading.value = false
+  }
+}
+
+/** Click on graph area (not on a node) → load full graph */
+function onGraphAreaClick(e: MouseEvent) {
+  // If click is on a node (draggable), let ECharts handle it; only load full on empty-area click
+  const target = e.target as HTMLElement
+  if (target.tagName === 'CANVAS' || target.closest('.graph-chart')) {
+    if (!fullGraphLoaded.value && !fullGraphLoading.value) {
+      loadFullGraph()
+    }
+  }
+}
+
+/** Open the detail modal, loading full data if needed */
+function openFullGraph() {
+  showDetail.value = true
 }
 
 onMounted(async () => {
-  await loadGraph()
+  await loadPartialGraph()
+  overviewLoading.value = false
   window.addEventListener('resize', handleResize)
 })
 
 watch(() => props.workspace, () => {
-  loadGraph()
+  fullGraphLoaded.value = false
   detailLoaded = false
+  loadPartialGraph()
 })
 
-// When detail modal opens, load full graph if not already loaded
+watch(() => props.categoryId, () => {
+  fullGraphLoaded.value = false
+  detailLoaded = false
+  loadPartialGraph()
+})
+
+// When detail modal opens, load full graph data if not already loaded
 watch(showDetail, async (val) => {
   if (val && !detailLoaded) {
     try {
-      // Request full data (max_nodes=5000) for detail view
+      // Request full data for detail view (full=true lifts per-KB cap)
       const data = await fetchKnowledgeGraph(
         props.workspace || undefined,
         props.kbName || props.categoryId || undefined,
         5000,
+        true,
       )
       if (data && data.nodes && data.nodes.length > 0) {
         detailNodes.value = data.nodes
         detailLinks.value = data.links
+        detailStats.value = data.stats || null
         detailLoaded = true
+        // Also update the inline chart with full data so user sees the full graph
+        if (!fullGraphLoaded.value) {
+          graphNodes.value = data.nodes
+          graphLinks.value = data.links
+          if (data.stats) {
+            graphStats.entityCount = data.stats.entity_count
+            graphStats.relationCount = data.stats.relation_count
+            graphStats.coverage = data.stats.coverage
+          }
+          graphStats.renderedNodes = data.nodes.length
+          graphStats.renderedLinks = data.links.length
+          initChart(data.nodes, data.links)
+          fullGraphLoaded.value = true
+        }
       }
     } catch (e) {
       // Fallback: use same data as overview
       detailNodes.value = graphNodes.value
       detailLinks.value = graphLinks.value
+      detailStats.value = { entity_count: graphStats.entityCount, relation_count: graphStats.relationCount, coverage: graphStats.coverage }
     }
   } else if (val) {
     detailNodes.value = graphNodes.value
     detailLinks.value = graphLinks.value
+    detailStats.value = { entity_count: graphStats.entityCount, relation_count: graphStats.relationCount, coverage: graphStats.coverage }
+  } else if (!val && previewNodes.value.length) {
+    // Modal closed — restore the inline chart to the preview (partial) graph
+    graphNodes.value = previewNodes.value
+    graphLinks.value = previewLinks.value
+    graphStats.renderedNodes = previewNodes.value.length
+    graphStats.renderedLinks = previewLinks.value.length
+    fullGraphLoaded.value = false
+    initChart(previewNodes.value, previewLinks.value)
   }
 })
 
@@ -354,6 +464,52 @@ const handleResize = () => { if (chartInstance) chartInstance.resize() }
 .graph-body {
   display: flex;
   gap: 12px;
+  position: relative;
+}
+
+/* Loading overlay for full graph */
+.graph-loading-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(17, 24, 39, 0.75);
+  border-radius: 0;
+  backdrop-filter: blur(2px);
+  animation: fadeIn 0.2s ease;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.graph-loading-spinner {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+}
+
+.spinner-ring {
+  width: 36px;
+  height: 36px;
+  border: 3px solid rgba(0, 212, 255, 0.15);
+  border-top-color: #00d4ff;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+.spinner-text {
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.7);
+  letter-spacing: 0.5px;
 }
 
 .graph-chart {

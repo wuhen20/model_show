@@ -119,7 +119,7 @@
                       <p class="sub-cat-desc">文件夹知识库 · 目录结构自动解析</p>
                       <div class="sub-cat-tags">
                         <template v-for="(tag, idx) in (fkb.top_tags || []).slice(0, 6)" :key="idx">
-                          <span class="sub-tag folder-tag">{{ tag }}</span>
+                          <span class="sub-tag depth-tag-1">{{ tag }}</span>
                         </template>
                         <span class="sub-overflow" v-if="(fkb.top_tags || []).length > 6">+{{ (fkb.top_tags || []).length - 6 }}</span>
                       </div>
@@ -647,9 +647,22 @@ function navigateToFolderKB(kb: FolderKBResponse) {
   letter-spacing: 0.5px;
 }
 
-.folder-tag {
-  background: rgba(255, 170, 0, 0.12) !important;
-  color: #ffaa00 !important;
+/* Depth-colored tags — consistent with FolderKBDetail tag system */
+.depth-tag-1 {
+  background: rgba(0, 212, 255, 0.1);
+  color: #00d4ff;
+}
+.depth-tag-2 {
+  background: rgba(0, 255, 136, 0.08);
+  color: #00ff88;
+}
+.depth-tag-3 {
+  background: rgba(192, 132, 252, 0.08);
+  color: #c084fc;
+}
+.depth-tag-4 {
+  background: rgba(255, 170, 0, 0.08);
+  color: #ffaa00;
 }
 
 .empty-management {

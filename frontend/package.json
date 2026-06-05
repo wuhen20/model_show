@@ -1,17 +1,25 @@
 {
   "name": "model-show",
-  "version": "1.0.0",
-  "description": "模型能力展示与体验工作台",
+  "version": "1.1.0",
+  "private": true,
+  "description": "人工智能平台 · 知识图谱与知识库管理系统",
+  "author": "人工智能分部 · 模型微调组",
   "scripts": {
     "dev": "vite",
-    "build": "vue-tsc && vite build",
-    "preview": "vite preview"
+    "build": "vite build",
+    "preview": "vite preview",
+    "type-check": "vue-tsc --noEmit"
   },
   "dependencies": {
-    "echarts": "^5.5.0",
-    "element-plus": "^2.9.7",
     "vue": "^3.4.21",
-    "vue-router": "^4.3.0"
+    "vue-router": "^4.3.0",
+    "element-plus": "^2.9.7",
+    "echarts": "^5.5.0",
+    "@vue-office/docx": "^1.6.3",
+    "@vue-office/excel": "^1.7.14",
+    "@vue-office/pdf": "^2.0.10",
+    "@vue-office/pptx": "^1.0.1",
+    "vue-demi": "^0.14.6"
   },
   "devDependencies": {
     "@types/node": "^20.11.0",

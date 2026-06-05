@@ -36,7 +36,8 @@ interface SourceItem {
 
 const defaultData: SourceItem[] = [
   { name: '标准规范体系', value: 22.8, count: 751, color: '#00d4ff', description: '国标/行标/企标/检定规程等规范性文件' },
-  { name: '作业指导体系', value: 18.8, count: 621, color: '#00ff88', description: '作业指导书/操作手册/技术方案等操作类文件' },
+  { name: '作业指导体系', value: 16.0, count: 527, color: '#00ff88', description: '作业指导书/操作手册/技术方案等操作类文件' },
+  { name: '政策文档体系', value: 2.8, count: 94, color: '#6366f1', description: '法律/法规/条例等政策性文件' },
   { name: '培训考试体系', value: 1.4, count: 45, color: '#a855f7', description: '培训资料/试题库等培训类文件' },
   { name: '管理制度体系', value: 4.5, count: 149, color: '#ffaa00', description: '管理办法/管理规定等制度类文件' },
   { name: '技术文档体系', value: 52.5, count: 1734, color: '#ff5555', description: '通用技术文档/参考资料' },
