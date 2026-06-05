@@ -1,6 +1,10 @@
 """Folder-based Knowledge Base API — scan filesystem folders as knowledge bases."""
 
+import mimetypes
+import os
+
 from fastapi import APIRouter, Query, HTTPException
+from fastapi.responses import Response
 
 from app.services import folder_kb_service
 from app.schemas.folder_kb import ImportFolderKBRequest
@@ -40,14 +44,14 @@ async def get_folder_kb_asset_stats():
 # ---------------------------------------------------------------------------
 # Cross-KB file list (replaces old /api/knowledge/list for folder-based KBs)
 # ---------------------------------------------------------------------------
-# Knowledge source distribution (5 major categories from filesystem)
+# Knowledge source distribution (6 major categories from filesystem)
 # ---------------------------------------------------------------------------
 
 @router.get("/source-distribution", response_model=dict)
 async def get_folder_kb_source_distribution():
-    """Knowledge source distribution grouped into 5 major categories.
+    """Knowledge source distribution grouped into 6 major categories.
 
-    Categories: 标准规范体系, 作业指导体系, 培训考试体系, 管理制度体系, 技术文档体系
+    Categories: 标准规范体系, 作业指导体系, 政策文档体系, 培训考试体系, 管理制度体系, 技术文档体系
     """
     data = folder_kb_service.scan_kb_source_distribution()
     return {"code": 0, "data": data}
@@ -69,7 +73,7 @@ async def list_all_kb_files(
       - latest:  most recently modified
       - popular: highest score (standard docs rank higher)
       - valuable: only high-value standard documents (score >= 5)
-      - pending:  recently added files (modified in last 7 days)
+      - pending:  recently added files (modified in last 3 days)
     """
     try:
         result = folder_kb_service.scan_all_kb_files(
@@ -248,3 +252,96 @@ async def import_folder_kb(kb_name: str, body: ImportFolderKBRequest):
             "imported_tags": len(all_tags),
         },
     }
+
+
+# ---------------------------------------------------------------------------
+# File preview — return raw file content for in-browser preview
+# ---------------------------------------------------------------------------
+
+# Max file size to serve for preview (20 MB)
+_PREVIEW_MAX_SIZE = 20 * 1024 * 1024
+
+# Extensions that browsers can render natively
+_BROWSER_VIEWABLE_EXTENSIONS = {
+    ".pdf", ".txt", ".md", ".csv", ".json", ".xml", ".html", ".htm", ".log", ".rtf",
+    ".jpg", ".jpeg", ".png", ".gif", ".bmp", ".svg", ".webp",
+    ".mp4", ".webm", ".mp3", ".wav",
+}
+
+# MIME type mapping for common office formats (browsers can't render these natively,
+# but we serve them so the browser can trigger download or use a plugin)
+_MIME_OVERRIDES = {
+    ".pdf": "application/pdf",
+    ".doc": "application/msword",
+    ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    ".xls": "application/vnd.ms-excel",
+    ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    ".ppt": "application/vnd.ms-powerpoint",
+    ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    ".md": "text/markdown",
+    ".csv": "text/csv",
+    ".json": "application/json",
+    ".xml": "text/xml",
+    ".html": "text/html",
+    ".htm": "text/html",
+    ".txt": "text/plain",
+    ".log": "text/plain",
+    ".rtf": "application/rtf",
+}
+
+
+@router.get("/bases/{kb_name:path}/preview/{file_path:path}")
+async def preview_folder_file(kb_name: str, file_path: str):
+    """Return raw file content for browser preview.
+
+    Supports text-based files (rendered inline) and binary files
+    (PDF shown via browser plugin, Office docs trigger download).
+    File size is capped at 20 MB.
+    """
+    try:
+        folder_kb_service._validate_kb_name(kb_name)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    content = folder_kb_service.read_folder_file(kb_name, file_path)
+    if content is None:
+        raise HTTPException(status_code=404, detail="文件不存在或无法读取")
+
+    if len(content) > _PREVIEW_MAX_SIZE:
+        raise HTTPException(status_code=413, detail="文件过大，无法预览（最大 20MB）")
+
+    # Determine MIME type
+    _, ext = os.path.splitext(file_path)
+    ext_lower = ext.lower()
+    mime_type = _MIME_OVERRIDES.get(ext_lower) or mimetypes.guess_type(file_path)[0] or "application/octet-stream"
+
+    # For text-based formats, ensure charset is set
+    if mime_type.startswith("text/") or mime_type in ("application/json", "text/xml", "text/markdown"):
+        try:
+            text = content.decode("utf-8")
+            content = text.encode("utf-8")
+        except UnicodeDecodeError:
+            try:
+                text = content.decode("gbk")
+                content = text.encode("utf-8")
+            except UnicodeDecodeError:
+                pass
+        mime_type = f"{mime_type}; charset=utf-8"
+
+    # For PDFs, set Content-Disposition to inline so browser renders it
+    disposition = "inline" if ext_lower == ".pdf" else "attachment"
+
+    filename = os.path.basename(file_path)
+    # RFC 5987: encode non-ASCII filenames so HTTP headers remain latin-1 safe
+    try:
+        filename.encode("latin-1")
+        cd_filename = f'filename="{filename}"'
+    except UnicodeEncodeError:
+        from urllib.parse import quote
+        encoded_name = quote(filename)
+        cd_filename = f"filename*=UTF-8''{encoded_name}"
+    headers = {
+        "Content-Disposition": f"{disposition}; {cd_filename}",
+    }
+
+    return Response(content=content, media_type=mime_type, headers=headers)

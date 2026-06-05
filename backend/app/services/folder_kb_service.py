@@ -331,7 +331,7 @@ def scan_all_kb_files(
       - latest:  sorted by modified_time descending (most recent first)
       - popular: sorted by file_size descending (larger = more content = popular proxy)
       - valuable: files with recognized standard prefixes (JJG, GB, DLT, Q/GDW, etc.)
-      - pending:  files modified in the last 7 days (recently added, awaiting review)
+      - pending:  files modified in the last 3 days (recently added, awaiting review)
 
     Returns the same shape as the old /api/knowledge/list endpoint for compatibility.
     """
@@ -372,7 +372,7 @@ def scan_all_kb_files(
 
                         # Status: recently modified files = pending, rest = published
                         now_ts = datetime.now().timestamp()
-                        status = "待审核" if (now_ts - mtime) < 7 * 86400 else "已发布"
+                        status = "待审核" if (now_ts - mtime) < 3 * 86400 else "已发布"
 
                         all_items.append({
                             "id": _file_id(rel_path_fwd),
@@ -466,23 +466,29 @@ def _infer_knowledge_type(filename: str) -> str:
 
 
 def _infer_source_type(filename: str) -> str:
-    """Infer knowledge source from filename patterns."""
+    """Infer knowledge source from filename patterns.
+
+    Returns one of the 6 major source category names:
+      标准规范体系, 作业指导体系, 政策文档体系, 培训考试体系, 管理制度体系, 技术文档体系
+    """
     upper = filename.upper()
-    if any(k in upper for k in ['JJG', 'JJF']):
-        return '国家计量规程'
-    if any(k in upper for k in ['GB', 'GBT']):
-        return '国家标准'
-    if any(k in upper for k in ['DLT', 'DL/', 'DL/T']):
-        return '电力行业标准'
-    if any(k in upper for k in ['Q/GDW', 'QGDW']):
-        return '国家电网企业标准'
+    # 标准规范体系
+    if any(k in upper for k in ['JJG', 'JJF', 'GB', 'GBT', 'DLT', 'DL/', 'DL/T',
+                                 'Q/GDW', 'QGDW', 'NBT', 'JGT', 'TCEC']):
+        return '标准规范体系'
+    # 政策文档体系
     if '条例' in filename or '法' in filename:
-        return '国家法律法规'
-    if '指导书' in filename:
-        return '内部文档'
-    if '试题' in filename or '题库' in filename:
-        return '培训资料'
-    return '内部文档'
+        return '政策文档体系'
+    # 作业指导体系
+    if '指导书' in filename or '手册' in filename:
+        return '作业指导体系'
+    # 培训考试体系
+    if '试题' in filename or '题库' in filename or '宣贯' in filename or '培训' in filename:
+        return '培训考试体系'
+    # 管理制度体系
+    if '管理办法' in filename or '管理规定' in filename or '管理制' in filename:
+        return '管理制度体系'
+    return '技术文档体系'
 
 
 def scan_kb_tags(kb_name: str) -> list[dict]:
@@ -912,7 +918,7 @@ def _empty_asset_stats() -> dict:
 
 # ── Knowledge source distribution ────────────────────────────────────────
 
-# Mapping from fine-grained knowledge_type to 5 major source categories
+# Mapping from fine-grained knowledge_type to 6 major source categories
 _SOURCE_GROUPS: list[dict] = [
     {
         "name": "标准规范体系",
@@ -923,9 +929,15 @@ _SOURCE_GROUPS: list[dict] = [
     },
     {
         "name": "作业指导体系",
-        "types": ["作业指导书", "操作手册", "技术方案", "法律法规"],
+        "types": ["作业指导书", "操作手册", "技术方案"],
         "color": "#00ff88",
         "description": "作业指导书/操作手册/技术方案等操作类文件",
+    },
+    {
+        "name": "政策文档体系",
+        "types": ["法律法规"],
+        "color": "#6366f1",
+        "description": "法律/法规/条例等政策性文件",
     },
     {
         "name": "培训考试体系",

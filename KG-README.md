@@ -719,7 +719,7 @@ Tab 过滤逻辑：
 | `latest` | 按修改时间倒序 | 3,300 |
 | `popular` | 按质量评分倒序（标准文献5分 > 指导书4分 > 其他3分） | 3,300 |
 | `valuable` | 仅 score≥5 的标准文献（JJG/GB/DLT/Q-GDW等前缀） | 425 |
-| `pending` | 近7天内修改过的文件（刚入库，待处理） | 206 |
+| `pending` | 近3天内修改过的文件（刚入库，待处理） | 206 |
 
 每条记录包含：`title`、`category_name`（所属KB）、`knowledge_type`（推断类型）、`source`（推断来源）、`score`、`status`、`update_time`。
 
