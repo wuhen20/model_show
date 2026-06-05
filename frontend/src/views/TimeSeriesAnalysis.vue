@@ -6,7 +6,7 @@ import AnalysisView from '@/timeseries/views/AnalysisView.vue'
 
 <template>
   <div class="app-layout">
-    <Header title="评测分析 · 时序模型分析" subtitle="时序预测结果可视化与精度评估（R² / MAPE）" />
+    <Header title="模型能力展示与体验工作台" subtitle="时序模型分析" />
     <div class="main-content">
       <Sidebar />
       <main class="content-area ts-content">

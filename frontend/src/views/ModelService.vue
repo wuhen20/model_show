@@ -13,7 +13,7 @@ const activeFilter = ref('all')
 
 <template>
   <div class="app-layout">
-    <Header title="人工智能分部 · 模型微调组" subtitle="模型服务管理中心" />
+    <Header title="模型能力展示与体验工作台" subtitle="模型服务管理中心" />
     <div class="main-content">
       <Sidebar />
       <main class="content-area">

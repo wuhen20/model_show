@@ -10,7 +10,7 @@ const pageTitle = computed(() => (route.meta.title as string) || '小模型平�
 
 <template>
   <div class="app-shell">
-    <Header :title="pageTitle" subtitle="国家电网 · 小模型展示平台" />
+    <Header title="模型能力展示与体验工作台" :subtitle="pageTitle" />
     <div class="app-body">
       <Sidebar />
       <main class="app-main">

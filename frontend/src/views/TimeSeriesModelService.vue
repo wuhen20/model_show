@@ -6,7 +6,7 @@ import PredictView from '@/timeseries/views/PredictView.vue'
 
 <template>
   <div class="app-layout">
-    <Header title="模型服务 · 时序模型服务" subtitle="基于 Chronos-2 的时序数据预测服务" />
+    <Header title="模型能力展示与体验工作台" subtitle="时序模型服务" />
     <div class="main-content">
       <Sidebar />
       <main class="content-area ts-content">

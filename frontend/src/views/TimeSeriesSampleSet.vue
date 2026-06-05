@@ -12,7 +12,7 @@ const activeTab = ref('upload')
 
 <template>
   <div class="app-layout">
-    <Header title="样本集管理 · 时序样本集管理" subtitle="多维度异构时序数据样本处理" />
+    <Header title="模型能力展示与体验工作台" subtitle="时序样本集管理" />
     <div class="main-content">
       <Sidebar />
       <main class="content-area ts-content">

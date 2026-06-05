@@ -180,7 +180,7 @@ function getLabelColor(label: string): string {
 
 <template>
   <div class="app-layout">
-    <Header title="人工智能分部 · 模型微调组" :subtitle="scene.name" />
+    <Header title="模型能力展示与体验工作台" :subtitle="scene.name" />
     <div class="main-content">
       <Sidebar />
       <main class="content-area">
