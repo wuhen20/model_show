@@ -3,6 +3,7 @@
 import asyncio
 from typing import Any
 
+from app.core.config import settings
 from app.services import db_service, lightrag_service
 
 
@@ -11,6 +12,14 @@ async def sync_to_lightrag(kb_id: str) -> dict:
 
     Returns a dict with sync progress info.
     """
+    if not settings.lightrag_enabled:
+        return {
+            "synced": 0,
+            "failed": 0,
+            "total": 0,
+            "message": "LightRAG 服务未启用，无法同步",
+        }
+
     kb = db_service.get_knowledge_base(kb_id)
     if not kb:
         raise ValueError(f"知识库 {kb_id} 不存在")

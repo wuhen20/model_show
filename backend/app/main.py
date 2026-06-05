@@ -16,13 +16,16 @@ async def lifespan(app: FastAPI):
     print("[Startup] Knowledge metadata DB initialized.")
 
     # Startup: tag Memgraph nodes with kb_name if available
-    try:
-        from app.services.memgraph_service import tag_untagged_nodes
-        count = tag_untagged_nodes()
-        if count > 0:
-            print(f"[Startup] Tagged {count} Memgraph nodes with kb_name.")
-    except Exception as e:
-        print(f"[Startup] Memgraph tagging skipped: {e}")
+    if settings.memgraph_enabled:
+        try:
+            from app.services.memgraph_service import tag_untagged_nodes
+            count = tag_untagged_nodes()
+            if count > 0:
+                print(f"[Startup] Tagged {count} Memgraph nodes with kb_name.")
+        except Exception as e:
+            print(f"[Startup] Memgraph tagging skipped: {e}")
+    else:
+        print("[Startup] Memgraph disabled, skipping node tagging.")
 
     yield
 

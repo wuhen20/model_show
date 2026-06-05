@@ -298,18 +298,20 @@ async def get_knowledge_stats():
     _stats_cache_ts = now
 
     # Kick off a background refresh of graph_entities (non-blocking)
-    async def _refresh_graph_entities():
-        # _stats_cache is a module-level global
-        global _stats_cache
-        try:
-            real_count = await memgraph_service.get_total_entity_count()
-            if real_count > 0 and _stats_cache is not None:
-                _stats_cache["graph_entities"] = real_count
-        except Exception:
-            pass
+    # Only when Memgraph is enabled — otherwise it stays at 0
+    if settings.memgraph_enabled:
+        async def _refresh_graph_entities():
+            # _stats_cache is a module-level global
+            global _stats_cache
+            try:
+                real_count = await memgraph_service.get_total_entity_count()
+                if real_count > 0 and _stats_cache is not None:
+                    _stats_cache["graph_entities"] = real_count
+            except Exception:
+                pass
 
-    import asyncio
-    asyncio.create_task(_refresh_graph_entities())
+        import asyncio
+        asyncio.create_task(_refresh_graph_entities())
 
     return {"code": 0, "data": data}
 
@@ -540,7 +542,8 @@ def get_quality_metrics():
 async def get_knowledge_graph(
     workspace: str | None = None,
     kb_name: str | None = None,
-    max_nodes: int = Query(default=200, ge=10, le=1000),
+    max_nodes: int = Query(default=200, ge=10, le=5000),
+    full: bool = Query(default=False),
 ):
     """Return knowledge graph data from Memgraph.
 
@@ -550,11 +553,15 @@ async def get_knowledge_graph(
     - kb_name: returns graph for that specific folder KB
     - workspace: returns graph for that specific workspace label (legacy)
     - Neither: merges all folder KB graphs into one combined graph
+    - full=True: return all nodes without the per-KB cap (for detail view)
     """
+    # When full=True, use a very large limit so the Cypher query returns everything
+    effective_max = max_nodes if not full else 5000
+
     if kb_name:
         try:
             graph_data = await memgraph_service.get_graph_by_kb_name(
-                kb_name=kb_name, max_nodes=max_nodes
+                kb_name=kb_name, max_nodes=effective_max, full=full
             )
             return {"code": 0, "data": graph_data}
         except Exception as e:
@@ -571,7 +578,7 @@ async def get_knowledge_graph(
     if workspace:
         try:
             graph_data = await memgraph_service.get_graph_data(
-                workspace=workspace, max_nodes=max_nodes
+                workspace=workspace, max_nodes=effective_max, full=full
             )
             return {"code": 0, "data": graph_data}
         except Exception as e:
@@ -587,8 +594,11 @@ async def get_knowledge_graph(
 
     # No workspace or kb_name: merge all folder KB graphs
     try:
+        # When full=True, each KB returns all nodes (no per-KB cap);
+        # otherwise keep the preview cap (min(80, max_nodes // 3))
+        per_ws_limit = 5000 if full else min(80, max_nodes // 3)
         graph_data = await memgraph_service.get_all_workspaces_graph(
-            max_nodes_per_ws=min(80, max_nodes // 3)
+            max_nodes_per_ws=per_ws_limit, full=full
         )
         return {"code": 0, "data": graph_data}
     except Exception as e:
@@ -626,17 +636,13 @@ async def get_knowledge_graph(
 # LightRAG proxy endpoints (kept for backward compatibility)
 # ---------------------------------------------------------------------------
 
-LIGHTRAG_BASE = os.environ.get("LIGHTRAG_BASE_URL", "http://127.0.0.1:9621")
-
 
 @router.get("/lightrag/graph", response_model=dict)
-def get_lightrag_graph():
+async def get_lightrag_graph():
+    """Proxy: fetch popular labels then subgraphs from LightRAG."""
     labels = []
     try:
-        r = httpx.get(
-            f"{LIGHTRAG_BASE}/graph/label/popular", params={"limit": 20}, timeout=15
-        )
-        labels = r.json()
+        labels = await lightrag_service.get_graph_labels()
     except Exception:
         pass
 
@@ -657,12 +663,7 @@ def get_lightrag_graph():
     seed_labels = labels[:15]
     for lbl in seed_labels:
         try:
-            r = httpx.get(
-                f"{LIGHTRAG_BASE}/graphs",
-                params={"label": lbl, "max_depth": 2, "max_nodes": 30},
-                timeout=30,
-            )
-            sub = r.json()
+            sub = await lightrag_service.get_graph(label=lbl, max_depth=2, max_nodes=30)
         except Exception:
             continue
 
@@ -719,20 +720,20 @@ def get_lightrag_graph():
 
 
 @router.get("/lightrag/status", response_model=dict)
-def get_lightrag_status():
+async def get_lightrag_status():
+    """Proxy: fetch document status counts from LightRAG."""
     try:
-        r = httpx.get(f"{LIGHTRAG_BASE}/documents/status_counts", timeout=10)
-        return {"code": 0, "data": r.json()}
+        data = await lightrag_service.get_status_counts()
+        return {"code": 0, "data": data}
     except Exception as e:
         return {"code": -1, "message": str(e)}
 
 
 @router.get("/lightrag/labels", response_model=dict)
-def get_lightrag_labels(limit: int = 50):
+async def get_lightrag_labels(limit: int = 50):
+    """Proxy: fetch popular graph labels from LightRAG."""
     try:
-        r = httpx.get(
-            f"{LIGHTRAG_BASE}/graph/label/popular", params={"limit": limit}, timeout=10
-        )
-        return {"code": 0, "data": r.json()}
+        data = await lightrag_service.get_graph_labels()
+        return {"code": 0, "data": data[:limit]}
     except Exception as e:
         return {"code": -1, "message": str(e)}

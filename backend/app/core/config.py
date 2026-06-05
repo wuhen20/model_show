@@ -12,10 +12,12 @@ class Settings(BaseSettings):
     allowed_image_types: str = "image/jpeg,image/png,image/gif,image/webp,image/bmp"
     upload_dir: str = "uploads"
 
-    # LightRAG
+    # ---- LightRAG ----
+    lightrag_enabled: bool = True
     lightrag_base_url: str = "http://127.0.0.1:9621"
 
-    # Memgraph
+    # ---- Memgraph ----
+    memgraph_enabled: bool = True
     memgraph_uri: str = "bolt://localhost:7687"
     memgraph_username: str = ""
     memgraph_password: str = ""
@@ -55,6 +57,13 @@ class Settings(BaseSettings):
 
     # ---- Folder-based Knowledge Base ----
     knowledge_base_dir: str = "知识库文件夹"
+
+    # ---- Demo mode ----
+    # When True, the graph API returns full stats (real DB counts) but
+    # limits the actual nodes/links to `graph_demo_max_nodes` so the
+    # frontend stays responsive.  When False, all nodes are returned.
+    demo_mode: bool = True
+    graph_demo_max_nodes: int = 2000
 
     # ---- Default chunking settings ----
     default_chunk_size: int = 500

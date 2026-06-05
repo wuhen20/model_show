@@ -26,6 +26,15 @@ _driver_failed: bool = False
 _driver_fail_ts: float = 0.0
 _DRIVER_RETRY_AFTER = 30.0
 
+
+def _empty_graph() -> dict[str, Any]:
+    """Return an empty graph response when Memgraph is disabled."""
+    return {
+        "nodes": [],
+        "links": [],
+        "stats": {"entity_count": 0, "relation_count": 0, "coverage": 0},
+    }
+
 # ── Workspace name mapping ─────────────────────────────────────────────────
 # Folder KB names (Chinese) → Memgraph labels (workspace-derived strings)
 # These are set when folder KBs are scanned and used to query per-KB graphs.
@@ -50,6 +59,8 @@ def get_folder_kb_workspaces() -> list[dict]:
 
     Lazily loaded and cached.
     """
+    if not settings.memgraph_enabled:
+        return []
     global _FOLDER_KB_WORKSPACES
     if _FOLDER_KB_WORKSPACES is not None:
         return _FOLDER_KB_WORKSPACES
@@ -141,16 +152,45 @@ def _build_link(src: str, tgt: str, rel_type: str = "", description: str = "") -
     return link
 
 
-async def get_graph_data(workspace: str, max_nodes: int = 200) -> dict[str, Any]:
+def _apply_demo_mode_cap(node_list: list[dict], link_list: list[dict], entity_count: int, relation_count: int) -> tuple[list[dict], list[dict], int, int]:
+    """Apply demo mode node cap if enabled.
+
+    Returns (capped_node_list, capped_link_list, real_entity_count, real_relation_count).
+    Stats always reflect the real counts; only the returned arrays are capped.
+    """
+    from app.core.config import settings
+    if not settings.demo_mode or len(node_list) <= settings.graph_demo_max_nodes:
+        return node_list, link_list, entity_count, relation_count
+
+    # Keep all KB root nodes (category 0) + top-degree entities up to the cap
+    kb_roots = [n for n in node_list if n.get("category") == 0]
+    non_roots = sorted(
+        [n for n in node_list if n.get("category") != 0],
+        key=lambda n: n.get("degree", 0),
+        reverse=True,
+    )
+    remaining = settings.graph_demo_max_nodes - len(kb_roots)
+    capped_nodes = kb_roots + non_roots[:max(0, remaining)]
+    # Only keep links whose both endpoints survive
+    kept_names = {n["name"] for n in capped_nodes}
+    capped_links = [l for l in link_list if l["source"] in kept_names and l["target"] in kept_names]
+    return capped_nodes, capped_links, entity_count, relation_count
+
+
+async def get_graph_data(workspace: str, max_nodes: int = 200, full: bool = False) -> dict[str, Any]:
     """Fetch nodes and relationships for a given workspace from Memgraph.
 
     LightRAG stores each workspace as a node Label (e.g. ``cai_ji_zi_yu``).
     Node properties: entity_id (display name), entity_type, description.
     Relationship type: DIRECTED, with description property.
 
+    When ``full=True``, the LIMIT clause is omitted so all nodes are returned.
+
     Returns a dict with ECharts-compatible ``nodes`` and ``links`` arrays,
     plus ``stats`` (entity_count, relation_count, coverage).
     """
+    if not settings.memgraph_enabled:
+        return _empty_graph()
     try:
         driver = await get_driver()
     except ConnectionError:
@@ -161,23 +201,31 @@ async def get_graph_data(workspace: str, max_nodes: int = 200) -> dict[str, Any]
     try:
         async with driver.session() as session:
             # Gather nodes
-            node_result = await session.run(
+            node_query = (
                 f"MATCH (n:`{label}`) "
                 "RETURN n.entity_id AS id, n.entity_id AS name, "
                 "n.entity_type AS type, n.description AS desc, "
-                "n.kb_name AS kb "
-                "LIMIT $limit",
+                "n.kb_name AS kb"
+            )
+            if not full:
+                node_query += " LIMIT $limit"
+            node_result = await session.run(
+                node_query,
                 limit=max_nodes,
             )
             raw_nodes = await node_result.data()
             await node_result.consume()
 
             # Gather relationships
-            rel_result = await session.run(
+            rel_query = (
                 f"MATCH (a:`{label}`)-[r]->(b:`{label}`) "
                 "RETURN a.entity_id AS src, b.entity_id AS tgt, "
-                "type(r) AS rel_type, r.description AS desc "
-                "LIMIT $limit",
+                "type(r) AS rel_type, r.description AS desc"
+            )
+            if not full:
+                rel_query += " LIMIT $limit"
+            rel_result = await session.run(
+                rel_query,
                 limit=max_nodes * 3,
             )
             raw_rels = await rel_result.data()
@@ -248,6 +296,11 @@ async def get_graph_data(workspace: str, max_nodes: int = 200) -> dict[str, Any]
     linked = {r.get("src", "") for r in raw_rels} | {r.get("tgt", "") for r in raw_rels}
     coverage = round(len(linked & node_names) / max(len(node_names), 1) * 100, 1)
 
+    # Demo mode: cap nodes but keep real stats
+    nodes, links, entity_count, relation_count = _apply_demo_mode_cap(
+        nodes, links, entity_count, relation_count
+    )
+
     return {
         "nodes": nodes,
         "links": links,
@@ -259,15 +312,19 @@ async def get_graph_data(workspace: str, max_nodes: int = 200) -> dict[str, Any]
     }
 
 
-async def get_graph_by_kb_name(kb_name: str, max_nodes: int = 200) -> dict[str, Any]:
+async def get_graph_by_kb_name(kb_name: str, max_nodes: int = 200, full: bool = False) -> dict[str, Any]:
     """Fetch nodes and relationships for a given KB name from Memgraph.
 
     LightRAG stores all entities under a few labels (base, cai_ji_zi_yu, etc.)
     but we add a `kb_name` property to partition them per folder KB.
 
+    When ``full=True``, the LIMIT clause is omitted so all nodes are returned.
+
     Returns a dict with ECharts-compatible ``nodes`` and ``links`` arrays,
     plus ``stats`` (entity_count, relation_count, coverage).
     """
+    if not settings.memgraph_enabled:
+        return _empty_graph()
     try:
         driver = await get_driver()
     except ConnectionError:
@@ -276,11 +333,15 @@ async def get_graph_by_kb_name(kb_name: str, max_nodes: int = 200) -> dict[str, 
     try:
         async with driver.session() as session:
             # Gather nodes with this kb_name
-            node_result = await session.run(
+            node_query = (
                 "MATCH (n) WHERE n.kb_name = $kb_name "
                 "RETURN n.entity_id AS id, n.entity_id AS name, "
-                "n.entity_type AS type, n.description AS desc "
-                "LIMIT $limit",
+                "n.entity_type AS type, n.description AS desc"
+            )
+            if not full:
+                node_query += " LIMIT $limit"
+            node_result = await session.run(
+                node_query,
                 kb_name=kb_name,
                 limit=max_nodes,
             )
@@ -288,11 +349,15 @@ async def get_graph_by_kb_name(kb_name: str, max_nodes: int = 200) -> dict[str, 
             await node_result.consume()
 
             # Gather relationships between nodes of this kb_name
-            rel_result = await session.run(
+            rel_query = (
                 "MATCH (a)-[r]->(b) WHERE a.kb_name = $kb_name AND b.kb_name = $kb_name "
                 "RETURN a.entity_id AS src, b.entity_id AS tgt, "
-                "type(r) AS rel_type, r.description AS desc "
-                "LIMIT $limit",
+                "type(r) AS rel_type, r.description AS desc"
+            )
+            if not full:
+                rel_query += " LIMIT $limit"
+            rel_result = await session.run(
+                rel_query,
                 kb_name=kb_name,
                 limit=max_nodes * 3,
             )
@@ -366,6 +431,11 @@ async def get_graph_by_kb_name(kb_name: str, max_nodes: int = 200) -> dict[str, 
     linked = {r.get("src", "") for r in raw_rels} | {r.get("tgt", "") for r in raw_rels}
     coverage = round(len(linked & node_names) / max(len(node_names), 1) * 100, 1)
 
+    # Demo mode: cap nodes but keep real stats
+    nodes, links, entity_count, relation_count = _apply_demo_mode_cap(
+        nodes, links, entity_count, relation_count
+    )
+
     return {
         "nodes": nodes,
         "links": links,
@@ -377,12 +447,28 @@ async def get_graph_by_kb_name(kb_name: str, max_nodes: int = 200) -> dict[str, 
     }
 
 
-async def get_all_workspaces_graph(max_nodes_per_ws: int = 80) -> dict[str, Any]:
+async def get_all_workspaces_graph(max_nodes_per_ws: int = 80, full: bool = False) -> dict[str, Any]:
     """Merge graphs from all folder KB workspaces into a single combined graph.
 
-    Adds a root node per knowledge base and links KB roots to their
-    top entities. Returns ECharts-compatible data.
+    When ``full=True``, a single Cypher query fetches ALL nodes and relationships
+    from Memgraph (``MATCH (n) WHERE n.kb_name IS NOT NULL RETURN n``), then
+    adds KB root nodes.  No per-KB cap, no dedup loss — every node is returned.
+
+    When ``full=False`` (preview), iterates KB-by-KB with ``max_nodes_per_ws``
+    cap per KB.  Results are deduplicated by name so the preview stays small.
     """
+    if not settings.memgraph_enabled:
+        return _empty_graph()
+    try:
+        driver = await get_driver()
+    except ConnectionError:
+        raise
+
+    # ── full=True: single-query fast path ──────────────────────────────────
+    if full:
+        return await _get_all_workspaces_graph_full(driver)
+
+    # ── full=False: per-KB preview path (unchanged) ────────────────────────
     combined_nodes_map: dict[str, dict] = {}
     combined_links: list[dict] = []
     seen_edges: set[str] = set()
@@ -390,13 +476,10 @@ async def get_all_workspaces_graph(max_nodes_per_ws: int = 80) -> dict[str, Any]
     total_rel_count = 0
 
     ws_list = get_folder_kb_workspaces()
-
-    # Also include the default workspace (labeled 'base' or by old ws name)
     all_kbs = [{"name": ws_info["name"]} for ws_info in ws_list]
 
     # Get distinct kb_names actually in Memgraph
     try:
-        driver = await get_driver()
         async with driver.session() as session:
             result = await session.run(
                 "MATCH (n) WHERE n.kb_name IS NOT NULL RETURN DISTINCT n.kb_name AS kb"
@@ -407,7 +490,6 @@ async def get_all_workspaces_graph(max_nodes_per_ws: int = 80) -> dict[str, Any]
     except Exception:
         memgraph_kb_names = set()
 
-    # Combine: scan all KB names from both sources
     all_kb_names = set()
     for kb_info in all_kbs:
         all_kb_names.add(kb_info["name"])
@@ -415,7 +497,7 @@ async def get_all_workspaces_graph(max_nodes_per_ws: int = 80) -> dict[str, Any]
 
     for kb_name in sorted(all_kb_names):
         try:
-            graph_data = await get_graph_by_kb_name(kb_name=kb_name, max_nodes=max_nodes_per_ws)
+            graph_data = await get_graph_by_kb_name(kb_name=kb_name, max_nodes=max_nodes_per_ws, full=False)
         except Exception:
             continue
 
@@ -434,7 +516,7 @@ async def get_all_workspaces_graph(max_nodes_per_ws: int = 80) -> dict[str, Any]
             "itemStyle": {"color": "#ffaa00"},
         }
 
-        # Add all entity nodes
+        # Add all entity nodes (dedup by name for preview)
         for node in nodes:
             nname = node["name"]
             if nname not in combined_nodes_map:
@@ -457,7 +539,6 @@ async def get_all_workspaces_graph(max_nodes_per_ws: int = 80) -> dict[str, Any]
         total_entity_count += stats.get("entity_count", 0)
         total_rel_count += stats.get("relation_count", 0)
 
-    # Build final output
     node_list = list(combined_nodes_map.values())
     node_names = {n["name"] for n in node_list}
     link_list = [l for l in combined_links if l["source"] in node_names and l["target"] in node_names]
@@ -474,11 +555,171 @@ async def get_all_workspaces_graph(max_nodes_per_ws: int = 80) -> dict[str, Any]
     }
 
 
+async def _get_all_workspaces_graph_full(driver: AsyncDriver) -> dict[str, Any]:
+    """Fetch the complete graph in two Cypher queries (nodes + rels).
+
+    No per-KB cap, no name dedup — every distinct entity in Memgraph is
+    returned.  KB root nodes are added and linked to their member entities.
+    """
+    try:
+        async with driver.session() as session:
+            # 1. ALL nodes with kb_name
+            node_result = await session.run(
+                "MATCH (n) WHERE n.kb_name IS NOT NULL "
+                "RETURN n.entity_id AS id, n.entity_id AS name, "
+                "n.entity_type AS type, n.description AS desc, n.kb_name AS kb"
+            )
+            raw_nodes = await node_result.data()
+            await node_result.consume()
+
+            # 2. ALL relationships between nodes with kb_name
+            rel_result = await session.run(
+                "MATCH (a)-[r]->(b) "
+                "WHERE a.kb_name IS NOT NULL AND b.kb_name IS NOT NULL "
+                "RETURN a.entity_id AS src, b.entity_id AS tgt, "
+                "type(r) AS rel_type, r.description AS desc"
+            )
+            raw_rels = await rel_result.data()
+            await rel_result.consume()
+
+            # 3. Distinct kb_names for root nodes
+            kb_result = await session.run(
+                "MATCH (n) WHERE n.kb_name IS NOT NULL "
+                "RETURN DISTINCT n.kb_name AS kb"
+            )
+            kb_records = await kb_result.data()
+            await kb_result.consume()
+
+            # 4. Total counts
+            cnt_result = await session.run(
+                "MATCH (n) WHERE n.kb_name IS NOT NULL RETURN count(n) AS cnt"
+            )
+            cnt_rec = await cnt_result.single()
+            await cnt_result.consume()
+            entity_count = cnt_rec["cnt"] if cnt_rec else 0
+
+            rcnt_result = await session.run(
+                "MATCH (a)-[r]->(b) "
+                "WHERE a.kb_name IS NOT NULL AND b.kb_name IS NOT NULL "
+                "RETURN count(r) AS cnt"
+            )
+            rcnt_rec = await rcnt_result.single()
+            await rcnt_result.consume()
+            relation_count = rcnt_rec["cnt"] if rcnt_rec else 0
+
+    except Exception:
+        _mark_failed()
+        raise
+
+    global _driver_verified
+    _driver_verified = True
+
+    # Build degree map
+    degree_map: dict[str, int] = {}
+    for r in raw_rels:
+        src, tgt = r.get("src", ""), r.get("tgt", "")
+        degree_map[src] = degree_map.get(src, 0) + 1
+        degree_map[tgt] = degree_map.get(tgt, 0) + 1
+
+    # Build KB root nodes
+    kb_names = sorted({r["kb"] for r in kb_records})
+    nodes_map: dict[str, dict] = {}
+    for kb in kb_names:
+        nodes_map[kb] = {
+            "name": kb,
+            "symbolSize": 45,
+            "category": 0,
+            "itemStyle": {"color": "#ffaa00"},
+        }
+
+    # Build entity nodes (dedup by name — same entity name in multiple KBs
+    # is the same concept, so we keep one node but connect it to all its KBs)
+    node_ids: set[str] = set()
+    entity_nodes: list[dict] = []
+    # Track which KB each entity belongs to for KB-root links
+    entity_kbs: dict[str, set[str]] = {}
+    for rn in raw_nodes:
+        name = rn.get("name") or rn.get("id") or ""
+        if not name or name in node_ids:
+            continue
+        node_ids.add(name)
+        kb = rn.get("kb", "")
+        if name not in entity_kbs:
+            entity_kbs[name] = set()
+        entity_kbs[name].add(kb)
+
+        deg = degree_map.get(name, 0)
+        entity_nodes.append(_build_node(
+            name=name,
+            deg=deg,
+            entity_type=(rn.get("type") or "").lower(),
+            description=rn.get("desc", ""),
+            kb_name=kb,
+        ))
+        nodes_map[name] = entity_nodes[-1]
+
+    # Build links
+    links: list[dict] = []
+    seen_links: set[tuple[str, str]] = set()
+
+    # KB root → entity links (connect each entity to ALL its KBs)
+    for ename, kbs in entity_kbs.items():
+        for kb in kbs:
+            key = (kb, ename)
+            if key not in seen_links:
+                seen_links.add(key)
+                links.append(_build_link(
+                    src=kb, tgt=ename,
+                    rel_type="BELONGS_TO",
+                    description=f"{ename} 属于 {kb}",
+                ))
+
+    # Entity → entity relationships
+    for r in raw_rels:
+        src = r.get("src", "")
+        tgt = r.get("tgt", "")
+        if not src or not tgt or (src, tgt) in seen_links:
+            continue
+        seen_links.add((src, tgt))
+        links.append(_build_link(
+            src=src, tgt=tgt,
+            rel_type=r.get("rel_type", ""),
+            description=r.get("desc", ""),
+        ))
+
+    # Filter links so both endpoints exist
+    node_names = set(nodes_map.keys())
+    link_list = [l for l in links if l["source"] in node_names and l["target"] in node_names]
+
+    # Stats = real counts from DB
+    node_list = list(nodes_map.values())
+    real_entity_count = len(node_list)
+    real_relation_count = len(link_list)
+    coverage = round(min(95, real_entity_count * 0.4 + 30), 1) if node_list else 0
+
+    # Demo mode: cap nodes but keep real stats
+    node_list, link_list, real_entity_count, real_relation_count = _apply_demo_mode_cap(
+        node_list, link_list, real_entity_count, real_relation_count
+    )
+
+    return {
+        "nodes": node_list,
+        "links": link_list,
+        "stats": {
+            "entity_count": real_entity_count,
+            "relation_count": real_relation_count,
+            "coverage": coverage,
+        },
+    }
+
+
 async def get_total_entity_count() -> int:
     """Return the total count of entities across all KBs in Memgraph.
 
     Counts all nodes that have a kb_name property.
     """
+    if not settings.memgraph_enabled:
+        return 0
     try:
         driver = await get_driver()
     except ConnectionError:
@@ -499,6 +740,8 @@ async def get_total_entity_count() -> int:
 
 async def get_total_relation_count() -> int:
     """Return the total count of relationships across all KBs in Memgraph."""
+    if not settings.memgraph_enabled:
+        return 0
     try:
         driver = await get_driver()
     except ConnectionError:
@@ -520,6 +763,8 @@ async def get_total_relation_count() -> int:
 
 async def get_all_kb_stats() -> list[dict]:
     """Return per-KB stats (entity_count, relation_count) from Memgraph."""
+    if not settings.memgraph_enabled:
+        return []
     try:
         driver = await get_driver()
     except ConnectionError:
@@ -562,6 +807,8 @@ async def get_workspace_labels() -> list[str]:
 
     Uses Memgraph-compatible syntax (not CALL db.labels()).
     """
+    if not settings.memgraph_enabled:
+        return []
     driver = await get_driver()
     try:
         async with driver.session() as session:
@@ -591,6 +838,8 @@ def tag_untagged_nodes() -> int:
 
     Returns the number of nodes tagged.
     """
+    if not settings.memgraph_enabled:
+        return 0
     from neo4j import GraphDatabase as _GD
 
     # Build filename → kb_name mapping

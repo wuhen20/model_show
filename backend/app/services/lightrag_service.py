@@ -1,4 +1,9 @@
-"""LightRAG HTTP client — proxy requests to LightRAG server."""
+"""LightRAG HTTP client — proxy requests to LightRAG server.
+
+When settings.lightrag_enabled is False, all functions return empty/default
+values without making any HTTP requests, allowing the system to run without
+LightRAG.
+"""
 
 import httpx
 from app.core.config import settings
@@ -18,6 +23,9 @@ async def get_documents_paginated(
 
     Returns raw LightRAG response with documents + status_counts.
     """
+    if not settings.lightrag_enabled:
+        return {"documents": [], "pagination": {"total_count": 0, "page": page, "page_size": page_size}}
+
     headers = {}
     if workspace:
         headers["LIGHTRAG-WORKSPACE"] = workspace
@@ -43,6 +51,9 @@ async def get_documents_paginated(
 
 async def get_pipeline_status(workspace: str | None = None) -> dict:
     """Get document processing pipeline status from LightRAG."""
+    if not settings.lightrag_enabled:
+        return {"busy": False}
+
     headers = {}
     if workspace:
         headers["LIGHTRAG-WORKSPACE"] = workspace
@@ -62,6 +73,9 @@ async def get_status_counts(workspace: str | None = None) -> dict[str, int]:
     Returns the inner ``status_counts`` dict, e.g.
     ``{"pending": 5, "processing": 2, "processed": 1, "failed": 0, "all": 8}``.
     """
+    if not settings.lightrag_enabled:
+        return {}
+
     headers = {}
     if workspace:
         headers["LIGHTRAG-WORKSPACE"] = workspace
@@ -84,6 +98,9 @@ async def get_graph(
     max_nodes: int = 200,
 ) -> dict:
     """Fetch a subgraph from LightRAG's graph endpoint."""
+    if not settings.lightrag_enabled:
+        return {"nodes": [], "edges": []}
+
     headers = {}
     if workspace:
         headers["LIGHTRAG-WORKSPACE"] = workspace
@@ -106,6 +123,9 @@ async def get_graph(
 
 async def get_graph_labels(workspace: str | None = None) -> list[str]:
     """Fetch all graph labels from LightRAG."""
+    if not settings.lightrag_enabled:
+        return []
+
     headers = {}
     if workspace:
         headers["LIGHTRAG-WORKSPACE"] = workspace
@@ -129,6 +149,9 @@ async def upload_document(
     Calls POST /documents/upload with multipart file upload
     and optional workspace header.
     """
+    if not settings.lightrag_enabled:
+        raise RuntimeError("LightRAG service is disabled")
+
     headers = {}
     if workspace:
         headers["LIGHTRAG-WORKSPACE"] = workspace

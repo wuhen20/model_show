@@ -257,9 +257,78 @@
 | `default_chunk_size` | 500 | 默认切片大小 |
 | `default_chunk_overlap` | 50 | 默认切片重叠 |
 | `default_parent_chunk_size` | 1500 | 默认父切片大小 |
+| `lightrag_enabled` | True | 是否启用 LightRAG 服务 |
 | `lightrag_base_url` | http://127.0.0.1:9621 | LightRAG 服务地址 |
+| `memgraph_enabled` | True | 是否启用 Memgraph 服务 |
 | `memgraph_uri` | bolt://localhost:7687 | Memgraph 连接地址 |
+| `memgraph_username` | 空 | Memgraph 用户名 |
+| `memgraph_password` | 空 | Memgraph 密码 |
 | `knowledge_base_dir` | 知识库文件夹 | 文件夹KB根目录 |
+
+---
+
+## 外部组件配置
+
+知识图谱功能依赖两个可选的外部组件：**Memgraph**（图数据库）和 **LightRAG**（图谱生成服务）。它们是可插拔的——即使都不启动，前后端也能正常运行，只是知识图谱相关功能会降级。
+
+### 快速启停
+
+**启动 Memgraph**：
+```bash
+docker run -d --name memgraph -p 7687:7687 -p 7474:7474 memgraph/memgraph
+# 后续启动
+docker start memgraph
+```
+
+**启动 LightRAG**：
+```bash
+cd E:\artificial\人工智能平台\演示
+lightrag_env\Scripts\python.exe -m lightrag_kb_http_server
+```
+
+**关闭组件**（只需修改配置，无需卸载）：
+
+在 `backend/.env` 中设置：
+```env
+MEMGRAPH_ENABLED=false
+LIGHTRAG_ENABLED=false
+```
+
+### 功能降级说明
+
+| 组件 | 状态 | 影响 |
+|------|------|------|
+| Memgraph 启用 | 正常 | 知识图谱展示完整、实体数实时统计、首页图谱正常显示 |
+| Memgraph 禁用 | 降级 | 图谱显示为空、实体数为0、首页统计其他指标正常、文件夹知识库功能正常 |
+| LightRAG 启用 | 正常 | 文档可同步到图谱、图谱数据可更新、pipeline 状态可查看 |
+| LightRAG 禁用 | 降级 | 文档同步不可用（返回提示）、pipeline 状态不可用、已有图谱数据仍可查看（来自 Memgraph） |
+
+### 配置项一览
+
+在 `backend/.env` 中配置（未设置时使用 `config.py` 中的默认值）：
+
+```env
+# ============ Memgraph 图数据库 ============
+# 设为 false 则知识图谱功能不可用，其他功能正常
+MEMGRAPH_ENABLED=true
+MEMGRAPH_URI=bolt://localhost:7687
+MEMGRAPH_USERNAME=
+MEMGRAPH_PASSWORD=
+
+# ============ LightRAG 知识图谱生成服务 ============
+# 设为 false 则文档同步到图谱功能不可用，其他功能正常
+LIGHTRAG_ENABLED=true
+LIGHTRAG_BASE_URL=http://127.0.0.1:9621
+```
+
+| 环境变量 | 默认值 | 说明 |
+|----------|--------|------|
+| `MEMGRAPH_ENABLED` | `true` | 是否启用 Memgraph，`false` 时不发起任何连接 |
+| `MEMGRAPH_URI` | `bolt://localhost:7687` | Memgraph 连接地址 |
+| `MEMGRAPH_USERNAME` | 空 | 用户名（Memgraph 默认无需认证） |
+| `MEMGRAPH_PASSWORD` | 空 | 密码 |
+| `LIGHTRAG_ENABLED` | `true` | 是否启用 LightRAG，`false` 时不发起任何 HTTP 请求 |
+| `LIGHTRAG_BASE_URL` | `http://127.0.0.1:9621` | LightRAG 服务地址 |
 
 ---
 
@@ -269,8 +338,14 @@
 
 | 服务 | 地址 | 说明 |
 |------|------|------|
-| Memgraph | bolt://localhost:7687 | 图数据库，Docker 启动 |
 | SiliconFlow API | api.siliconflow.cn | 图谱生成用 LLM + Embedding |
+
+### 可选服务（知识图谱功能）
+
+| 服务 | 地址 | 启用配置 | 说明 |
+|------|------|----------|------|
+| Memgraph | bolt://localhost:7687 | `MEMGRAPH_ENABLED=true` | 图数据库，Docker 启动，禁用后图谱功能不可用 |
+| LightRAG | http://127.0.0.1:9621 | `LIGHTRAG_ENABLED=true` | 图谱生成服务，禁用后文档同步不可用 |
 
 ### 启动 Memgraph
 

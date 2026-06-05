@@ -2,6 +2,7 @@
 
 from fastapi import APIRouter, UploadFile, File, Form, Query, HTTPException
 
+from app.core.config import settings
 from app.schemas.knowledge_base import (
     KBCreate, KBUpdate, KBResponse,
     TagCreate, TagUpdate, TagResponse,
@@ -281,6 +282,8 @@ async def get_document_chunks(doc_id: str):
 @router.post("/bases/{kb_id}/sync-lightrag", response_model=dict)
 async def sync_to_lightrag(kb_id: str):
     """Incrementally sync completed documents to LightRAG for graph parsing."""
+    if not settings.lightrag_enabled:
+        return {"code": -1, "message": "LightRAG 服务未启用，无法同步"}
     from app.services import sync_service
     try:
         result = await sync_service.sync_to_lightrag(kb_id)
