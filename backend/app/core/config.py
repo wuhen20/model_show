@@ -65,6 +65,12 @@ class Settings(BaseSettings):
     demo_mode: bool = True
     graph_demo_max_nodes: int = 2000
 
+    # ---- Fake mode for demo ----
+    # When True, non-graph API endpoints return data from the config file
+    # instead of real backend data. Purpose: customizable demo data.
+    fake_mode: bool = False
+    fake_data_config_path: str = "data/fake_data_config.json"
+
     # ---- Default chunking settings ----
     default_chunk_size: int = 500
     default_chunk_overlap: int = 50

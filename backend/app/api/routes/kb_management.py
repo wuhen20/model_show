@@ -9,6 +9,7 @@ from app.schemas.knowledge_base import (
     DocumentResponse, ChunkResponse,
 )
 from app.services import db_service
+from app.services import fake_data
 
 router = APIRouter()
 
@@ -73,6 +74,9 @@ async def create_knowledge_base(body: KBCreate):
 @router.get("/bases/{kb_id}", response_model=dict)
 async def get_knowledge_base(kb_id: str):
     """Get knowledge base detail including tags."""
+    if settings.fake_mode:
+        return {"code": 0, "data": fake_data.get_fake_response("/bases/{id}", kb_id=kb_id)}
+
     kb = db_service.get_knowledge_base(kb_id)
     if not kb:
         return {"code": -1, "message": "知识库不存在"}
@@ -105,6 +109,9 @@ async def delete_knowledge_base(kb_id: str):
 @router.get("/bases/{kb_id}/tags", response_model=dict)
 async def get_kb_tags(kb_id: str):
     """Get all tags for a knowledge base as a tree structure."""
+    if settings.fake_mode:
+        return {"code": 0, "data": fake_data.get_fake_response("/bases/{id}/tags", kb_id=kb_id)}
+
     tags = db_service.get_tags_tree(kb_id)
     return {"code": 0, "data": tags}
 
@@ -223,6 +230,9 @@ async def list_documents(
     page_size: int = Query(default=20, ge=1, le=100),
 ):
     """List documents in a knowledge base."""
+    if settings.fake_mode:
+        return {"code": 0, "data": fake_data.get_fake_response("/bases/{id}/documents", kb_id=kb_id, page=page, page_size=page_size)}
+
     result = db_service.list_documents(kb_id, page=page, page_size=page_size)
     return {
         "code": 0,
@@ -270,6 +280,9 @@ async def delete_document(doc_id: str):
 @router.get("/documents/{doc_id}/chunks", response_model=dict)
 async def get_document_chunks(doc_id: str):
     """List all chunks for a document."""
+    if settings.fake_mode:
+        return {"code": 0, "data": fake_data.get_fake_response("/documents/{id}/chunks")}
+
     chunks = db_service.list_chunks(doc_id)
     return {"code": 0, "data": chunks}
 

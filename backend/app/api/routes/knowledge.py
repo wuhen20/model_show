@@ -9,6 +9,7 @@ from fastapi import APIRouter, Query
 
 from app.core.config import settings
 from app.services import lightrag_service, memgraph_service
+from app.services import fake_data
 
 router = APIRouter()
 
@@ -250,6 +251,9 @@ async def get_knowledge_stats():
     The Memgraph entity count is fetched in the background and cached.
     If Memgraph is down, the default value is used (no blocking).
     """
+    if settings.fake_mode:
+        return {"code": 0, "data": fake_data.get_fake_response("/stats")}
+
     global _stats_cache, _stats_cache_ts
     import time as _time
 
@@ -375,6 +379,9 @@ async def get_knowledge_list(
 ):
     """Knowledge list — if *workspace* is given, data comes from LightRAG;
     otherwise falls back to the static parsed_data.json."""
+    if settings.fake_mode:
+        return {"code": 0, "data": fake_data.get_fake_response("/folder/list", page=page, page_size=page_size)}
+
     if workspace:
         try:
             lr_data = await lightrag_service.get_documents_paginated(
@@ -457,6 +464,9 @@ async def get_knowledge_list(
 
 @router.get("/detail/{item_id}", response_model=dict)
 def get_knowledge_detail(item_id: str):
+    if settings.fake_mode:
+        return {"code": 0, "data": fake_data.get_fake_response("/detail/{id}", item_id=item_id)}
+
     for item in _all_items:
         if item['id'] == item_id:
             detail = {**item}
@@ -474,6 +484,9 @@ def get_knowledge_detail(item_id: str):
 
 @router.get("/source-distribution", response_model=dict)
 def get_source_distribution():
+    if settings.fake_mode:
+        return {"code": 0, "data": fake_data.get_fake_response("/folder/source-distribution")}
+
     source_map: dict[str, int] = {}
     for item in _all_items:
         s = item['source']
@@ -496,6 +509,9 @@ def get_source_distribution():
 
 @router.get("/category-distribution", response_model=dict)
 def get_category_distribution():
+    if settings.fake_mode:
+        return {"code": 0, "data": fake_data.get_fake_response("/folder/source-distribution")}
+
     color_list = ['#00d4ff', '#00ff88', '#a855f7', '#ffaa00', '#ff5555', '#36a3f7']
     result = []
     total = _total_files or 1
@@ -518,6 +534,9 @@ def get_category_distribution():
 
 @router.get("/quality-metrics", response_model=dict)
 def get_quality_metrics():
+    if settings.fake_mode:
+        return {"code": 0, "data": fake_data.get_fake_response("/quality-metrics")}
+
     return {
         "code": 0,
         "data": {

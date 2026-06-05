@@ -1,0 +1,852 @@
+{
+  "_comment": "FAKE_MODE 配置文件 — 编辑此文件自定义演示数据。派生值（总数、百分比、趋势摘要等）在加载时自动计算，无需手动维护一致性。",
+
+  "/stats": {
+    "total_count": 3300,
+    "structured_count": 425,
+    "unstructured_count": 0,
+    "graph_entities": 0,
+    "business_domains": 5,
+    "completeness": 92.5,
+    "availability": 95.8
+  },
+
+  "/folder/asset-stats": {
+    "categories": [
+      {
+        "name": "计量营销专业知识库",
+        "count": 2233,
+        "size": 2045234207,
+        "color": "#00d4ff",
+        "extensions": [
+          { "ext": ".docx", "count": 2212 },
+          { "ext": ".txt", "count": 10 },
+          { "ext": ".xlsx", "count": 6 },
+          { "ext": ".xls", "count": 4 },
+          { "ext": ".pdf", "count": 1 }
+        ]
+      },
+      {
+        "name": "计量数字讲师",
+        "count": 830,
+        "size": 2078231728,
+        "color": "#00ff88",
+        "extensions": [
+          { "ext": ".docx", "count": 830 }
+        ]
+      },
+      {
+        "name": "专家系统知识库",
+        "count": 210,
+        "size": 156237824,
+        "color": "#a855f7",
+        "extensions": [
+          { "ext": ".docx", "count": 210 }
+        ]
+      },
+      {
+        "name": "装表接电知识库",
+        "count": 19,
+        "size": 64983040,
+        "color": "#ffaa00",
+        "extensions": [
+          { "ext": ".docx", "count": 15 },
+          { "ext": ".txt", "count": 2 },
+          { "ext": ".xlsx", "count": 1 },
+          { "ext": ".doc", "count": 1 }
+        ]
+      },
+      {
+        "name": "采集自愈知识库",
+        "count": 8,
+        "size": 30408704,
+        "color": "#ff5555",
+        "extensions": [
+          { "ext": ".docx", "count": 8 }
+        ]
+      }
+    ]
+  },
+
+  "/folder/source-distribution": [
+    {
+      "name": "标准规范体系",
+      "count": 751,
+      "color": "#00d4ff",
+      "description": "国标/行标/企标/检定规程等规范性文件"
+    },
+    {
+      "name": "作业指导体系",
+      "count": 527,
+      "color": "#00ff88",
+      "description": "作业指导书/操作手册/技术方案等操作类文件"
+    },
+    {
+      "name": "政策文档体系",
+      "count": 94,
+      "color": "#6366f1",
+      "description": "法律/法规/条例等政策性文件"
+    },
+    {
+      "name": "培训考试体系",
+      "count": 45,
+      "color": "#a855f7",
+      "description": "培训资料/试题库等培训类文件"
+    },
+    {
+      "name": "管理制度体系",
+      "count": 149,
+      "color": "#ffaa00",
+      "description": "管理办法/管理规定等制度类文件"
+    },
+    {
+      "name": "技术文档体系",
+      "count": 1734,
+      "color": "#ff5555",
+      "description": "通用技术文档/参考资料"
+    }
+  ],
+
+  "/folder/trend": {
+    "months": [
+      "2025-07", "2025-08", "2025-09", "2025-10", "2025-11", "2025-12",
+      "2026-01", "2026-02", "2026-03", "2026-04", "2026-05", "2026-06"
+    ],
+    "series": [
+      {
+        "name": "新增知识",
+        "data": [120, 95, 110, 88, 130, 105, 75, 98, 115, 82, 68, 45],
+        "color": "#00d4ff"
+      },
+      {
+        "name": "更新知识",
+        "data": [80, 110, 65, 95, 72, 88, 55, 70, 92, 60, 48, 35],
+        "color": "#00ff88"
+      }
+    ]
+  },
+
+  "/folder/list": {
+    "items": [
+      {
+        "id": "k0001",
+        "title": "JJG 596-2012 电子式交流电能表检定规程",
+        "category_name": "计量营销专业知识库",
+        "parent_category": "计量营销专业知识库",
+        "knowledge_type": "检定规程",
+        "source": "国家计量规程",
+        "score": 5,
+        "status": "PROCESSED",
+        "update_time": "2026-05-15"
+      },
+      {
+        "id": "k0002",
+        "title": "GB/T 17215.321-2006 电能表标准",
+        "category_name": "计量营销专业知识库",
+        "parent_category": "计量营销专业知识库",
+        "knowledge_type": "国家标准",
+        "source": "国家标准",
+        "score": 5,
+        "status": "PROCESSED",
+        "update_time": "2026-05-10"
+      },
+      {
+        "id": "k0003",
+        "title": "DL/T 825-2002 电能计量装置安装接线规则",
+        "category_name": "计量营销专业知识库",
+        "parent_category": "计量营销专业知识库",
+        "knowledge_type": "行业标准",
+        "source": "电力行业标准",
+        "score": 4,
+        "status": "PROCESSED",
+        "update_time": "2026-04-28"
+      },
+      {
+        "id": "k0004",
+        "title": "Q/GDW 1364-2013 智能电能表技术规范",
+        "category_name": "计量营销专业知识库",
+        "parent_category": "计量营销专业知识库",
+        "knowledge_type": "企业标准",
+        "source": "国家电网企业标准",
+        "score": 5,
+        "status": "PROCESSED",
+        "update_time": "2026-04-20"
+      },
+      {
+        "id": "k0005",
+        "title": "JJG 307-2006 机电式交流电能表检定规程",
+        "category_name": "计量营销专业知识库",
+        "parent_category": "计量营销专业知识库",
+        "knowledge_type": "检定规程",
+        "source": "国家计量规程",
+        "score": 4,
+        "status": "PROCESSED",
+        "update_time": "2026-04-15"
+      },
+      {
+        "id": "k0006",
+        "title": "电能表故障诊断与处理手册",
+        "category_name": "计量数字讲师",
+        "parent_category": "计量数字讲师",
+        "knowledge_type": "作业指导",
+        "source": "企业标准",
+        "score": 4,
+        "status": "PROCESSED",
+        "update_time": "2026-05-08"
+      },
+      {
+        "id": "k0007",
+        "title": "台区线损分析技术方案",
+        "category_name": "计量数字讲师",
+        "parent_category": "计量数字讲师",
+        "knowledge_type": "技术方案",
+        "source": "技术文档",
+        "score": 3,
+        "status": "PROCESSED",
+        "update_time": "2026-05-01"
+      },
+      {
+        "id": "k0008",
+        "title": "用电信息采集系统运维规程",
+        "category_name": "专家系统知识库",
+        "parent_category": "专家系统知识库",
+        "knowledge_type": "管理规程",
+        "source": "电力行业标准",
+        "score": 4,
+        "status": "PROCESSED",
+        "update_time": "2026-04-25"
+      },
+      {
+        "id": "k0009",
+        "title": "智能电能表功能检测作业指导书",
+        "category_name": "装表接电知识库",
+        "parent_category": "装表接电知识库",
+        "knowledge_type": "作业指导",
+        "source": "企业标准",
+        "score": 4,
+        "status": "PROCESSED",
+        "update_time": "2026-03-18"
+      },
+      {
+        "id": "k0010",
+        "title": "采集终端故障处理流程",
+        "category_name": "采集自愈知识库",
+        "parent_category": "采集自愈知识库",
+        "knowledge_type": "作业指导",
+        "source": "技术文档",
+        "score": 3,
+        "status": "PROCESSED",
+        "update_time": "2026-03-12"
+      },
+      {
+        "id": "k0011",
+        "title": "GB/T 17215.301-2007 多功能电能表标准",
+        "category_name": "计量营销专业知识库",
+        "parent_category": "计量营销专业知识库",
+        "knowledge_type": "国家标准",
+        "source": "国家标准",
+        "score": 5,
+        "status": "PROCESSED",
+        "update_time": "2026-03-05"
+      },
+      {
+        "id": "k0012",
+        "title": "计量装置在线监测技术规范",
+        "category_name": "计量营销专业知识库",
+        "parent_category": "计量营销专业知识库",
+        "knowledge_type": "技术规范",
+        "source": "电力行业标准",
+        "score": 4,
+        "status": "PROCESSED",
+        "update_time": "2026-02-20"
+      },
+      {
+        "id": "k0013",
+        "title": "电力营销管理信息系统操作手册",
+        "category_name": "计量数字讲师",
+        "parent_category": "计量数字讲师",
+        "knowledge_type": "操作手册",
+        "source": "技术文档",
+        "score": 3,
+        "status": "PROCESSED",
+        "update_time": "2026-02-15"
+      },
+      {
+        "id": "k0014",
+        "title": "Q/GDW 1374.1-2013 电力用户用电信息采集系统技术规范",
+        "category_name": "计量营销专业知识库",
+        "parent_category": "计量营销专业知识库",
+        "knowledge_type": "企业标准",
+        "source": "国家电网企业标准",
+        "score": 5,
+        "status": "PROCESSED",
+        "update_time": "2026-02-08"
+      },
+      {
+        "id": "k0015",
+        "title": "电能计量器具库房管理办法",
+        "category_name": "计量营销专业知识库",
+        "parent_category": "计量营销专业知识库",
+        "knowledge_type": "管理制度",
+        "source": "管理制度",
+        "score": 3,
+        "status": "PROCESSED",
+        "update_time": "2026-01-28"
+      },
+      {
+        "id": "k0016",
+        "title": "装表接电作业安全操作规程",
+        "category_name": "装表接电知识库",
+        "parent_category": "装表接电知识库",
+        "knowledge_type": "作业指导",
+        "source": "企业标准",
+        "score": 5,
+        "status": "PROCESSED",
+        "update_time": "2026-01-15"
+      },
+      {
+        "id": "k0017",
+        "title": "台区线损异常诊断专家系统使用指南",
+        "category_name": "专家系统知识库",
+        "parent_category": "专家系统知识库",
+        "knowledge_type": "培训资料",
+        "source": "技术文档",
+        "score": 3,
+        "status": "PROCESSED",
+        "update_time": "2026-01-10"
+      },
+      {
+        "id": "k0018",
+        "title": "JJG 597-2005 交流电能表检定装置检定规程",
+        "category_name": "计量营销专业知识库",
+        "parent_category": "计量营销专业知识库",
+        "knowledge_type": "检定规程",
+        "source": "国家计量规程",
+        "score": 5,
+        "status": "PROCESSED",
+        "update_time": "2025-12-20"
+      },
+      {
+        "id": "k0019",
+        "title": "采集终端远程升级技术方案",
+        "category_name": "采集自愈知识库",
+        "parent_category": "采集自愈知识库",
+        "knowledge_type": "技术方案",
+        "source": "技术文档",
+        "score": 3,
+        "status": "PROCESSED",
+        "update_time": "2025-12-15"
+      },
+      {
+        "id": "k0020",
+        "title": "电力需求侧管理实施细则",
+        "category_name": "计量营销专业知识库",
+        "parent_category": "计量营销专业知识库",
+        "knowledge_type": "法律法规",
+        "source": "国家法律法规",
+        "score": 4,
+        "status": "PROCESSED",
+        "update_time": "2025-12-08"
+      }
+    ],
+    "total": 3300
+  },
+
+  "/folder/bases": {
+    "bases": [
+      {
+        "name": "计量营销专业知识库",
+        "doc_count": 2233,
+        "top_tags": ["标准规范", "作业指导", "管理制度"]
+      },
+      {
+        "name": "计量数字讲师",
+        "doc_count": 830,
+        "top_tags": ["培训资料", "操作手册", "技术方案"]
+      },
+      {
+        "name": "专家系统知识库",
+        "doc_count": 210,
+        "top_tags": ["运维规程", "技术规范", "培训资料"]
+      },
+      {
+        "name": "装表接电知识库",
+        "doc_count": 19,
+        "top_tags": ["作业指导", "安全规程", "操作手册"]
+      },
+      {
+        "name": "采集自愈知识库",
+        "doc_count": 8,
+        "top_tags": ["故障处理", "技术方案", "运维规程"]
+      }
+    ]
+  },
+
+  "/folder/bases/{name}": {
+    "files": {
+      "计量营销专业知识库": {
+        "items": [
+          {
+            "id": "f0001",
+            "file_name": "JJG 596-2012 电子式交流电能表检定规程.docx",
+            "relative_path": "标准规范/JJG检定规程/JJG 596-2012 电子式交流电能表检定规程.docx",
+            "file_size": 245760,
+            "extension": ".docx",
+            "tags": ["标准规范", "检定规程"],
+            "modified_time": "2026-05-15T10:30:00",
+            "knowledge_type": "检定规程",
+            "source": "国家计量规程",
+            "score": 5
+          },
+          {
+            "id": "f0002",
+            "file_name": "GB/T 17215.321-2006 电能表标准.docx",
+            "relative_path": "标准规范/GB国标/GB_T 17215.321-2006 电能表标准.docx",
+            "file_size": 189440,
+            "extension": ".docx",
+            "tags": ["标准规范", "国家标准"],
+            "modified_time": "2026-05-10T14:22:00",
+            "knowledge_type": "国家标准",
+            "source": "国家标准",
+            "score": 5
+          },
+          {
+            "id": "f0003",
+            "file_name": "DL/T 825-2002 电能计量装置安装接线规则.docx",
+            "relative_path": "标准规范/DL行标/DL_T 825-2002 电能计量装置安装接线规则.docx",
+            "file_size": 156672,
+            "extension": ".docx",
+            "tags": ["标准规范", "行业标准"],
+            "modified_time": "2026-04-28T09:15:00",
+            "knowledge_type": "行业标准",
+            "source": "电力行业标准",
+            "score": 4
+          },
+          {
+            "id": "f0004",
+            "file_name": "Q/GDW 1364-2013 智能电能表技术规范.docx",
+            "relative_path": "标准规范/Q企标/Q_GDW 1364-2013 智能电能表技术规范.docx",
+            "file_size": 212992,
+            "extension": ".docx",
+            "tags": ["标准规范", "企业标准"],
+            "modified_time": "2026-04-20T16:45:00",
+            "knowledge_type": "企业标准",
+            "source": "国家电网企业标准",
+            "score": 5
+          },
+          {
+            "id": "f0005",
+            "file_name": "电能计量器具库房管理办法.docx",
+            "relative_path": "管理制度/管理办法/电能计量器具库房管理办法.docx",
+            "file_size": 87040,
+            "extension": ".docx",
+            "tags": ["管理制度", "管理办法"],
+            "modified_time": "2026-01-28T11:00:00",
+            "knowledge_type": "管理制度",
+            "source": "管理制度",
+            "score": 3
+          },
+          {
+            "id": "f0006",
+            "file_name": "电力需求侧管理实施细则.docx",
+            "relative_path": "法律法规/电力需求侧管理实施细则.docx",
+            "file_size": 102400,
+            "extension": ".docx",
+            "tags": ["法律法规"],
+            "modified_time": "2025-12-08T08:30:00",
+            "knowledge_type": "法律法规",
+            "source": "国家法律法规",
+            "score": 4
+          }
+        ],
+        "total": 2233
+      },
+      "计量数字讲师": {
+        "items": [
+          {
+            "id": "f0101",
+            "file_name": "电能表故障诊断与处理手册.docx",
+            "relative_path": "培训资料/电能表故障诊断与处理手册.docx",
+            "file_size": 327680,
+            "extension": ".docx",
+            "tags": ["培训资料", "操作手册"],
+            "modified_time": "2026-05-08T13:20:00",
+            "knowledge_type": "作业指导",
+            "source": "企业标准",
+            "score": 4
+          },
+          {
+            "id": "f0102",
+            "file_name": "台区线损分析技术方案.docx",
+            "relative_path": "技术方案/台区线损分析技术方案.docx",
+            "file_size": 256000,
+            "extension": ".docx",
+            "tags": ["技术方案"],
+            "modified_time": "2026-05-01T10:00:00",
+            "knowledge_type": "技术方案",
+            "source": "技术文档",
+            "score": 3
+          },
+          {
+            "id": "f0103",
+            "file_name": "电力营销管理信息系统操作手册.docx",
+            "relative_path": "操作手册/电力营销管理信息系统操作手册.docx",
+            "file_size": 412160,
+            "extension": ".docx",
+            "tags": ["操作手册"],
+            "modified_time": "2026-02-15T15:30:00",
+            "knowledge_type": "操作手册",
+            "source": "技术文档",
+            "score": 3
+          }
+        ],
+        "total": 830
+      },
+      "专家系统知识库": {
+        "items": [
+          {
+            "id": "f0201",
+            "file_name": "用电信息采集系统运维规程.docx",
+            "relative_path": "运维规程/用电信息采集系统运维规程.docx",
+            "file_size": 178176,
+            "extension": ".docx",
+            "tags": ["运维规程"],
+            "modified_time": "2026-04-25T09:00:00",
+            "knowledge_type": "管理规程",
+            "source": "电力行业标准",
+            "score": 4
+          },
+          {
+            "id": "f0202",
+            "file_name": "台区线损异常诊断专家系统使用指南.docx",
+            "relative_path": "培训资料/台区线损异常诊断专家系统使用指南.docx",
+            "file_size": 145408,
+            "extension": ".docx",
+            "tags": ["培训资料"],
+            "modified_time": "2026-01-10T11:30:00",
+            "knowledge_type": "培训资料",
+            "source": "技术文档",
+            "score": 3
+          }
+        ],
+        "total": 210
+      },
+      "装表接电知识库": {
+        "items": [
+          {
+            "id": "f0301",
+            "file_name": "智能电能表功能检测作业指导书.docx",
+            "relative_path": "作业指导/智能电能表功能检测作业指导书.docx",
+            "file_size": 92160,
+            "extension": ".docx",
+            "tags": ["作业指导"],
+            "modified_time": "2026-03-18T14:00:00",
+            "knowledge_type": "作业指导",
+            "source": "企业标准",
+            "score": 4
+          },
+          {
+            "id": "f0302",
+            "file_name": "装表接电作业安全操作规程.docx",
+            "relative_path": "安全规程/装表接电作业安全操作规程.docx",
+            "file_size": 77824,
+            "extension": ".docx",
+            "tags": ["安全规程"],
+            "modified_time": "2026-01-15T09:20:00",
+            "knowledge_type": "作业指导",
+            "source": "企业标准",
+            "score": 5
+          }
+        ],
+        "total": 19
+      },
+      "采集自愈知识库": {
+        "items": [
+          {
+            "id": "f0401",
+            "file_name": "采集终端故障处理流程.docx",
+            "relative_path": "故障处理/采集终端故障处理流程.docx",
+            "file_size": 65536,
+            "extension": ".docx",
+            "tags": ["故障处理"],
+            "modified_time": "2026-03-12T10:45:00",
+            "knowledge_type": "作业指导",
+            "source": "技术文档",
+            "score": 3
+          },
+          {
+            "id": "f0402",
+            "file_name": "采集终端远程升级技术方案.docx",
+            "relative_path": "技术方案/采集终端远程升级技术方案.docx",
+            "file_size": 53248,
+            "extension": ".docx",
+            "tags": ["技术方案"],
+            "modified_time": "2025-12-15T16:00:00",
+            "knowledge_type": "技术方案",
+            "source": "技术文档",
+            "score": 3
+          }
+        ],
+        "total": 8
+      }
+    },
+    "tags": {
+      "计量营销专业知识库": [
+        {
+          "name": "标准规范",
+          "level": 1,
+          "children": [
+            { "name": "JJG检定规程", "level": 2, "children": [] },
+            { "name": "GB国标", "level": 2, "children": [] },
+            { "name": "DL行标", "level": 2, "children": [] },
+            { "name": "Q企标", "level": 2, "children": [] }
+          ]
+        },
+        {
+          "name": "管理制度",
+          "level": 1,
+          "children": [
+            { "name": "管理办法", "level": 2, "children": [] },
+            { "name": "管理规定", "level": 2, "children": [] }
+          ]
+        },
+        {
+          "name": "法律法规",
+          "level": 1,
+          "children": []
+        }
+      ],
+      "计量数字讲师": [
+        {
+          "name": "培训资料",
+          "level": 1,
+          "children": []
+        },
+        {
+          "name": "操作手册",
+          "level": 1,
+          "children": []
+        },
+        {
+          "name": "技术方案",
+          "level": 1,
+          "children": []
+        }
+      ],
+      "专家系统知识库": [
+        {
+          "name": "运维规程",
+          "level": 1,
+          "children": []
+        },
+        {
+          "name": "技术规范",
+          "level": 1,
+          "children": []
+        },
+        {
+          "name": "培训资料",
+          "level": 1,
+          "children": []
+        }
+      ],
+      "装表接电知识库": [
+        {
+          "name": "作业指导",
+          "level": 1,
+          "children": []
+        },
+        {
+          "name": "安全规程",
+          "level": 1,
+          "children": []
+        },
+        {
+          "name": "操作手册",
+          "level": 1,
+          "children": []
+        }
+      ],
+      "采集自愈知识库": [
+        {
+          "name": "故障处理",
+          "level": 1,
+          "children": []
+        },
+        {
+          "name": "技术方案",
+          "level": 1,
+          "children": []
+        },
+        {
+          "name": "运维规程",
+          "level": 1,
+          "children": []
+        }
+      ]
+    }
+  },
+
+  "/detail/{id}": {
+    "title": "JJG 596-2012 电子式交流电能表检定规程",
+    "status": "已发布",
+    "parent_category": "计量营销专业知识库",
+    "category_name": "标准规范",
+    "knowledge_type": "检定规程",
+    "source": "国家计量规程",
+    "update_time": "2026-05-15",
+    "score": 5,
+    "tags": ["检定规程", "标准规范", "国家计量规程"],
+    "description": "电子式交流电能表检定规程，适用于新制造、使用中和修理后的电子式交流电能表的检定。",
+    "content": "本规程适用于参比频率为50Hz的电子式交流电能表的检定。规程规定了检定条件、检定项目、检定方法及检定结果的处理等内容。主要技术内容包括：1. 外观检查；2. 绝缘电阻测定；3. 基本误差检定；4. 起动试验；5. 潜动试验；6. 常数试验等。"
+  },
+
+  "/quality-metrics": {
+    "overall_score": 88.5,
+    "metrics": [
+      { "name": "准确性", "value": 92 },
+      { "name": "完整性", "value": 85 },
+      { "name": "时效性", "value": 88 },
+      { "name": "一致性", "value": 90 },
+      { "name": "可理解性", "value": 87 }
+    ]
+  },
+
+  "/bases/{id}": {
+    "kb": {
+      "cai_ji_zi_yu": {
+        "name": "采集自愈知识库",
+        "description": "电力采集消缺与自愈恢复经验知识",
+        "icon": "plug",
+        "color": "#00d4ff",
+        "doc_count": 8,
+        "tags": [
+          {
+            "id": "t001",
+            "level": 1,
+            "name": "故障处理",
+            "parent_tag_id": null,
+            "children": [
+              { "id": "t002", "level": 2, "name": "采集故障", "parent_tag_id": "t001", "children": [] },
+              { "id": "t003", "level": 2, "name": "通信故障", "parent_tag_id": "t001", "children": [] }
+            ]
+          },
+          {
+            "id": "t004",
+            "level": 1,
+            "name": "技术方案",
+            "parent_tag_id": null,
+            "children": []
+          }
+        ]
+      }
+    },
+    "documents": {
+      "cai_ji_zi_yu": {
+        "items": [
+          {
+            "id": "d0001",
+            "kb_id": "cai_ji_zi_yu",
+            "file_name": "采集终端故障处理流程.docx",
+            "file_path": "upload/fault_handle.docx",
+            "file_size": 65536,
+            "mime_type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            "status": "completed",
+            "chunk_count": 12,
+            "vector_count": 12,
+            "tags": [],
+            "created_at": "2026-03-10",
+            "updated_at": "2026-03-12"
+          },
+          {
+            "id": "d0002",
+            "kb_id": "cai_ji_zi_yu",
+            "file_name": "采集终端远程升级技术方案.docx",
+            "file_path": "upload/remote_upgrade.docx",
+            "file_size": 53248,
+            "mime_type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            "status": "completed",
+            "chunk_count": 8,
+            "vector_count": 8,
+            "tags": [],
+            "created_at": "2025-12-14",
+            "updated_at": "2025-12-15"
+          },
+          {
+            "id": "d0003",
+            "kb_id": "cai_ji_zi_yu",
+            "file_name": "台区采集自愈典型案例.docx",
+            "file_path": "upload/self_heal_cases.docx",
+            "file_size": 81920,
+            "mime_type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            "status": "completed",
+            "chunk_count": 15,
+            "vector_count": 15,
+            "tags": [],
+            "created_at": "2026-01-05",
+            "updated_at": "2026-01-08"
+          }
+        ],
+        "total": 3,
+        "page": 1,
+        "page_size": 20
+      }
+    },
+    "tags_tree": {
+      "cai_ji_zi_yu": [
+        {
+          "id": "t001",
+          "level": 1,
+          "name": "故障处理",
+          "parent_tag_id": null,
+          "children": [
+            { "id": "t002", "level": 2, "name": "采集故障", "parent_tag_id": "t001", "children": [] },
+            { "id": "t003", "level": 2, "name": "通信故障", "parent_tag_id": "t001", "children": [] }
+          ]
+        },
+        {
+          "id": "t004",
+          "level": 1,
+          "name": "技术方案",
+          "parent_tag_id": null,
+          "children": []
+        }
+      ]
+    },
+    "chunks": [
+      {
+        "id": "ch001",
+        "document_id": "d0001",
+        "kb_id": "cai_ji_zi_yu",
+        "content": "故障排查的第一步是确认故障现象，包括采集失败率、通信超时次数等关键指标。根据现象分类后，进入对应的排查流程。",
+        "chunk_index": 0,
+        "chunk_type": "child",
+        "parent_chunk_id": null,
+        "vector_id": "v001",
+        "metadata_json": "{}"
+      },
+      {
+        "id": "ch002",
+        "document_id": "d0001",
+        "kb_id": "cai_ji_zi_yu",
+        "content": "采集终端通信故障的常见原因包括：信号干扰、天线松动、SIM卡欠费等。建议按照以下顺序逐一排查：1.检查信号强度；2.检查天线连接；3.确认SIM卡状态。",
+        "chunk_index": 1,
+        "chunk_type": "child",
+        "parent_chunk_id": null,
+        "vector_id": "v002",
+        "metadata_json": "{}"
+      },
+      {
+        "id": "ch003",
+        "document_id": "d0001",
+        "kb_id": "cai_ji_zi_yu",
+        "content": "远程升级前需确认以下条件：1.终端在线且信号稳定；2.升级包版本正确；3.备份当前配置。升级过程中如遇断连，系统将自动回滚至原版本。",
+        "chunk_index": 2,
+        "chunk_type": "child",
+        "parent_chunk_id": null,
+        "vector_id": "v003",
+        "metadata_json": "{}"
+      }
+    ]
+  }
+}
