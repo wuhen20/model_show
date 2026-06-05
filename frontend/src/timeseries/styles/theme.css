@@ -1,0 +1,358 @@
+/* ============================================================
+   时序功能 · 深色科技主题（与 model_show 主系统统一配色）
+   主色：青色 #00d4ff，底色：近黑 rgb(17,24,39)/rgb(13,17,23)
+   仅做视觉层增强，不改动任何业务逻辑 / DOM 结构 / 交互行为
+   ============================================================ */
+
+:root {
+  /* ---- 品牌 / 强调色（与主系统一致的科技青）---- */
+  --tech-accent: #00d4ff;          /* 主强调（= 主系统 #00d4ff）*/
+  --tech-cyan: #5ee7ff;            /* 高亮青 */
+  --tech-blue: #00a6cc;
+  --tech-accent-soft: rgba(0, 212, 255, 0.14);
+  --tech-gradient: linear-gradient(135deg, #00d4ff 0%, #5ee7ff 100%);
+  --tech-gradient-v: linear-gradient(180deg, #5ee7ff 0%, #00d4ff 100%);
+
+  /* ---- 面板 / 边框 / 发光（近黑 + 青色描边，对齐主系统）---- */
+  --tech-panel-bg: linear-gradient(160deg, rgba(17, 24, 39, 0.85) 0%, rgba(13, 17, 23, 0.9) 100%);
+  --tech-panel-bg-solid: #111827;
+  --tech-panel-border: rgba(0, 212, 255, 0.18);
+  --tech-panel-border-strong: rgba(0, 212, 255, 0.5);
+  --tech-glow: 0 0 22px rgba(0, 212, 255, 0.16);
+  --tech-glow-cyan: 0 0 16px rgba(0, 212, 255, 0.35);
+
+  --tech-radius: 12px;
+  --tech-radius-sm: 8px;
+
+  /* ============ Element Plus 令牌覆盖（一处定义，全组件统一深色青）============ */
+  --el-color-primary: #00d4ff;
+  --el-color-primary-light-3: #4cdcff;
+  --el-color-primary-light-5: #7fe6ff;
+  --el-color-primary-light-7: #a9eeff;
+  --el-color-primary-light-8: #c6f4ff;
+  --el-color-primary-light-9: rgba(0, 212, 255, 0.16);
+  --el-color-primary-dark-2: #00a6cc;
+
+  --el-color-success: #00ff88;
+  --el-color-warning: #ffaa00;
+  --el-color-danger: #ff5555;
+  --el-color-error: #ff5555;
+  --el-color-info: #8aa0c0;
+
+  /* 背景层（近黑）*/
+  --el-bg-color: #111827;                       /* 组件主背景（卡片/输入）*/
+  --el-bg-color-overlay: #161e2e;               /* 浮层（下拉/日期面板/消息）*/
+  --el-bg-color-page: #0d1117;
+
+  /* 文本（白系，对齐主系统）*/
+  --el-text-color-primary: #ffffff;
+  --el-text-color-regular: rgba(255, 255, 255, 0.85);
+  --el-text-color-secondary: rgba(255, 255, 255, 0.6);
+  --el-text-color-placeholder: rgba(255, 255, 255, 0.35);
+  --el-text-color-disabled: rgba(255, 255, 255, 0.25);
+
+  /* 边框（青色透明）*/
+  --el-border-color: rgba(0, 212, 255, 0.22);
+  --el-border-color-light: rgba(0, 212, 255, 0.16);
+  --el-border-color-lighter: rgba(0, 212, 255, 0.12);
+  --el-border-color-extra-light: rgba(0, 212, 255, 0.08);
+  --el-border-color-dark: rgba(0, 212, 255, 0.3);
+  --el-border-color-hover: var(--tech-accent);
+
+  /* 填充 */
+  --el-fill-color: rgba(255, 255, 255, 0.06);
+  --el-fill-color-light: rgba(255, 255, 255, 0.05);
+  --el-fill-color-lighter: rgba(255, 255, 255, 0.04);
+  --el-fill-color-blank: rgba(255, 255, 255, 0.04);             /* 输入框底色 */
+  --el-mask-color: rgba(8, 12, 22, 0.75);
+  --el-mask-color-extra-light: rgba(8, 12, 22, 0.4);
+
+  /* 表格专用 */
+  --el-table-bg-color: transparent;
+  --el-table-tr-bg-color: transparent;
+  --el-table-header-bg-color: rgba(0, 212, 255, 0.08);
+  --el-table-header-text-color: rgba(255, 255, 255, 0.85);
+  --el-table-text-color: rgba(255, 255, 255, 0.8);
+  --el-table-border-color: rgba(0, 212, 255, 0.14);
+  --el-table-row-hover-bg-color: rgba(0, 212, 255, 0.1);
+  --el-table-current-row-bg-color: rgba(0, 212, 255, 0.16);
+
+  --el-disabled-bg-color: rgba(255, 255, 255, 0.03);
+  --el-box-shadow-light: var(--tech-glow);
+
+  --el-font-family: "Inter", "HarmonyOS Sans SC", "PingFang SC", "Microsoft YaHei",
+                    -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+}
+
+/* 注意：全局 html/body 背景与滚动条样式保留 model_show 主系统风格，
+   此处仅定义 Element Plus 组件级深色主题与 :root 设计变量，供时序功能页面使用。 */
+::selection { background: rgba(0, 212, 255, 0.3); color: #fff; }
+
+/* ============================================================
+   卡片 / 面板（青色描边 + 顶部高亮 + 角标，与主系统同色系）
+   ============================================================ */
+.el-card {
+  position: relative;
+  border: 1px solid var(--tech-panel-border) !important;
+  border-top: 2px solid var(--tech-accent) !important;
+  border-radius: var(--tech-radius) !important;
+  background: var(--tech-panel-bg) !important;
+  box-shadow: var(--tech-glow) !important;
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  color: var(--el-text-color-regular);
+  overflow: hidden;
+  transition: box-shadow .28s ease, border-color .28s ease;
+}
+/* 左上 / 右下 角标 */
+.el-card::before,
+.el-card::after {
+  content: "";
+  position: absolute;
+  width: 14px; height: 14px;
+  pointer-events: none;
+  opacity: .85;
+}
+.el-card::before {
+  top: 5px; left: 5px;
+  border-top: 2px solid var(--tech-cyan);
+  border-left: 2px solid var(--tech-cyan);
+}
+.el-card::after {
+  bottom: 5px; right: 5px;
+  border-bottom: 2px solid var(--tech-cyan);
+  border-right: 2px solid var(--tech-cyan);
+}
+.el-card:hover {
+  border-color: var(--tech-panel-border-strong) !important;
+  box-shadow: var(--tech-glow), var(--tech-glow-cyan) !important;
+}
+
+.el-card__header {
+  border-bottom: 1px solid var(--tech-panel-border) !important;
+  padding: 14px 20px !important;
+  background: linear-gradient(180deg, rgba(0, 212, 255, 0.08) 0%, rgba(0, 212, 255, 0) 100%);
+}
+.el-card__header .card-header,
+.el-card__header > span {
+  font-size: 16px;
+  font-weight: 600;
+  color: #ffffff;
+  letter-spacing: .5px;
+}
+.el-card__header .card-header::before {
+  content: "";
+  display: inline-block;
+  width: 4px;
+  height: 15px;
+  margin-right: 10px;
+  vertical-align: -2px;
+  border-radius: 2px;
+  background: var(--tech-gradient-v);
+  box-shadow: var(--tech-glow-cyan);
+}
+.el-card__body { padding: 20px; color: var(--el-text-color-regular); }
+
+/* 标题文字（覆盖部分页面里写死的深色 h3/h4） */
+.el-card h3 { color: #ffffff; }
+.el-card h4 { color: rgba(255, 255, 255, 0.85); }
+
+/* ============================================================
+   按钮
+   ============================================================ */
+.el-button {
+  border-radius: 8px;
+  font-weight: 500;
+  transition: transform .15s ease, box-shadow .2s ease, background .2s ease;
+}
+.el-button:hover { transform: translateY(-1px); }
+.el-button--default {
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--tech-panel-border);
+  color: rgba(255, 255, 255, 0.85);
+}
+.el-button--default:hover {
+  background: rgba(0, 212, 255, 0.14);
+  border-color: var(--tech-accent);
+  color: #ffffff;
+}
+.el-button--primary {
+  background: var(--tech-gradient);
+  border: none;
+  color: #04141a;
+  font-weight: 600;
+  box-shadow: 0 4px 14px rgba(0, 212, 255, 0.4);
+}
+.el-button--primary:hover,
+.el-button--primary:focus {
+  background: linear-gradient(135deg, #33ddff 0%, #7ff0ff 100%);
+  box-shadow: 0 6px 20px rgba(0, 212, 255, 0.55);
+}
+.el-button--success { box-shadow: 0 4px 12px rgba(0, 255, 136, 0.28); }
+.el-button.is-disabled,
+.el-button.is-disabled:hover { transform: none; box-shadow: none; opacity: .55; }
+
+/* ============================================================
+   表格
+   ============================================================ */
+.el-table {
+  background: transparent !important;
+  color: var(--el-table-text-color);
+  border-radius: var(--tech-radius-sm);
+  overflow: hidden;
+}
+.el-table,
+.el-table tr,
+.el-table th.el-table__cell,
+.el-table td.el-table__cell {
+  background-color: transparent !important;
+}
+.el-table th.el-table__cell {
+  background: linear-gradient(180deg, rgba(0, 212, 255, 0.12) 0%, rgba(0, 212, 255, 0.06) 100%) !important;
+  color: rgba(255, 255, 255, 0.85) !important;
+  font-weight: 600;
+  height: 48px;
+  border-bottom: 1px solid var(--tech-panel-border) !important;
+}
+.el-table td.el-table__cell { border-bottom: 1px solid rgba(0, 212, 255, 0.1) !important; }
+.el-table__inner-wrapper::before { background-color: var(--tech-panel-border) !important; }
+.el-table--border, .el-table--border .el-table__cell { border-color: rgba(0, 212, 255, 0.14) !important; }
+.el-table--border::after, .el-table--border::before { background-color: var(--tech-panel-border) !important; }
+.el-table__body tr:hover > td.el-table__cell {
+  background: rgba(0, 212, 255, 0.1) !important;
+}
+.el-table__body tr.current-row > td.el-table__cell {
+  background: rgba(0, 212, 255, 0.16) !important;
+}
+.el-table__empty-text { color: rgba(255, 255, 255, 0.5); }
+
+/* ============================================================
+   步骤条
+   ============================================================ */
+.el-steps { padding: 4px 2px; }
+.el-step__title { color: rgba(255, 255, 255, 0.6); }
+.el-step__title.is-process { color: #ffffff; font-weight: 600; }
+.el-step__title.is-finish { color: var(--tech-cyan); }
+.el-step__head.is-process { color: var(--tech-accent); border-color: var(--tech-accent); }
+.el-step__head.is-process .el-step__icon {
+  background: var(--tech-gradient);
+  color: #04141a;
+  border: none;
+  box-shadow: 0 0 0 4px rgba(0, 212, 255, 0.18), var(--tech-glow-cyan);
+}
+.el-step__head.is-finish { color: var(--tech-cyan); border-color: var(--tech-cyan); }
+.el-step__head.is-wait { color: rgba(255, 255, 255, 0.4); border-color: rgba(0, 212, 255, 0.25); }
+.el-step__head.is-wait .el-step__icon { background: rgba(255, 255, 255, 0.04); }
+.el-step__line { background-color: rgba(0, 212, 255, 0.2); }
+
+/* ============================================================
+   标签 / 提示 / 分割线
+   ============================================================ */
+.el-tag { border-radius: 6px; font-weight: 500; background: rgba(0, 212, 255, 0.14); border-color: rgba(0, 212, 255, 0.3); color: #6fe3ff; }
+.el-tag.el-tag--success { background: rgba(0, 255, 136, 0.16); border-color: rgba(0, 255, 136, 0.38); color: #57e6a8; }
+.el-tag.el-tag--warning { background: rgba(255, 170, 0, 0.16); border-color: rgba(255, 170, 0, 0.38); color: #ffc24d; }
+.el-tag.el-tag--danger  { background: rgba(255, 85, 85, 0.16); border-color: rgba(255, 85, 85, 0.4); color: #ff8a8a; }
+.el-tag.el-tag--info    { background: rgba(138, 160, 192, 0.16); border-color: rgba(138, 160, 192, 0.35); color: #aab9d6; }
+
+.el-divider { border-color: var(--tech-panel-border); }
+.el-divider__text { background: transparent; color: var(--tech-cyan); font-weight: 600; }
+
+.el-alert { border-radius: 10px; padding: 12px 16px; border: 1px solid var(--tech-panel-border); }
+.el-alert--info.is-light { background: rgba(0, 212, 255, 0.1); color: #cdeeff; }
+.el-alert--success.is-light { background: rgba(0, 255, 136, 0.12); color: #bff0d8; }
+.el-alert--warning.is-light { background: rgba(255, 170, 0, 0.12); color: #ffe0ab; }
+.el-alert--error.is-light { background: rgba(255, 85, 85, 0.12); color: #ffc2c2; }
+.el-alert__title, .el-alert__description { color: inherit; }
+
+/* ============================================================
+   对话框 / 消息框 / 消息提示
+   ============================================================ */
+.el-overlay { background-color: rgba(6, 10, 20, 0.62); }
+.el-dialog {
+  border-radius: var(--tech-radius);
+  border: 1px solid var(--tech-panel-border);
+  background: var(--tech-panel-bg-solid);
+  box-shadow: 0 24px 70px rgba(2, 8, 22, 0.65), var(--tech-glow);
+  overflow: hidden;
+}
+.el-dialog__header { background: linear-gradient(180deg, rgba(0, 212, 255, 0.1), rgba(0, 212, 255, 0)); margin: 0; padding: 18px 22px; border-bottom: 1px solid var(--tech-panel-border); }
+.el-dialog__title { font-weight: 600; color: #ffffff; }
+.el-dialog__body { padding: 22px; color: var(--el-text-color-regular); }
+.el-message-box { background: var(--tech-panel-bg-solid); border: 1px solid var(--tech-panel-border); border-radius: var(--tech-radius); }
+.el-message-box__title, .el-message-box__content { color: var(--el-text-color-primary); }
+.el-message { background: var(--el-bg-color-overlay); border: 1px solid var(--tech-panel-border); }
+.el-message__content { color: var(--el-text-color-primary) !important; }
+
+/* ============================================================
+   表单 / 输入控件
+   ============================================================ */
+.el-form-item__label { color: rgba(255, 255, 255, 0.7); }
+.el-input__wrapper,
+.el-textarea__inner,
+.el-select__wrapper,
+.el-input-number {
+  background-color: var(--el-fill-color-blank) !important;
+  box-shadow: 0 0 0 1px var(--tech-panel-border) inset !important;
+  border-radius: 8px;
+}
+.el-input__inner, .el-textarea__inner, .el-select__placeholder { color: #ffffff; }
+.el-input__wrapper.is-focus,
+.el-select__wrapper.is-focused,
+.el-textarea__inner:focus {
+  box-shadow: 0 0 0 1px var(--tech-accent) inset, 0 0 0 3px rgba(0, 212, 255, 0.18) !important;
+}
+.el-input.is-disabled .el-input__wrapper { background-color: var(--el-disabled-bg-color) !important; }
+.el-radio__label, .el-checkbox__label { color: rgba(255, 255, 255, 0.85); }
+.el-radio.is-checked .el-radio__label, .el-checkbox.is-checked .el-checkbox__label { color: var(--tech-cyan); }
+.el-radio__inner, .el-checkbox__inner { background-color: var(--el-fill-color-blank); border-color: var(--tech-panel-border); }
+
+/* 浮层：下拉 / 日期面板 / 时间选择 / 自动补全 */
+.el-popper, .el-select-dropdown, .el-picker-panel, .el-autocomplete-suggestion {
+  background: var(--el-bg-color-overlay) !important;
+  border: 1px solid var(--tech-panel-border) !important;
+  color: var(--el-text-color-regular);
+}
+.el-popper.is-light { background: var(--el-bg-color-overlay) !important; border-color: var(--tech-panel-border) !important; color: var(--el-text-color-regular); }
+.el-popper.is-light .el-popper__arrow::before { background: var(--el-bg-color-overlay) !important; border-color: var(--tech-panel-border) !important; }
+.el-popper.is-dark { background: #0d1117 !important; border-color: var(--tech-panel-border) !important; }
+.el-select-dropdown__item { color: var(--el-text-color-regular); }
+.el-select-dropdown__item.is-hovering, .el-select-dropdown__item:hover { background: rgba(0, 212, 255, 0.14) !important; color: #ffffff; }
+.el-select-dropdown__item.is-selected { color: var(--tech-cyan) !important; font-weight: 600; }
+.el-date-table td.today .el-date-table-cell__text { color: var(--tech-cyan); }
+.el-date-table td.current:not(.disabled) .el-date-table-cell__text { background: var(--tech-accent); color: #04141a; }
+.el-picker-panel__icon-btn, .el-date-picker__header-label, .el-picker-panel__content { color: var(--el-text-color-regular); }
+.el-time-panel { background: var(--el-bg-color-overlay); border-color: var(--tech-panel-border); }
+
+/* 上传拖拽区 */
+.el-upload-dragger {
+  border-radius: var(--tech-radius);
+  border: 1.5px dashed rgba(0, 212, 255, 0.4);
+  background: rgba(0, 212, 255, 0.05);
+  transition: all .25s ease;
+}
+.el-upload-dragger:hover { border-color: var(--tech-cyan); background: rgba(0, 212, 255, 0.12); }
+.el-upload__text { color: rgba(255, 255, 255, 0.85); }
+.el-upload__text em { color: var(--tech-cyan); }
+.el-upload__tip { color: rgba(255, 255, 255, 0.55); }
+.el-icon--upload { color: var(--tech-accent); }
+
+/* 进度条 */
+.el-progress-bar__outer { background-color: rgba(255, 255, 255, 0.08); }
+.el-progress-bar__inner { background: var(--tech-gradient); }
+.el-progress__text { color: var(--el-text-color-regular) !important; }
+
+/* 标签页（下载页） */
+.el-tabs__item { color: rgba(255, 255, 255, 0.6); }
+.el-tabs__item.is-active { color: var(--tech-cyan); }
+.el-tabs__active-bar { background: var(--tech-gradient); height: 3px; }
+.el-tabs__nav-wrap::after { background-color: var(--tech-panel-border); height: 1px; }
+
+/* 结果页 / 空状态 / 分页 / 加载遮罩 */
+.el-result__title p { color: #ffffff; }
+.el-result__subtitle p { color: rgba(255, 255, 255, 0.55); }
+.el-empty__description p, .el-empty__description { color: rgba(255, 255, 255, 0.5); }
+.el-pagination { color: var(--el-text-color-regular); }
+.el-pagination button, .el-pager li { background: transparent !important; color: var(--el-text-color-regular); }
+.el-pager li.is-active { color: var(--tech-cyan); }
+.el-loading-mask { background-color: rgba(13, 17, 23, 0.7); }
+.el-loading-spinner .el-loading-text, .el-loading-spinner .path { color: var(--tech-cyan); stroke: var(--tech-cyan); }

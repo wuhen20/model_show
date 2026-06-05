@@ -17,7 +17,14 @@ const getIconPath = (iconName: string) => {
     'today-calls': 'M12 8v4l3 3',
     'avg-latency': 'M12 12v-4l-3 3',
     'success-rate': 'M22 11.08V12a10 10 0 1 1-5.93-9.14',
-    'total-interfaces': 'M12 2L4.5 20.29l.71.71L12 18l6.79 3 .71-.71z'
+    'total-interfaces': 'M12 2L4.5 20.29l.71.71L12 18l6.79 3 .71-.71z',
+    'sample-total': 'M4 20h16v-2H4v2zm0-6h16v-2H4v2zm0-6h16V6H4v2z',
+    'sample-set': 'M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z',
+    'sample-labeled': 'M22 11.08V12a10 10 0 1 1-5.93-9.14',
+    'sample-quality': 'M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z',
+    'sample-domain': 'M12 2L4.5 20.29l.71.71L12 18l6.79 3 .71-.71z',
+    'sample-score': 'M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z',
+    'sample-update': 'M1 4v6h6M23 20v-6h-6'
   }
   return icons[iconName] || icons['online-models']
 }

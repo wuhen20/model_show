@@ -3,10 +3,19 @@ dist
 *.log
 .env
 .DS_Store
-backend/uploads/
-backend/__pycache__/
-backend/app/**/__pycache__/
+
+# IDE
+.idea/
+.vscode/
+
+# Python 缓存（覆盖所有新增顶层包：routers/services/models/predict_api_chronos2 等）
+__pycache__/
 *.pyc
 *.pyo
 .venv
 venv
+
+# 后端运行期数据（SQLite 库、上传/预处理/整合/预测产物、模型权重池）——不纳入仓库
+backend/uploads/
+backend/data/
+backend/models_pool/

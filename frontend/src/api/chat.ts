@@ -146,3 +146,64 @@ export async function sendChatWithFile(
   if (json.code !== 0) throw new Error(json.message || '请求失败')
   return json.data!
 }
+
+// ========== 目标检测相关接口 ==========
+
+export interface BoundingBox {
+  label: string
+  confidence: number
+  bbox: [number, number, number, number]
+  text?: string
+  severity?: string
+}
+
+export interface DetectionResult {
+  detections: BoundingBox[]
+  raw_response: string
+  tokens: number
+  model: string
+}
+
+export interface DetectionApiConfig {
+  endpoint: string
+  apiKey: string
+  modelId: string
+}
+
+export async function detectObjects(
+  file: File,
+  config: DetectionApiConfig,
+  systemPrompt: string,
+  userPrompt: string
+): Promise<DetectionResult> {
+  const formData = new FormData()
+  formData.append('file', file)
+  formData.append('endpoint', config.endpoint)
+  formData.append('api_key', config.apiKey)
+  formData.append('model_id', config.modelId)
+  formData.append('system_prompt', systemPrompt)
+  formData.append('user_prompt', userPrompt)
+
+  const res = await fetch(`${DIRECT_URL.replace('/api', '')}/api/detection/analyze`, {
+    method: 'POST',
+    body: formData
+  })
+  const json = await res.json()
+  if (json.code !== 0) throw new Error(json.message || json.detail || '检测失败')
+  return json.data as DetectionResult
+}
+
+export async function testApiConnection(config: DetectionApiConfig): Promise<{ message: string; available_models?: string[] }> {
+  const formData = new FormData()
+  formData.append('endpoint', config.endpoint)
+  formData.append('api_key', config.apiKey)
+  formData.append('model_id', config.modelId)
+
+  const res = await fetch(`${DIRECT_URL.replace('/api', '')}/api/detection/test-connection`, {
+    method: 'POST',
+    body: formData
+  })
+  const json = await res.json()
+  if (json.code !== 0) throw new Error(json.message || '连接失败')
+  return json.data || { message: json.message }
+}

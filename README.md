@@ -1,158 +1,108 @@
-# 模型能力展示与体验工作台
+# 模型能力展示与体验工作台 · 融合平台
 
-基于 **Vue 3 + TypeScript + Vite** 前端 + **Python FastAPI** 后端的前后端分离架构，提供模型能力展示、服务体验和调用监控等功能。
+基于 **Vue 3 + TypeScript + Vite** 前端 + **Python FastAPI** 后端的前后端分离架构。本项目在原“模型能力展示与体验工作台”基础上，**融合了 5 个分散子系统的全部功能**，统一在同一套依赖、框架与 UI 风格之下：
+
+| 子系统（来源分支） | 融合后的功能模块 |
+|---|---|
+| `dev-algomodel` | **小模型平台**：平台概览 / 小模型管理 / 训练 / 体验 / 训练数据集 / MCP 服务管理 / MCP 服务测试 |
+| `multimodal-llm` | **多模态目标检测**（计量箱缺陷 / 装表接电工艺 / 电表示数识别） |
+| `sxy-sample-center` | **样本中心**：样本总览 / 样本集管理 / 样本详情（含图片 YOLO 标注、音频转写） |
+| `liuqi-knowledgebase` | **知识管理**：知识图谱、文件夹知识库、用户自建知识库、创建向导 |
+| `time-series-large-model` | **时序大模型**：时序样本集管理 / 时序模型服务（Chronos-2） / 时序模型分析（R²/MAPE） |
 
 ## 技术栈
 
-| 层级 | 技术 | 版本 |
-|------|------|------|
-| 前端 | Vue 3 + TypeScript + Vite | ^3.4 / ^5.3 / ^5.4 |
-| 前端 | Vue Router | ^4.3 |
-| 前端 | Element Plus | ^2.9 |
-| 前端 | ECharts | ^5.5 |
-| 前端 | Sass | ^1.70 |
-| 后端 | Python + FastAPI | >=3.10 / >=0.115 |
-| 后端 | OpenAI SDK | >=1.50 |
-| 后端 | Uvicorn (ASGI) | >=0.30 |
+| 层级 | 技术 |
+|------|------|
+| 前端 | Vue 3 + TypeScript + Vite，Vue Router，Element Plus + @element-plus/icons-vue，ECharts，axios，@vue-office（docx/excel/pdf/pptx），Sass |
+| 后端 | Python + FastAPI + Uvicorn，OpenAI SDK，SQLAlchemy（小模型平台），PyMySQL（样本中心），neo4j/minio（知识管理），pandas/openpyxl/chronos-forecasting/torch（时序） |
 
-## 项目结构
+## 统一导航（两级菜单）
 
 ```
-model_show/
-├── frontend/                    # 前端 (Vue 3 + TypeScript + Vite)
-│   ├── src/
-│   │   ├── api/                 # API 请求层
-│   │   │   └── chat.ts
-│   │   ├── components/          # 公共组件
-│   │   │   ├── Header.vue       # 顶部导航
-│   │   │   ├── Sidebar.vue      # 侧边栏菜单
-│   │   │   ├── StatsCard.vue    # 统计卡片
-│   │   │   ├── ModelTable.vue   # 模型服务列表
-│   │   │   ├── ServiceDetail.vue # 服务详情面板
-│   │   │   ├── TaskPanel.vue    # 待办事项面板
-│   │   │   ├── FlowChart.vue    # 服务流量分布图表
-│   │   │   ├── InvokeChart.vue  # 调用趋势图表
-│   │   │   ├── InterfacePanel.vue # 接口调试面板
-│   │   │   └── ServiceOverview.vue # 服务质量概览
-│   │   ├── views/               # 页面
-│   │   │   ├── Home.vue         # 工作台首页
-│   │   │   ├── AbilityExperience.vue # 能力体验页
-│   │   │   └── ModelService.vue # 模型服务页
-│   │   ├── data/                # 模拟数据
-│   │   │   └── models.ts
-│   │   ├── router/              # 路由配置
-│   │   │   └── index.ts
-│   │   ├── App.vue
-│   │   ├── main.ts
-│   │   └── style.scss
-│   ├── public/                  # 静态资源
-│   ├── index.html
-│   ├── package.json
-│   ├── vite.config.ts
-│   └── tsconfig.json
-├── backend/                     # 后端 (Python FastAPI)
-│   ├── app/
-│   │   ├── api/routes/          # API 路由
-│   │   │   ├── chat.py          # 对话接口 (流式+文件上传)
-│   │   │   └── models.py        # 模型列表接口
-│   │   ├── core/
-│   │   │   └── config.py        # 配置管理 (环境变量)
-│   │   ├── schemas/
-│   │   │   └── chat.py          # Pydantic 数据模型
-│   │   ├── services/
-│   │   │   └── ai_service.py    # AI 调用服务层
-│   │   └── main.py              # FastAPI 入口
-│   ├── requirements.txt         # Python 依赖
-│   ├── .env                     # 环境变量 (已 gitignore)
-│   └── .env.example             # 环境变量模板
-├── .gitignore
-└── README.md
+工作台首页              /                          原系统智能问答工作台
+能力体验                /ability-experience
+模型服务 ▾
+  ├ 模型服务总览        /model-service
+  ├ 多模态目标检测       /multimodal-detection
+  └ 时序模型服务        /timeseries/model-service
+小模型平台 ▾（统一外壳 SmLayout）
+  ├ 平台概览           /sm
+  ├ 小模型管理         /models  (+ /models/:code)
+  ├ 小模型训练         /training
+  ├ 小模型体验         /experience  (+ /experience/:code)
+  ├ 训练数据集         /datasets
+  ├ MCP 服务管理       /mcp
+  └ MCP 服务测试       /mcp/test
+知识管理                /knowledge-management  (+ /knowledge-detail/:id、/knowledge-create、/knowledge-base/:id、/folder-kb/:name)
+样本中心                /sample
+样本集管理 ▾
+  ├ 样本集管理         /sample-set  (+ /sample-detail)
+  └ 时序样本集管理      /timeseries/sample-set
+评测分析 ▾
+  └ 时序模型分析        /timeseries/analysis
+接口管理 / 场景配置 / 运行监控 / 日志中心 / 系统设置   （原系统预留入口）
 ```
 
-## 页面说明
+> **布局约定**：原系统及知识管理/样本中心/多模态/时序等视图采用「每视图自带 Header+Sidebar」布局；小模型平台的内容型视图统一由 `layouts/SmLayout.vue` 外壳承载，并保留其原始路径（`/models`、`/experience` 等），因此内部跳转无需改动。
 
-### 1. 工作台首页 `/`
+## 后端 API 命名空间
 
-- 顶部统计卡片：在线服务数、已部署模型、今日调用量、平均响应、成功率、接口总数
-- 模型服务列表：展示服务名称、基础模型、QPS、状态，支持筛选和操作
-- 服务详情面板：基本信息、资源配置（GPU/显存/存储）、发布参数
-- 待办事项与操作日志
-- 服务流量分布饼图
-- 调用趋势折线图
-- 接口调试面板
+| 前缀 | 模块 |
+|------|------|
+| `/api/models`、`/api/chat`、`/api/llm-models` | 原系统：LLM 列表 / 对话 |
+| `/api/sm/dashboard`、`/api/sm/models`、`/api/sm/predict` | 小模型平台（与原 LLM `/api/models` 区分，统一收敛到 `/api/sm`） |
+| `/api/detection` | 多模态目标检测 |
+| `/api/sample` | 样本中心（MySQL） |
+| `/api/knowledge`、`/api/knowledge/folder` | 知识管理（Memgraph / LightRAG 可选） |
+| `/api/upload`、`/api/process`、`/api/merge`、`/api/download`、`/api/predict`、`/api/analysis` | 时序功能 |
 
-### 2. 能力体验页 `/ability-experience`
-
-- 四大模型方向入口：语言模型、视觉模型、时序模型、语音模型
-- 业务场景能力卡片：台区线损分析、采集自愈、电压质量研判、现场图片识别
-- 统一能力架构分层展示
-- 在线体验输入区
-- 接口服务目录
-
-### 3. 模型服务页 `/model-service`
-
-- 多模型选择器（Qwen3-14B / Qwen3-VL / Chroma2 / Qwen-ASR）
-- 场景模板库
-- 模型输出结果展示（异常等级、描述、处置建议）
-- 调用与性能监控图表
-- 服务质量概览
+API 文档：http://localhost:3002/docs
 
 ## 快速开始
 
-### 1. 启动后端
+### 1. 后端（端口 3002）
 
 ```bash
 cd backend
-
-# 安装 Python 依赖
 pip install -r requirements.txt
-
-# 复制环境变量配置 (首次运行)
-cp .env.example .env
-# 编辑 .env 填入你的 DASHSCOPE_API_KEY
-
-# 启动后端服务 (端口 3002)
-python -m app.main
-# 或: uvicorn app.main:app --host 0.0.0.0 --port 3002 --reload
+#   · RTX 50 系（Blackwell）：torch>=2.7.0 torchvision>=0.22.0 --index-url https://download.pytorch.org/whl/cu128
+cp .env.example .env          # 填入 DASHSCOPE_API_KEY，按需配置 Memgraph/LightRAG/MySQL/Chronos 路径
+python -m app.main            # 或 uvicorn app.main:app --host 0.0.0.0 --port 3002 --reload
 ```
 
-API 文档自动生成: http://localhost:3002/docs
+> 各模块的外部依赖（样本中心 MySQL、知识管理 Memgraph/LightRAG、时序 Chronos-2 权重）均为**可选**：未启用时对应接口降级，平台与其它模块仍可正常启动运行。相关开关见 `app/core/config.py`（`memgraph_enabled`、`lightrag_enabled`、`db_*`、`CHRONOS2_MODEL_PATH` 等）。
 
-### 2. 启动前端
+### 2. 前端（端口 5173，`/api` 已代理到 3002）
 
 ```bash
 cd frontend
-
-# 安装依赖
 npm install --registry=https://registry.npmmirror.com
-
-# 启动开发服务器 (端口 5173)
-npm run dev
-
-# 构建生产版本
-npm run build
-
-# 预览构建产物
-npm run preview
+npm run dev        # 开发
+npm run build      # 生产构建
 ```
 
-启动后访问 `http://localhost:5173`
+访问 `http://localhost:5173`
 
-## API 接口
+## 目录结构（融合后要点）
 
-| 接口路径 | 方法 | 说明 |
-|----------|------|------|
-| `/api/models` | GET | 获取可用模型列表 |
-| `/api/chat` | POST | 流式对话 (SSE) |
-| `/api/chat/upload` | POST | 文件上传对话 (支持图片) |
-| `/api/health` | GET | 健康检查 |
-| `/docs` | GET | Swagger API 文档 |
-
-## 环境变量说明
-
-| 变量 | 说明 | 默认值 |
-|------|------|--------|
-| `DASHSCOPE_API_KEY` | 阿里云百炼 API Key | (必填) |
-| `DASHSCOPE_BASE_URL` | API 地址 | `https://dashscope.aliyuncs.com/compatible-mode/v1` |
-| `SERVER_PORT` | 后端端口 | `3002` |
-| `CORS_ORIGIN` | 允许跨域来源 | `*` |
+```
+backend/
+├── app/
+│   ├── api/routes/   chat, models（LLM）, dashboard, sm_models, predict（小模型）, detection, sample, knowledge, folder_kb, kb_management
+│   ├── core/         config.py（全模块配置并集）, database.py（样本中心 MySQL）
+│   ├── db/ registry/ schemas/model.py   小模型平台（SQLAlchemy + 注册表）
+│   ├── services/     ai_service + 知识管理服务（db/fake/folder_kb/lightrag/memgraph/storage/sync）
+│   └── main.py       注册全部路由 + 统一 lifespan
+├── routers/ services/ models/ predict_api_chronos2/   时序功能（顶层包，main.py 注入 sys.path）
+└── requirements.txt  全模块依赖并集
+frontend/src/
+├── layouts/SmLayout.vue          小模型平台外壳
+├── components/                   原系统 + 知识管理（Knowledge*/Tag*/Folder* 等）+ ImageViewer
+├── views/                        全部模块页面
+├── timeseries/                   时序功能前端（api/components/views/styles）
+├── api/  chat.ts(含检测), models.ts(/api/sm), sample.ts, knowledge.ts
+├── data/ models.ts(LLM/服务), smModels.ts(小模型), detectionScenes.ts
+├── router/index.ts               统一路由
+└── components/Sidebar.vue        统一两级导航
+```

@@ -1,16 +1,24 @@
 {
   "name": "model-show",
-  "version": "1.0.0",
-  "description": "模型能力展示与体验工作台",
+  "version": "3.0.0",
+  "description": "模型能力展示与体验工作台 · 融合平台（小模型/知识管理/多模态检测/样本中心/时序大模型）",
   "scripts": {
     "dev": "vite",
-    "build": "vue-tsc && vite build",
-    "preview": "vite preview"
+    "build": "vite build",
+    "preview": "vite preview",
+    "type-check": "vue-tsc --noEmit"
   },
   "dependencies": {
+    "@element-plus/icons-vue": "^2.3.1",
+    "@vue-office/docx": "^1.6.3",
+    "@vue-office/excel": "^1.7.14",
+    "@vue-office/pdf": "^2.0.10",
+    "@vue-office/pptx": "^1.0.1",
+    "axios": "^1.6.5",
     "echarts": "^5.5.0",
     "element-plus": "^2.9.7",
     "vue": "^3.4.21",
+    "vue-demi": "^0.14.6",
     "vue-router": "^4.3.0"
   },
   "devDependencies": {
