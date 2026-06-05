@@ -1,4 +1,4 @@
-# 人工智能平台 · 知识图谱生成与展示系统
+# 知识管理模块 · 知识图谱生成与展示系统
 
 ## 目录
 
@@ -28,19 +28,16 @@
 - [Memgraph 数据模型](#memgraph-数据模型)
 - [后端 API](#后端-api)
   - [知识统计](#知识统计数据源文件系统扫描)
+  - [知识质量度量](#知识质量度量)
   - [文件夹知识库](#文件夹知识库核心-api数据源文件系统扫描)
-  - [知识库管理](#知识库管理-crud)
+  - [知识库管理 CRUD](#知识库管理-crud)
   - [知识图谱](#知识图谱)
-  - [AI 对话](#ai-对话)
-  - [模型配置](#模型配置)
 - [前端展示](#前端展示)
   - [页面路由](#页面路由)
   - [知识管理首页](#知识管理首页)
   - [知识库详情页](#知识库详情页folderkbdetail)
   - [用户自建知识库详情页](#用户自建知识库详情页knowledgebasedetail)
   - [创建知识库向导](#创建知识库向导knowledgecreate)
-  - [模型服务页](#模型服务页)
-  - [能力体验页](#能力体验页)
   - [前端组件清单](#前端组件清单)
 - [数据备份](#数据备份)
 - [重新生成图谱](#重新生成图谱)
@@ -50,14 +47,11 @@
 
 ## 系统概述
 
-本系统是一个完整的 AI 平台，包含**知识管理**、**模型服务**和**AI 对话**三大模块。知识管理模块从文件夹知识库中提取文档，通过 LightRAG + LLM 自动生成知识图谱，存入 Memgraph 图数据库，并在前端页面实时展示。首页数据完全基于文件系统实时扫描，确保数据一致性。
+本系统是 AI 平台的**知识管理模块**，从文件夹知识库中提取文档，通过 LightRAG + LLM 自动生成知识图谱，存入 Memgraph 图数据库，并在前端页面实时展示。首页数据完全基于文件系统实时扫描，确保数据一致性。
 
 ```
 原始文档 → LightRAG(LLM抽取) → Memgraph(存储) → FastAPI(API) → Vue3(展示)
                 ↘ 文件系统扫描 → 统计/趋势/资产数据 → 前端展示
-
-用户提问 → AI Service(阿里百炼) → 流式响应 → 前端展示
-文件上传 → 图片/文档分析 → 多模态响应 → 前端展示
 ```
 
 ---
@@ -88,7 +82,6 @@
 | FastAPI | Web 框架 |
 | Uvicorn | ASGI 服务器 |
 | Pydantic / pydantic-settings | 数据校验与设置管理 |
-| OpenAI | LLM 调用（对话 + LightRAG） |
 | Neo4j | 图数据库驱动（Memgraph） |
 | MinIO | 对象存储（可选） |
 | httpx | 异步 HTTP 客户端 |
@@ -133,19 +126,15 @@
     │   │   ├── api/routes/
     │   │   │   ├── knowledge.py         # 知识API（统计/图谱/LightRAG代理/质量度量）
     │   │   │   ├── folder_kb.py         # 文件夹KB API（趋势/资产/来源分布/文件列表/预览）
-    │   │   │   ├── kb_management.py     # KB管理CRUD + 文档上传 + LightRAG同步
-    │   │   │   ├── chat.py              # AI对话（流式/文件上传）
-    │   │   │   └── models.py            # 模型配置API
+    │   │   │   └── kb_management.py     # KB管理CRUD + 文档上传 + LightRAG同步
     │   │   ├── services/
     │   │   │   ├── memgraph_service.py   # Memgraph查询
     │   │   │   ├── lightrag_service.py   # LightRAG代理
     │   │   │   ├── folder_kb_service.py  # 文件夹KB扫描（核心数据源）
     │   │   │   ├── db_service.py         # SQLite数据服务（KB/标签/文档/切片CRUD）
     │   │   │   ├── storage_service.py    # 文件存储抽象（本地/MinIO）
-    │   │   │   ├── sync_service.py       # LightRAG增量同步
-    │   │   │   └── ai_service.py         # AI对话服务（阿里百炼）
+    │   │   │   └── sync_service.py       # LightRAG增量同步
     │   │   ├── schemas/
-    │   │   │   ├── chat.py               # 对话请求/响应模型
     │   │   │   ├── folder_kb.py          # 文件夹KB数据模型
     │   │   │   ├── knowledge.py          # 知识数据模型
     │   │   │   └── knowledge_base.py     # KB/标签/文档/切片数据模型
@@ -168,33 +157,19 @@
             │   ├── GraphDetailModal.vue   # 图谱全屏详情模态框
             │   ├── FolderTagItem.vue      # 文件夹标签药片组件
             │   ├── StatsCard.vue          # 统计卡片组件
-            │   ├── Header.vue             # 全局顶栏
-            │   ├── Sidebar.vue            # 全局侧栏
             │   ├── ColorSelector.vue      # 颜色选择器（创建KB用）
             │   ├── IconSelector.vue       # 图标选择器（创建KB用）
             │   ├── TagNode.vue            # 标签树节点
             │   ├── TagCheckbox.vue        # 标签复选框
-            │   ├── TagTreeReadonly.vue    # 只读标签树
-            │   ├── BusinessDomain.vue     # 业务域卡片
-            │   ├── ModelTable.vue         # 模型列表表格
-            │   ├── ServiceDetail.vue      # 服务详情面板
-            │   ├── ServiceOverview.vue    # 服务概览
-            │   ├── TaskPanel.vue          # 任务面板
-            │   ├── FlowChart.vue          # 流程图
-            │   ├── InterfacePanel.vue     # 接口面板
-            │   └── InvokeChart.vue        # 调用量图表
+            │   └── TagTreeReadonly.vue    # 只读标签树
             ├── views/
-            │   ├── Home.vue               # 模型服务首页
-            │   ├── ModelService.vue       # 模型服务管理页
-            │   ├── AbilityExperience.vue  # 能力体验页
             │   ├── KnowledgeManagement.vue  # 知识管理页
             │   ├── KnowledgeDetail.vue    # 知识详情页
             │   ├── KnowledgeCreate.vue    # 创建知识库向导
             │   ├── KnowledgeBaseDetail.vue  # 用户自建KB详情页
             │   └── FolderKBDetail.vue     # 文件夹KB详情页（含文件下钻）
             └── api/
-                ├── knowledge.ts           # 知识管理API接口
-                └── chat.ts                # AI对话API接口
+                └── knowledge.ts           # 知识管理API接口
 ```
 
 ---
@@ -282,12 +257,9 @@
 | `default_chunk_size` | 500 | 默认切片大小 |
 | `default_chunk_overlap` | 50 | 默认切片重叠 |
 | `default_parent_chunk_size` | 1500 | 默认父切片大小 |
-| `dashscope_api_key` | 空 | 阿里百炼 API Key（对话用） |
-| `dashscope_base_url` | 阿里百炼兼容端点 | OpenAI 兼容接口地址 |
 | `lightrag_base_url` | http://127.0.0.1:9621 | LightRAG 服务地址 |
 | `memgraph_uri` | bolt://localhost:7687 | Memgraph 连接地址 |
 | `knowledge_base_dir` | 知识库文件夹 | 文件夹KB根目录 |
-| `models` | [qwen-plus, qwen-vl-plus] | 可用模型列表配置 |
 
 ---
 
@@ -299,7 +271,6 @@
 |------|------|------|
 | Memgraph | bolt://localhost:7687 | 图数据库，Docker 启动 |
 | SiliconFlow API | api.siliconflow.cn | 图谱生成用 LLM + Embedding |
-| 阿里百炼 API | dashscope.aliyuncs.com | AI 对话用 LLM（Qwen2-72B, Qwen-VL-Plus） |
 
 ### 启动 Memgraph
 
@@ -340,12 +311,6 @@ npm run build
 LLM_API_KEY=sk-xxx                    # SiliconFlow API Key
 LLM_MODEL=Qwen/Qwen3.6-35B-A3B       # LLM模型
 EMBEDDING_MODEL=Qwen/Qwen3-Embedding-0.6B  # 嵌入模型
-```
-
-在 `model_show/backend/.env` 中配置 AI 对话 LLM：
-
-```env
-DASHSCOPE_API_KEY=sk-xxx              # 阿里百炼 API Key
 ```
 
 ---
@@ -743,39 +708,6 @@ GET /api/knowledge/graph?full=true            # 返回完整图谱（最多5000�
 
 **Demo 模式**：当 `demo_mode=True` 时，图谱 API 返回完整统计信息，但实际节点/连线数限制为 `graph_demo_max_nodes`（默认2000），确保前端性能。`full=True` 可绕过此限制。
 
-### AI 对话
-
-```
-POST /api/chat                   # 流式对话（SSE）
-POST /api/chat/upload            # 带文件上传的对话
-```
-
-**流式对话**：使用 OpenAI 兼容协议（阿里百炼）实现流式输出，前端通过 SSE 接收：
-- 请求体：`{ model_id, question, history[], stream: true }`
-- 响应格式：`text/plain; charset=utf-8`，以 `\n\n---END---` 分隔元数据（token 数、模型名）
-- 错误响应：以 `\n\n---ERROR---` 分隔错误信息
-
-**文件上传对话**：支持图片和文档分析：
-- 图片文件（jpg/png/gif/webp/bmp）→ 多模态视觉理解（Qwen-VL-Plus）
-- 其他文件 → 追加文件名信息后文本对话（Qwen2-72B）
-
-**模型配置**（在 `config.py` 中定义）：
-
-| 模型 ID | 名称 | 类型 | 说明 |
-|---------|------|------|------|
-| `qwen-plus` | Qwen2-72B | 语言模型 | 复杂对话与分析，电力业务专用 system prompt |
-| `qwen-vl-plus` | Qwen-VL-Plus | 视觉模型 | 多模态图像理解，电力设备图像分析 |
-
-每个模型配置包含：`model_id`、`max_tokens`、`temperature`、`system_prompt`。
-
-### 模型配置
-
-```
-GET /api/models                  # 获取可用模型列表
-```
-
-返回当前配置的所有模型信息，供前端模型选择器使用。
-
 ---
 
 ## 前端展示
@@ -784,9 +716,6 @@ GET /api/models                  # 获取可用模型列表
 
 | 页面 | 路径 | 说明 |
 |------|------|------|
-| 模型服务首页 | `/` | 模型服务管理中心（统计卡片+模型列表+服务详情） |
-| 模型服务管理 | `/model-service` | 模型服务管理详情页 |
-| 能力体验 | `/ability-experience` | AI 能力体验（对话/文件分析） |
 | 知识管理首页 | `/knowledge-management` | 统计卡片 + 趋势图 + 资产图 + 质量度量 + 资产表 + 图谱 |
 | 知识库管理 | `/knowledge-management?tab=management` | 文件夹KB卡片列表 + 创建KB入口 |
 | 知识能力工具 | `/knowledge-management?tab=tools` | 工具集 |
@@ -857,21 +786,6 @@ GET /api/models                  # 获取可用模型列表
 2. **标签体系**：多层嵌套标签，支持无限层级，子标签选中时自动关联父级
 3. **切片配置**：基础切片/父子切片策略、分隔符、切片大小/重叠、右侧实时预览
 
-### 模型服务页
-
-路径 `/`（默认首页）和 `/model-service`，展示模型服务管理中心：
-- 统计卡片：在线服务数、已部署模型、今日调用量、平均响应、成功率、接口总数
-- 模型列表（ModelTable）：按类型过滤（语言模型/视觉模型/全部）
-- 服务详情面板（ServiceDetail）
-- 调用量图表（InvokeChart）
-
-### 能力体验页
-
-路径 `/ability-experience`，提供 AI 对话交互界面：
-- 模型选择（Qwen2-72B / Qwen-VL-Plus）
-- 文本对话（流式输出）
-- 文件上传分析（图片→视觉理解，其他→文本分析）
-
 ### 前端组件清单
 
 | 组件 | 用途 |
@@ -886,21 +800,12 @@ GET /api/models                  # 获取可用模型列表
 | GraphDetailModal.vue | 图谱全屏详情模态框 |
 | FolderTagItem.vue | 文件夹标签药片组件 |
 | StatsCard.vue | 统计数据卡片 |
-| Header.vue | 全局顶部栏 |
-| Sidebar.vue | 全局侧边导航栏 |
 | ColorSelector.vue | 颜色选择器 |
 | IconSelector.vue | 图标选择器 |
 | TagNode.vue | 标签树节点 |
 | TagCheckbox.vue | 标签复选框 |
 | TagTreeReadonly.vue | 只读标签树展示 |
 | BusinessDomain.vue | 业务域卡片 |
-| ModelTable.vue | 模型列表表格 |
-| ServiceDetail.vue | 服务详情面板 |
-| ServiceOverview.vue | 服务概览 |
-| TaskPanel.vue | 任务面板 |
-| FlowChart.vue | 流程图 |
-| InterfacePanel.vue | 接口面板 |
-| InvokeChart.vue | 调用量图表 |
 
 ### 图谱展示逻辑
 
@@ -1053,12 +958,6 @@ MATCH (n) WHERE n.kb_name = '专家系统知识库' DETACH DELETE n
 - @vue-office 采用前端 `fetch → ArrayBuffer` 方式传入数据，绕开了 CORS 限制
 - `.doc` / `.ppt` 等旧格式不支持在线预览（仅支持 `.docx` / `.xlsx` / `.pptx`）
 - 大文件（>20MB）会被后端拒绝预览
-
-### Q: AI 对话无响应？
-
-1. 确认 `DASHSCOPE_API_KEY` 已配置在 `backend/.env` 中
-2. 确认网络可达 `dashscope.aliyuncs.com`
-3. 流式对话仅支持 `stream: true` 模式，非流式暂未实现
 
 ### Q: 文档上传后如何同步到知识图谱？
 
