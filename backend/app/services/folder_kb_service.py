@@ -284,6 +284,11 @@ def scan_kb_files(
                 # CRITICAL: _path_to_tag_chain returns ALL ancestor dirs
                 tags = _path_to_tag_chain(rel_dir)
 
+                # Infer knowledge type, source, and score from filename
+                ktype = _infer_knowledge_type(f)
+                source = _infer_source_type(f)
+                score = 5 if any(k in f.upper() for k in ['JJG', 'GB', 'DLT', 'DL/', 'Q/GDW', 'QGDW']) else (4 if '指导书' in f else 3)
+
                 all_files.append({
                     "id": _file_id(rel_path_fwd),
                     "file_name": f,
@@ -292,6 +297,9 @@ def scan_kb_files(
                     "extension": ext.lower(),
                     "tags": tags,
                     "modified_time": datetime.fromtimestamp(stat.st_mtime).isoformat(),
+                    "knowledge_type": ktype,
+                    "source": source,
+                    "score": score,
                 })
 
         # Sort by file name
@@ -331,7 +339,6 @@ def scan_all_kb_files(
       - latest:  sorted by modified_time descending (most recent first)
       - popular: sorted by file_size descending (larger = more content = popular proxy)
       - valuable: files with recognized standard prefixes (JJG, GB, DLT, Q/GDW, etc.)
-      - pending:  files modified in the last 3 days (recently added, awaiting review)
 
     Returns the same shape as the old /api/knowledge/list endpoint for compatibility.
     """

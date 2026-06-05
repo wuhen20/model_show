@@ -20,7 +20,6 @@
       <el-tab-pane label="最新知识" name="latest"></el-tab-pane>
       <el-tab-pane label="热门知识" name="popular"></el-tab-pane>
       <el-tab-pane label="高价值知识" name="valuable"></el-tab-pane>
-      <el-tab-pane label="待审核知识" name="pending"></el-tab-pane>
     </el-tabs>
 
     <el-table :data="tableData" style="width: 100%" :header-cell-style="headerCellStyle">

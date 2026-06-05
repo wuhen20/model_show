@@ -630,7 +630,7 @@ GET /api/knowledge/quality-metrics
 
 ```
 GET /api/knowledge/folder/bases                  # 列出所有KB
-GET /api/knowledge/folder/bases/{name}/files     # KB文件列表（分页+关键词）
+GET /api/knowledge/folder/bases/{name}/files     # KB文件列表（分页+关键词，含知识类型/来源/评分）
 GET /api/knowledge/folder/bases/{name}/tags      # KB标签树
 GET /api/knowledge/folder/bases/{name}/graph     # 合成图(fallback)
 GET /api/knowledge/folder/bases/{name}/preview/{path}  # 文件原始内容预览
@@ -719,7 +719,6 @@ Tab 过滤逻辑：
 | `latest` | 按修改时间倒序 | 3,300 |
 | `popular` | 按质量评分倒序（标准文献5分 > 指导书4分 > 其他3分） | 3,300 |
 | `valuable` | 仅 score≥5 的标准文献（JJG/GB/DLT/Q-GDW等前缀） | 425 |
-| `pending` | 近3天内修改过的文件（刚入库，待处理） | 206 |
 
 每条记录包含：`title`、`category_name`（所属KB）、`knowledge_type`（推断类型）、`source`（推断来源）、`score`、`status`、`update_time`。
 
@@ -810,7 +809,7 @@ GET /api/knowledge/graph?full=true            # 返回完整图谱（最多5000�
 │                  │                  │  本月新增 | 30天  │
 ├──────────────────┴──────┬───────────┴────────────────┤
 │  知识资产表格（只读）     │  知识图谱 + 知识质量概览     │
-│  最新/热门/高价值/待审核  │  (ECharts力导向图 + 五维)   │
+│  最新/热门/高价值  │  (ECharts力导向图 + 五维)   │
 └─────────────────────────┴────────────────────────────┘
 ```
 
@@ -830,7 +829,7 @@ GET /api/knowledge/graph?full=true            # 返回完整图谱（最多5000�
 
 文件列表中的"关联标签"也使用相同配色，与标签体系统一。
 
-**文件下钻与预览：** 点击文件列表中任意行，进入文件详情视图，展示文件元数据和在线预览。不同格式使用对应的预览组件：
+**文件下钻与预览：** 点击文件列表中任意行，进入文件详情视图，展示文件元数据和在线预览。文件元数据包含：文件大小、修改时间、知识类型、知识来源、知识评分（星级展示）、相对路径、关联标签。不同格式使用对应的预览组件：
 
 | 格式 | 预览方式 |
 |---|---|
