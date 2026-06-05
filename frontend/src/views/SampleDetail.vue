@@ -1,0 +1,1524 @@
+<script setup lang="ts">
+import { ref, computed, nextTick, onMounted, watch, onBeforeUnmount } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
+import Header from '@/components/Header.vue'
+import Sidebar from '@/components/Sidebar.vue'
+import { getSamples, getImageUrl, getAnnotations, getAudioText, updateSampleScore, type SampleInfoRow, type AnnotationData, type AnnotationBox } from '@/api/sample'
+import { ElMessage } from 'element-plus'
+
+const route = useRoute()
+const router = useRouter()
+
+const setNo = ref(typeof route.query.setNo === 'string' ? route.query.setNo : '')
+const setName = ref(typeof route.query.setName === 'string' ? route.query.setName : '')
+
+const loading = ref(false)
+const sampleList = ref<SampleInfoRow[]>([])
+const columns = ref<{ key: string; label: string }[]>([])
+
+// 筛选条件
+const filterName = ref('')
+const filterLabelFlag = ref('')
+
+// 分页
+const currentPage = ref(1)
+const pageSize = 20
+
+// 筛选后的数据
+const filteredList = computed(() => {
+  let list = sampleList.value
+  if (filterName.value) {
+    const kw = filterName.value.toLowerCase()
+    list = list.filter(s => String(s.sampleName || '').toLowerCase().includes(kw))
+  }
+  if (filterLabelFlag.value) {
+    list = list.filter(s => String(s.labelFlag || '') === filterLabelFlag.value)
+  }
+  return list
+})
+
+// 当前页数据
+const pagedList = computed(() => {
+  const start = (currentPage.value - 1) * pageSize
+  return filteredList.value.slice(start, start + pageSize)
+})
+
+const totalPages = computed(() => Math.ceil(filteredList.value.length / pageSize))
+
+function handlePageChange(page: number) {
+  currentPage.value = page
+}
+
+function resetFilters() {
+  filterName.value = ''
+  filterLabelFlag.value = ''
+  currentPage.value = 1
+}
+
+// 筛选条件变化时重置页码
+watch([filterName, filterLabelFlag], () => {
+  currentPage.value = 1
+})
+
+async function loadSamples() {
+  if (!setNo.value) return
+  loading.value = true
+  try {
+    const data = await getSamples(setNo.value)
+    sampleList.value = data
+    // 根据返回数据动态生成列
+    if (data.length > 0) {
+      columns.value = Object.keys(data[0]).map(key => ({
+        key,
+        label: keyToLabel(key)
+      }))
+    } else {
+      columns.value = []
+    }
+  } catch (e: any) {
+    ElMessage.error(e.message || '查询样本信息失败')
+  } finally {
+    loading.value = false
+  }
+}
+
+// 常见字段名映射为中文
+const labelMap: Record<string, string> = {
+  recordId: '记录ID',
+  setNo: '样本集编号',
+  sampleNo: '样本编号',
+  sampleName: '样本名称',
+  typeCode: '样本类型编号',
+  typeName: '样本类型',
+  suffix: '后缀名',
+  labelFlagCode: '标注状态编号',
+  labelFlag: '标注状态',
+  filePath: '文件路径',
+  fileName: '文件名',
+  fileSize: '文件大小',
+  sampleScore: '质量评分',
+  status: '状态',
+  createTime: '创建时间',
+  updateTime: '更新时间'
+}
+
+function keyToLabel(key: string): string {
+  return labelMap[key] || key
+}
+
+function goBack() {
+  router.push('/sample-set')
+}
+
+// 隐藏的字段（不需要在表格中展示）
+const hiddenColumns = new Set(['recordId', 'sampleNo', 'typeCode', 'filePath', 'fileName', 'labelFlagCode', 'sampleScore'])
+
+// ========== 文件预览 ==========
+const imageExtSet = new Set(['jpg', 'jpeg', 'png', 'bmp', 'gif', 'webp', 'tif', 'tiff'])
+const audioExtSet = new Set(['mp3', 'wav', 'ogg', 'flac', 'aac', 'wma', 'm4a'])
+
+function isImageRow(row: SampleInfoRow): boolean {
+  const suffix = String(row.suffix || '').toLowerCase().replace('.', '')
+  return imageExtSet.has(suffix)
+}
+
+function isAudioRow(row: SampleInfoRow): boolean {
+  const suffix = String(row.suffix || '').toLowerCase().replace('.', '')
+  return audioExtSet.has(suffix)
+}
+
+function isPreviewable(row: SampleInfoRow): boolean {
+  return isImageRow(row) || isAudioRow(row)
+}
+
+const previewVisible = ref(false)
+const previewLoading = ref(false)
+const previewName = ref('')
+const previewFilePath = ref('')
+const previewType = ref<'image' | 'audio'>('image')
+const annotationData = ref<AnnotationData | null>(null)
+const previewCanvas = ref<HTMLCanvasElement | null>(null)
+
+// 标注框颜色
+const boxColors = [
+  '#00d4ff', '#00ff88', '#ff5555', '#ffaa00', '#a855f7',
+  '#ff6b9d', '#45ffbc', '#ffd93d', '#6c5ce7', '#fd79a8'
+]
+
+// ========== 标注面板状态 ==========
+const selectedBoxIndex = ref<number | null>(null)
+const panelSearchKeyword = ref('')
+const panelCategoryFilter = ref('')
+let highlightFlashTimer: ReturnType<typeof setInterval> | null = null
+
+// ========== 音频播放状态 ==========
+const audioRef = ref<HTMLAudioElement | null>(null)
+const audioPlaying = ref(false)
+const audioCurrentTime = ref(0)
+const audioDuration = ref(0)
+const audioPlaybackRate = ref(1)
+const audioSampleRate = ref<number | null>(null)
+const audioChannels = ref<number | null>(null)
+const audioText = ref<string | null>(null)
+const playbackRates = [0.5, 0.75, 1, 1.25, 1.5, 2]
+
+function onAudioLoaded() {
+  if (!audioRef.value) return
+  audioDuration.value = audioRef.value.duration
+  // 尝试获取技术参数
+  const audioCtx = new AudioContext()
+  audioRef.value.addEventListener('canplaythrough', () => {
+    // 通过 AudioContext 获取采样率
+    audioSampleRate.value = audioCtx.sampleRate
+    audioCtx.close()
+  }, { once: true })
+}
+
+function toggleAudioPlay() {
+  if (!audioRef.value) return
+  if (audioPlaying.value) {
+    audioRef.value.pause()
+  } else {
+    audioRef.value.play()
+  }
+  audioPlaying.value = !audioPlaying.value
+}
+
+function onAudioTimeUpdate() {
+  if (!audioRef.value) return
+  audioCurrentTime.value = audioRef.value.currentTime
+}
+
+function onAudioEnded() {
+  audioPlaying.value = false
+  audioCurrentTime.value = 0
+}
+
+function seekAudio(e: MouseEvent) {
+  if (!audioRef.value) return
+  const bar = e.currentTarget as HTMLElement
+  const rect = bar.getBoundingClientRect()
+  const ratio = (e.clientX - rect.left) / rect.width
+  audioRef.value.currentTime = ratio * audioDuration.value
+}
+
+function setPlaybackRate(rate: number) {
+  audioPlaybackRate.value = rate
+  if (audioRef.value) {
+    audioRef.value.playbackRate = rate
+  }
+}
+
+function downloadAudio() {
+  const url = getImageUrl(previewFilePath.value)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = previewName.value || 'audio'
+  a.click()
+}
+
+function formatTime(seconds: number): string {
+  if (!isFinite(seconds) || seconds < 0) return '0:00'
+  const m = Math.floor(seconds / 60)
+  const s = Math.floor(seconds % 60)
+  return `${m}:${s.toString().padStart(2, '0')}`
+}
+
+// 面板筛选后的标注列表
+const filteredBoxes = computed(() => {
+  if (!annotationData.value?.boxes) return []
+  let boxes = annotationData.value.boxes.map((box, index) => ({ ...box, _index: index }))
+  if (panelCategoryFilter.value) {
+    boxes = boxes.filter(b => b.className === panelCategoryFilter.value)
+  }
+  if (panelSearchKeyword.value) {
+    const kw = panelSearchKeyword.value.toLowerCase()
+    boxes = boxes.filter(b => b.className.toLowerCase().includes(kw))
+  }
+  return boxes
+})
+
+// 类别列表（用于筛选下拉）
+const categoryOptions = computed(() => {
+  if (!annotationData.value?.boxes) return []
+  const set = new Set(annotationData.value.boxes.map(b => b.className))
+  return Array.from(set)
+})
+
+// 类别统计
+const categoryStats = computed(() => {
+  if (!annotationData.value?.boxes) return []
+  const map = new Map<string, number>()
+  annotationData.value.boxes.forEach(b => {
+    map.set(b.className, (map.get(b.className) || 0) + 1)
+  })
+  return Array.from(map.entries()).map(([name, count]) => ({ name, count }))
+})
+
+// 画布渲染缓存
+let cachedImage: HTMLImageElement | null = null
+let cachedDisplayW = 0
+let cachedDisplayH = 0
+
+async function openPreview(row: SampleInfoRow) {
+  const filePath = row.filePath
+  if (!filePath) {
+    ElMessage.warning('该样本无文件路径')
+    return
+  }
+  previewName.value = row.sampleName || ''
+  previewFilePath.value = filePath
+  annotationData.value = null
+  selectedBoxIndex.value = null
+  panelSearchKeyword.value = ''
+  panelCategoryFilter.value = ''
+  cachedImage = null
+
+  if (isImageRow(row)) {
+    previewType.value = 'image'
+    previewVisible.value = true
+    previewLoading.value = true
+
+    try {
+      const ann = await getAnnotations(filePath)
+      annotationData.value = ann
+    } catch {
+      annotationData.value = null
+    }
+
+    previewLoading.value = false
+
+    if (annotationData.value?.hasAnnotations) {
+      await nextTick()
+      drawAnnotations()
+    }
+  } else if (isAudioRow(row)) {
+    previewType.value = 'audio'
+    audioText.value = null
+    previewVisible.value = true
+    // 查询转写文字
+    try {
+      const sampleNo = String(row.sampleNo || '')
+      const sampleName = String(row.sampleName || '')
+      if (sampleNo && sampleName) {
+        audioText.value = await getAudioText(sampleNo, sampleName)
+      }
+    } catch {
+      audioText.value = null
+    }
+  }
+}
+
+function drawAnnotations(highlightIndex?: number | null) {
+  const canvas = previewCanvas.value
+  if (!canvas || !annotationData.value) return
+
+  const ctx = canvas.getContext('2d')
+  if (!ctx) return
+
+  // 如果已有缓存的图片，直接使用
+  const drawImage = (img: HTMLImageElement) => {
+    const nw = img.naturalWidth
+    const nh = img.naturalHeight
+
+    // 分栏布局下，左侧图片区约占 65% 宽度
+    const containerW = Math.round(window.innerWidth * 0.9 * 0.65)
+    const containerH = Math.round(window.innerHeight * 0.82)
+
+    const scaleByW = containerW / nw
+    const scaleByH = containerH / nh
+    const baseScale = Math.min(scaleByW, scaleByH)
+    const scale = Math.min(baseScale * 1.2, 2)
+
+    const displayW = Math.round(nw * scale)
+    const displayH = Math.round(nh * scale)
+
+    canvas.width = displayW
+    canvas.height = displayH
+    canvas.style.width = displayW + 'px'
+    canvas.style.height = displayH + 'px'
+
+    cachedDisplayW = displayW
+    cachedDisplayH = displayH
+
+    ctx.drawImage(img, 0, 0, displayW, displayH)
+
+    // 绘制标注框
+    const boxes = annotationData.value!.boxes
+    boxes.forEach((box, i) => {
+      const x = (box.cx - box.w / 2) * displayW
+      const y = (box.cy - box.h / 2) * displayH
+      const w = box.w * displayW
+      const h = box.h * displayH
+
+      const color = boxColors[box.classId % boxColors.length]
+      const isHighlighted = highlightIndex !== undefined && highlightIndex !== null && highlightIndex === i
+      const isOtherDimmed = highlightIndex !== undefined && highlightIndex !== null && highlightIndex !== i
+
+      // 非选中框半透明
+      if (isOtherDimmed) {
+        ctx.globalAlpha = 0.3
+      }
+
+      // 绘制矩形
+      ctx.strokeStyle = color
+      ctx.lineWidth = isHighlighted
+        ? Math.max(4, Math.min(displayW, displayH) / 150)
+        : Math.max(2, Math.min(displayW, displayH) / 300)
+      ctx.strokeRect(x, y, w, h)
+
+      // 选中框填充半透明背景
+      if (isHighlighted) {
+        ctx.fillStyle = color
+        ctx.globalAlpha = 0.15
+        ctx.fillRect(x, y, w, h)
+        ctx.globalAlpha = 1
+      }
+
+      // 绘制标签背景和文字
+      const label = box.className
+      const fontSize = Math.max(14, Math.min(displayW, displayH) / 45)
+      ctx.font = `bold ${fontSize}px sans-serif`
+      const textMetrics = ctx.measureText(label)
+      const padding = 4
+      const labelH = fontSize + padding * 2
+
+      const labelOnTop = y - labelH >= 0
+      const labelY = labelOnTop ? y - labelH : y + h - labelH
+
+      ctx.fillStyle = color
+      ctx.globalAlpha = isOtherDimmed ? 0.3 : 0.8
+      ctx.fillRect(x, labelY, textMetrics.width + padding * 2, labelH)
+      ctx.globalAlpha = isOtherDimmed ? 0.3 : 1
+
+      ctx.fillStyle = '#fff'
+      ctx.fillText(label, x + padding, labelY + fontSize + padding)
+
+      ctx.globalAlpha = 1
+    })
+  }
+
+  if (cachedImage) {
+    drawImage(cachedImage)
+  } else {
+    const img = new Image()
+    img.crossOrigin = 'anonymous'
+    img.onload = () => {
+      cachedImage = img
+      drawImage(img)
+    }
+    img.src = getImageUrl(previewFilePath.value)
+  }
+}
+
+// ========== 双向联动 ==========
+
+// 点击面板中的标注项 → 左侧图片高亮闪烁
+function selectBoxFromPanel(index: number) {
+  if (selectedBoxIndex.value === index) {
+    // 取消选中
+    selectedBoxIndex.value = null
+    clearHighlightFlash()
+    drawAnnotations(null)
+    return
+  }
+  selectedBoxIndex.value = index
+  startHighlightFlash(index)
+}
+
+function startHighlightFlash(index: number) {
+  clearHighlightFlash()
+  let flashOn = true
+  highlightFlashTimer = setInterval(() => {
+    flashOn = !flashOn
+    drawAnnotations(flashOn ? index : null)
+  }, 400)
+  // 立即高亮一次
+  drawAnnotations(index)
+}
+
+function clearHighlightFlash() {
+  if (highlightFlashTimer) {
+    clearInterval(highlightFlashTimer)
+    highlightFlashTimer = null
+  }
+}
+
+// 点击 canvas 上的标注框 → 右侧面板滚动高亮
+function handleCanvasClick(e: MouseEvent) {
+  if (!annotationData.value?.boxes || !cachedDisplayW || !cachedDisplayH) return
+
+  const canvas = previewCanvas.value
+  if (!canvas) return
+
+  const rect = canvas.getBoundingClientRect()
+  const scaleX = canvas.width / rect.width
+  const scaleY = canvas.height / rect.height
+  const clickX = (e.clientX - rect.left) * scaleX
+  const clickY = (e.clientY - rect.top) * scaleY
+
+  // 从后往前遍历，优先选中上层框
+  const boxes = annotationData.value.boxes
+  for (let i = boxes.length - 1; i >= 0; i--) {
+    const box = boxes[i]
+    const x = (box.cx - box.w / 2) * cachedDisplayW
+    const y = (box.cy - box.h / 2) * cachedDisplayH
+    const w = box.w * cachedDisplayW
+    const h = box.h * cachedDisplayH
+
+    if (clickX >= x && clickX <= x + w && clickY >= y && clickY <= y + h) {
+      selectBoxFromPanel(i)
+      // 滚动面板到对应行
+      nextTick(() => {
+        const el = document.getElementById(`anno-item-${i}`)
+        if (el) {
+          el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+        }
+      })
+      return
+    }
+  }
+  // 点击空白区域取消选中
+  selectedBoxIndex.value = null
+  clearHighlightFlash()
+  drawAnnotations(null)
+}
+
+// 面板搜索/筛选变化时重置选中
+watch([panelSearchKeyword, panelCategoryFilter], () => {
+  selectedBoxIndex.value = null
+  clearHighlightFlash()
+  drawAnnotations(null)
+})
+
+// 弹框关闭时清理
+watch(previewVisible, (val) => {
+  if (!val) {
+    clearHighlightFlash()
+    selectedBoxIndex.value = null
+    cachedImage = null
+  }
+})
+
+// ========== 质量评分 ==========
+const scoreCodeMap: Record<string, string> = { '01': '优质', '02': '良好', '03': '一般', '04': '较差' }
+// 星级与编码映射：5星→01优质，4星→02良好，3星→03一般，2星/1星→04较差
+const starToCode: Record<number, string> = { 5: '01', 4: '02', 3: '03', 2: '04', 1: '04' }
+const codeToStar: Record<string, number> = { '01': 5, '02': 4, '03': 3, '04': 2 }
+const starLabels: Record<number, string> = { 5: '优质', 4: '良好', 3: '一般', 2: '较差', 1: '较差' }
+const ratingLoading = ref<string | null>(null) // 正在评分的行标识
+
+async function handleRate(row: SampleInfoRow, star: number) {
+  const sampleNo = String(row.sampleNo || '')
+  const sampleName = String(row.sampleName || '')
+  if (!sampleNo || !sampleName) return
+  const key = `${sampleNo}_${sampleName}`
+  ratingLoading.value = key
+  const code = starToCode[star]
+  try {
+    await updateSampleScore(sampleNo, sampleName, code)
+    row.sampleScore = code
+    ElMessage.success(`评分成功：${star}星 - ${starLabels[star]}`)
+  } catch (e: any) {
+    ElMessage.error(e.message || '评分失败')
+  } finally {
+    ratingLoading.value = null
+  }
+}
+
+function getScoreStars(score: string | null | undefined): number {
+  if (!score) return 0
+  return codeToStar[score] || 0
+}
+
+function getScoreLabel(score: string | null | undefined): string {
+  if (!score) return '未评分'
+  return scoreCodeMap[score] || '未评分'
+}
+
+onBeforeUnmount(() => {
+  clearHighlightFlash()
+})
+
+onMounted(() => {
+  loadSamples()
+})
+</script>
+
+<template>
+  <div class="app-layout">
+    <Header title="人工智能分部 · 模型微调组" subtitle="样本详情" />
+    <div class="main-content">
+      <Sidebar />
+      <main class="content-area">
+        <div class="page-header">
+          <div class="page-title">
+            <h2>
+              <span class="back-btn" @click="goBack" title="返回样本集管理">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 18l-6-6 6-6"/></svg>
+              </span>
+              {{ setName || setNo }}
+            </h2>
+            <p>样本集编号：{{ setNo }}，共 {{ filteredList.length }} 条样本</p>
+          </div>
+        </div>
+
+        <!-- 筛选条件 -->
+        <div class="filter-bar">
+          <div class="filter-item">
+            <label>样本名称</label>
+            <el-input v-model="filterName" placeholder="输入样本名称" clearable size="default" style="width: 200px" />
+          </div>
+          <div class="filter-item">
+            <label>标注状态</label>
+            <el-select v-model="filterLabelFlag" placeholder="全部" clearable size="default" style="width: 140px">
+              <el-option label="已标注" value="已标注" />
+              <el-option label="未标注" value="未标注" />
+            </el-select>
+          </div>
+          <el-button size="default" @click="resetFilters">重置</el-button>
+        </div>
+
+        <div class="table-wrapper" v-loading="loading">
+          <table v-if="pagedList.length > 0" class="sample-table">
+            <thead>
+              <tr>
+                <th class="col-index">#</th>
+                <th v-for="col in columns" :key="col.key" v-show="!hiddenColumns.has(col.key)">{{ col.label }}</th>
+                <th class="col-score">质量评分</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="(row, idx) in pagedList" :key="idx">
+                <td class="col-index">{{ (currentPage - 1) * pageSize + idx + 1 }}</td>
+                <td v-for="col in columns" :key="col.key" v-show="!hiddenColumns.has(col.key)">
+                  <template v-if="col.key === 'sampleName' && isPreviewable(row)">
+                    <span class="link-name" @click="openPreview(row)">{{ row[col.key] ?? '-' }}</span>
+                  </template>
+                  <template v-else>{{ row[col.key] ?? '-' }}</template>
+                </td>
+                <td class="col-score">
+                  <div class="star-rating">
+                    <span
+                      v-for="star in 5"
+                      :key="star"
+                      class="star-item"
+                      :class="{ active: star <= getScoreStars(row.sampleScore), loading: ratingLoading === `${row.sampleNo}_${row.sampleName}` }"
+                      @click="handleRate(row, star)"
+                      :title="`${star}星 - ${starLabels[star]}`"
+                    >★</span>
+                    <span class="score-label" :class="`score-${getScoreStars(row.sampleScore)}`">{{ getScoreLabel(row.sampleScore) }}</span>
+                  </div>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+
+          <div v-else-if="!loading" class="empty-state">
+            <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="rgba(0,212,255,0.3)" stroke-width="1">
+              <path d="M4 20h16v-2H4v2zm0-6h16v-2H4v2zm0-6h16V6H4v2z"/>
+            </svg>
+            <p>暂无样本数据</p>
+          </div>
+        </div>
+
+        <!-- 分页 -->
+        <div class="pagination-bar" v-if="totalPages > 1">
+          <el-pagination
+            v-model:current-page="currentPage"
+            :page-size="pageSize"
+            :total="filteredList.length"
+            layout="prev, pager, next, total"
+            background
+            @current-change="handlePageChange"
+          />
+        </div>
+      </main>
+    </div>
+
+    <!-- 文件预览弹框 -->
+    <el-dialog v-model="previewVisible" :title="previewName || '文件预览'" width="90vw" :close-on-click-modal="true" class="preview-dialog" destroy-on-close top="3vh">
+      <div class="preview-container" v-loading="previewLoading">
+        <!-- 图片预览 - 分栏布局 -->
+        <template v-if="previewType === 'image'">
+          <template v-if="annotationData?.hasAnnotations">
+            <div class="split-layout">
+              <!-- 左侧：图片预览区 -->
+              <div class="split-left">
+                <div class="canvas-scroll">
+                  <canvas ref="previewCanvas" class="preview-canvas" @click="handleCanvasClick"></canvas>
+                </div>
+              </div>
+              <!-- 右侧：标注信息面板 -->
+              <div class="split-right">
+                <div class="anno-panel">
+                  <!-- 面板头部：搜索和筛选 -->
+                  <div class="anno-panel-header">
+                    <div class="anno-panel-title">标注信息</div>
+                    <div class="anno-panel-filters">
+                      <el-input
+                        v-model="panelSearchKeyword"
+                        placeholder="搜索标签"
+                        clearable
+                        size="small"
+                        class="anno-search"
+                      >
+                        <template #prefix>
+                          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+                        </template>
+                      </el-input>
+                      <el-select
+                        v-model="panelCategoryFilter"
+                        placeholder="类别筛选"
+                        clearable
+                        size="small"
+                        class="anno-category-select"
+                      >
+                        <el-option
+                          v-for="cat in categoryOptions"
+                          :key="cat"
+                          :label="cat"
+                          :value="cat"
+                        />
+                      </el-select>
+                    </div>
+                  </div>
+
+                  <!-- 标注列表 -->
+                  <div class="anno-list">
+                    <div
+                      v-for="box in filteredBoxes"
+                      :key="box._index"
+                      :id="`anno-item-${box._index}`"
+                      class="anno-item"
+                      :class="{ 'anno-item-active': selectedBoxIndex === box._index }"
+                      @click="selectBoxFromPanel(box._index)"
+                    >
+                      <div class="anno-item-top">
+                        <span class="anno-color-dot" :style="{ backgroundColor: boxColors[box.classId % boxColors.length] }"></span>
+                        <span class="anno-label-name">{{ box.className }}</span>
+                        <span class="anno-index">#{{ box._index + 1 }}</span>
+                      </div>
+                      <div class="anno-item-detail">
+                        <span class="anno-detail-item">
+                          <span class="anno-detail-label">位置</span>
+                          <span class="anno-detail-value">x:{{ ((box.cx - box.w / 2) * 100).toFixed(1) }} y:{{ ((box.cy - box.h / 2) * 100).toFixed(1) }}</span>
+                        </span>
+                        <span class="anno-detail-item">
+                          <span class="anno-detail-label">尺寸</span>
+                          <span class="anno-detail-value">{{ (box.w * 100).toFixed(1) }}×{{ (box.h * 100).toFixed(1) }}</span>
+                        </span>
+                      </div>
+                    </div>
+                    <div v-if="filteredBoxes.length === 0" class="anno-empty">
+                      无匹配标注
+                    </div>
+                  </div>
+
+                  <!-- 面板底部统计 -->
+                  <div class="anno-panel-footer">
+                    <div class="anno-stat-total">共 {{ annotationData.boxes.length }} 个标注</div>
+                    <div class="anno-stat-categories">
+                      <span v-for="stat in categoryStats" :key="stat.name" class="anno-stat-tag">
+                        {{ stat.name }}: {{ stat.count }}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </template>
+          <template v-else>
+            <img :src="getImageUrl(previewFilePath)" class="preview-img" @error="() => ElMessage.error('图片加载失败')" />
+          </template>
+        </template>
+        <!-- 音频播放 -->
+        <template v-if="previewType === 'audio'">
+          <div class="audio-player-wrapper">
+            <div class="audio-icon">
+              <svg width="56" height="56" viewBox="0 0 24 24" fill="none" stroke="#00d4ff" stroke-width="1.5">
+                <path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/>
+              </svg>
+            </div>
+            <div class="audio-name">{{ previewName }}</div>
+
+            <!-- 自定义播放器 -->
+            <div class="audio-player">
+              <audio
+                ref="audioRef"
+                :src="getImageUrl(previewFilePath)"
+                @loadedmetadata="onAudioLoaded"
+                @timeupdate="onAudioTimeUpdate"
+                @ended="onAudioEnded"
+                preload="metadata"
+                style="display:none"
+              ></audio>
+
+              <!-- 进度条 -->
+              <div class="audio-progress-bar" @click="seekAudio">
+                <div class="audio-progress-fill" :style="{ width: audioDuration ? (audioCurrentTime / audioDuration * 100) + '%' : '0%' }"></div>
+                <div class="audio-progress-thumb" :style="{ left: audioDuration ? (audioCurrentTime / audioDuration * 100) + '%' : '0%' }"></div>
+              </div>
+
+              <!-- 时间和控制 -->
+              <div class="audio-controls-row">
+                <span class="audio-time">{{ formatTime(audioCurrentTime) }} / {{ formatTime(audioDuration) }}</span>
+                <div class="audio-btn-group">
+                  <button class="audio-ctrl-btn" @click="toggleAudioPlay" :title="audioPlaying ? '暂停' : '播放'">
+                    <svg v-if="!audioPlaying" width="20" height="20" viewBox="0 0 24 24" fill="#00d4ff"><polygon points="5,3 19,12 5,21"/></svg>
+                    <svg v-else width="20" height="20" viewBox="0 0 24 24" fill="#00d4ff"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>
+                  </button>
+                </div>
+                <!-- 倍速 -->
+                <div class="audio-speed-group">
+                  <button
+                    v-for="rate in playbackRates"
+                    :key="rate"
+                    class="audio-speed-btn"
+                    :class="{ 'audio-speed-active': audioPlaybackRate === rate }"
+                    @click="setPlaybackRate(rate)"
+                  >{{ rate }}x</button>
+                </div>
+                <!-- 下载 -->
+                <button class="audio-ctrl-btn audio-download-btn" @click="downloadAudio" title="下载">
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#00d4ff" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                </button>
+              </div>
+            </div>
+
+            <!-- 技术参数 -->
+            <div class="audio-tech-info">
+              <div class="audio-tech-item">
+                <span class="audio-tech-label">时长</span>
+                <span class="audio-tech-value">{{ formatTime(audioDuration) }}</span>
+              </div>
+              <div class="audio-tech-item">
+                <span class="audio-tech-label">采样率</span>
+                <span class="audio-tech-value">{{ audioSampleRate ? audioSampleRate + ' Hz' : '-' }}</span>
+              </div>
+              <div class="audio-tech-item">
+                <span class="audio-tech-label">声道数</span>
+                <span class="audio-tech-value">{{ audioChannels ?? '-' }}</span>
+              </div>
+            </div>
+
+            <!-- 转写文字 -->
+            <div class="audio-transcription" v-if="audioText">
+              <div class="audio-transcription-title">转写文字</div>
+              <div class="audio-transcription-text">{{ audioText }}</div>
+            </div>
+          </div>
+        </template>
+      </div>
+    </el-dialog>
+  </div>
+</template>
+
+<style scoped lang="scss">
+.app-layout {
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.main-content {
+  flex: 1;
+  display: flex;
+  overflow: hidden;
+}
+
+.content-area {
+  flex: 1;
+  overflow-y: auto;
+  padding: 24px;
+}
+
+.page-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 20px;
+  padding: 20px 24px;
+  background: linear-gradient(135deg, rgba(17, 24, 39, 0.9) 0%, rgba(26, 35, 50, 0.8) 100%);
+  border: 1px solid rgba(0, 212, 255, 0.2);
+  border-radius: 12px;
+}
+
+.page-title h2 {
+  font-size: 22px;
+  font-weight: 600;
+  color: #fff;
+  margin: 0 0 8px 0;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.page-title p {
+  font-size: 14px;
+  color: rgba(255, 255, 255, 0.5);
+  margin: 0;
+}
+
+.back-btn {
+  display: inline-flex;
+  align-items: center;
+  cursor: pointer;
+  color: rgba(255, 255, 255, 0.6);
+  transition: color 0.2s;
+  &:hover {
+    color: #00d4ff;
+  }
+}
+
+.table-wrapper {
+  background: linear-gradient(135deg, rgba(17, 24, 39, 0.9) 0%, rgba(26, 35, 50, 0.8) 100%);
+  border: 1px solid rgba(0, 212, 255, 0.2);
+  border-radius: 12px;
+  overflow: auto;
+}
+
+.sample-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+
+  thead {
+    background: rgba(0, 212, 255, 0.08);
+    position: sticky;
+    top: 0;
+    z-index: 1;
+  }
+
+  th {
+    padding: 12px 16px;
+    text-align: left;
+    color: rgba(255, 255, 255, 0.65);
+    font-weight: 600;
+    border-bottom: 1px solid rgba(0, 212, 255, 0.15);
+    white-space: nowrap;
+  }
+
+  td {
+    padding: 10px 16px;
+    color: rgba(255, 255, 255, 0.8);
+    border-bottom: 1px solid rgba(0, 212, 255, 0.08);
+    max-width: 260px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  tbody tr {
+    transition: background 0.2s;
+    &:hover {
+      background: rgba(0, 212, 255, 0.06);
+    }
+  }
+
+  .col-index {
+    width: 50px;
+    text-align: center;
+    color: rgba(255, 255, 255, 0.4);
+  }
+
+  .col-score {
+    min-width: 180px;
+  }
+}
+
+// ========== 质量评分 ==========
+.star-rating {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.star-item {
+  font-size: 18px;
+  color: rgba(255, 255, 255, 0.2);
+  cursor: pointer;
+  transition: color 0.15s, transform 0.15s;
+  user-select: none;
+  line-height: 1;
+
+  &:hover {
+    transform: scale(1.2);
+  }
+
+  &.active {
+    color: #f5a623;
+  }
+
+  &.loading {
+    pointer-events: none;
+    opacity: 0.5;
+  }
+}
+
+.score-label {
+  margin-left: 6px;
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.4);
+
+  &.score-1, &.score-2 {
+    color: #f56c6c;
+  }
+  &.score-3 {
+    color: #e6a23c;
+  }
+  &.score-4 {
+    color: #67c23a;
+  }
+  &.score-5 {
+    color: #00d4ff;
+  }
+}
+
+.empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 60px 20px;
+  gap: 16px;
+
+  p {
+    font-size: 16px;
+    color: rgba(255, 255, 255, 0.4);
+    margin: 0;
+  }
+}
+
+.link-name {
+  color: #00d4ff;
+  cursor: pointer;
+  text-decoration: underline;
+  &:hover {
+    color: #66e0ff;
+  }
+}
+
+.audio-player-wrapper {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 30px 20px;
+  gap: 20px;
+  width: 100%;
+  max-width: 600px;
+  margin: 0 auto;
+
+  .audio-icon {
+    opacity: 0.8;
+  }
+
+  .audio-name {
+    font-size: 16px;
+    color: rgba(255, 255, 255, 0.8);
+    text-align: center;
+  }
+}
+
+// ========== 自定义音频播放器 ==========
+.audio-player {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.audio-progress-bar {
+  width: 100%;
+  height: 6px;
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 3px;
+  cursor: pointer;
+  position: relative;
+
+  &:hover {
+    height: 8px;
+
+    .audio-progress-thumb {
+      width: 14px;
+      height: 14px;
+      margin-left: -7px;
+      margin-top: -3px;
+    }
+  }
+}
+
+.audio-progress-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #00d4ff, #00ff88);
+  border-radius: 3px;
+  transition: width 0.1s linear;
+}
+
+.audio-progress-thumb {
+  position: absolute;
+  top: 50%;
+  width: 12px;
+  height: 12px;
+  background: #00d4ff;
+  border: 2px solid #fff;
+  border-radius: 50%;
+  transform: translateY(-50%);
+  margin-left: -6px;
+  transition: width 0.15s, height 0.15s;
+  box-shadow: 0 0 6px rgba(0, 212, 255, 0.5);
+}
+
+.audio-controls-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.audio-time {
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.5);
+  font-family: 'Consolas', 'Monaco', monospace;
+  min-width: 80px;
+}
+
+.audio-btn-group {
+  display: flex;
+  align-items: center;
+}
+
+.audio-ctrl-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border: 1px solid rgba(0, 212, 255, 0.3);
+  border-radius: 8px;
+  background: rgba(0, 212, 255, 0.08);
+  cursor: pointer;
+  transition: all 0.2s;
+
+  &:hover {
+    background: rgba(0, 212, 255, 0.15);
+    border-color: rgba(0, 212, 255, 0.5);
+  }
+}
+
+.audio-speed-group {
+  display: flex;
+  gap: 4px;
+  margin-left: auto;
+}
+
+.audio-speed-btn {
+  padding: 4px 8px;
+  border: 1px solid rgba(0, 212, 255, 0.2);
+  border-radius: 4px;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.5);
+  font-size: 11px;
+  cursor: pointer;
+  transition: all 0.2s;
+
+  &:hover {
+    background: rgba(0, 212, 255, 0.08);
+    color: rgba(255, 255, 255, 0.8);
+  }
+
+  &.audio-speed-active {
+    background: rgba(0, 212, 255, 0.2);
+    border-color: rgba(0, 212, 255, 0.5);
+    color: #00d4ff;
+    font-weight: 600;
+  }
+}
+
+.audio-download-btn {
+  margin-left: 4px;
+}
+
+// ========== 音频技术参数 ==========
+.audio-tech-info {
+  display: flex;
+  gap: 24px;
+  padding: 14px 20px;
+  background: rgba(0, 212, 255, 0.05);
+  border: 1px solid rgba(0, 212, 255, 0.12);
+  border-radius: 8px;
+  width: 100%;
+}
+
+.audio-tech-item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.audio-tech-label {
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.4);
+}
+
+.audio-tech-value {
+  font-size: 14px;
+  color: rgba(255, 255, 255, 0.8);
+  font-family: 'Consolas', 'Monaco', monospace;
+}
+
+// ========== 转写文字 ==========
+.audio-transcription {
+  width: 100%;
+  padding: 14px 20px;
+  background: rgba(0, 212, 255, 0.05);
+  border: 1px solid rgba(0, 212, 255, 0.12);
+  border-radius: 8px;
+}
+
+.audio-transcription-title {
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.4);
+  margin-bottom: 8px;
+}
+
+.audio-transcription-text {
+  font-size: 14px;
+  color: rgba(255, 255, 255, 0.85);
+  line-height: 1.8;
+  max-height: 200px;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.filter-bar {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin-bottom: 16px;
+  padding: 14px 20px;
+  background: linear-gradient(135deg, rgba(17, 24, 39, 0.9) 0%, rgba(26, 35, 50, 0.8) 100%);
+  border: 1px solid rgba(0, 212, 255, 0.2);
+  border-radius: 12px;
+
+  .filter-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+
+    label {
+      color: rgba(255, 255, 255, 0.65);
+      font-size: 13px;
+      white-space: nowrap;
+    }
+  }
+}
+
+.pagination-bar {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 16px;
+  padding: 12px 20px;
+  background: linear-gradient(135deg, rgba(17, 24, 39, 0.9) 0%, rgba(26, 35, 50, 0.8) 100%);
+  border: 1px solid rgba(0, 212, 255, 0.2);
+  border-radius: 12px;
+}
+</style>
+
+<style lang="scss">
+// 分页深色主题
+.el-pagination {
+  --el-pagination-bg-color: rgba(0, 212, 255, 0.1);
+  --el-pagination-text-color: rgba(255, 255, 255, 0.7);
+  --el-pagination-button-bg-color: rgba(0, 212, 255, 0.1);
+  --el-pagination-hover-color: #00d4ff;
+
+  .el-pager li {
+    background: rgba(0, 212, 255, 0.1) !important;
+    color: rgba(255, 255, 255, 0.7) !important;
+    &.is-active {
+      background: rgba(0, 212, 255, 0.3) !important;
+      color: #00d4ff !important;
+    }
+    &:hover {
+      color: #00d4ff !important;
+    }
+  }
+
+  .btn-prev, .btn-next {
+    background: rgba(0, 212, 255, 0.1) !important;
+    color: rgba(255, 255, 255, 0.7) !important;
+  }
+
+  .el-pagination__total {
+    color: rgba(255, 255, 255, 0.5) !important;
+  }
+}
+
+.preview-dialog.el-dialog {
+  background: transparent !important;
+  border: none !important;
+  border-radius: 12px !important;
+  overflow: hidden;
+  margin: 0 !important;
+  box-shadow: none !important;
+  --el-dialog-bg-color: transparent;
+  --el-dialog-padding-primary: 0;
+}
+
+.preview-dialog.el-dialog .el-dialog__header {
+  border-bottom: 1px solid rgba(255, 255, 255, 0.25);
+  border: 1px solid rgba(255, 255, 255, 0.4);
+  border-bottom: none;
+  padding: 10px 16px;
+  margin-right: 0;
+  background: linear-gradient(135deg, rgba(17, 24, 39, 0.98) 0%, rgba(26, 35, 50, 0.95) 100%) !important;
+  border-radius: 12px 12px 0 0 !important;
+}
+
+.preview-dialog.el-dialog .el-dialog__title {
+  color: #fff !important;
+  font-weight: 600;
+  font-size: 15px;
+}
+
+.preview-dialog.el-dialog .el-dialog__headerbtn .el-dialog__close {
+  color: rgba(255, 255, 255, 0.5) !important;
+}
+
+.preview-dialog.el-dialog .el-dialog__headerbtn:hover .el-dialog__close {
+  color: #00d4ff !important;
+}
+
+.preview-dialog.el-dialog .el-dialog__body {
+  padding: 8px 10px;
+  color: rgba(255, 255, 255, 0.85) !important;
+  background: linear-gradient(135deg, rgba(17, 24, 39, 0.98) 0%, rgba(26, 35, 50, 0.95) 100%) !important;
+  border: 1px solid rgba(255, 255, 255, 0.4) !important;
+  border-top: none !important;
+  border-radius: 0 0 12px 12px !important;
+}
+</style>
+
+<!-- 全局样式：覆盖 el-dialog overlay 的默认间距，消除白框 -->
+<style lang="scss">
+.el-overlay-dialog:has(.preview-dialog) {
+  padding: 3vh 0 0 !important;
+  display: flex !important;
+  justify-content: center !important;
+  align-items: flex-start !important;
+}
+</style>
+
+<style scoped lang="scss">
+.preview-container {
+  display: flex;
+  justify-content: center;
+  align-items: stretch;
+  min-height: 200px;
+}
+
+.preview-img {
+  max-width: 100%;
+  max-height: 85vh;
+  border-radius: 8px;
+  object-fit: contain;
+}
+
+// ========== 分栏布局 ==========
+.split-layout {
+  display: flex;
+  width: 100%;
+  height: 82vh;
+  gap: 0;
+  border-radius: 8px;
+  overflow: hidden;
+  border: 1px solid rgba(0, 212, 255, 0.15);
+}
+
+.split-left {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.3);
+  overflow: hidden;
+
+  .canvas-scroll {
+    width: 100%;
+    height: 100%;
+    overflow: auto;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+
+    & > canvas {
+      flex-shrink: 0;
+      cursor: pointer;
+    }
+  }
+}
+
+.preview-canvas {
+  display: block;
+}
+
+.split-right {
+  width: 340px;
+  flex-shrink: 0;
+  background: rgba(17, 24, 39, 0.95);
+  border-left: 1px solid rgba(0, 212, 255, 0.15);
+  display: flex;
+  flex-direction: column;
+}
+
+// ========== 标注信息面板 ==========
+.anno-panel {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.anno-panel-header {
+  padding: 12px 14px;
+  border-bottom: 1px solid rgba(0, 212, 255, 0.12);
+  flex-shrink: 0;
+}
+
+.anno-panel-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: #fff;
+  margin-bottom: 10px;
+}
+
+.anno-panel-filters {
+  display: flex;
+  gap: 8px;
+
+  .anno-search {
+    flex: 1;
+  }
+
+  .anno-category-select {
+    width: 120px;
+  }
+}
+
+// 标注列表
+.anno-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 6px 0;
+}
+
+.anno-item {
+  padding: 10px 14px;
+  cursor: pointer;
+  border-bottom: 1px solid rgba(0, 212, 255, 0.06);
+  transition: background 0.2s;
+
+  &:hover {
+    background: rgba(0, 212, 255, 0.06);
+  }
+
+  &.anno-item-active {
+    background: rgba(0, 212, 255, 0.12);
+    border-left: 3px solid #00d4ff;
+    padding-left: 11px;
+  }
+}
+
+.anno-item-top {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.anno-color-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  flex-shrink: 0;
+}
+
+.anno-label-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: #fff;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.anno-index {
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.35);
+  flex-shrink: 0;
+}
+
+.anno-item-detail {
+  display: flex;
+  gap: 16px;
+  padding-left: 18px;
+}
+
+.anno-detail-item {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.anno-detail-label {
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.4);
+}
+
+.anno-detail-value {
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.65);
+  font-family: 'Consolas', 'Monaco', monospace;
+}
+
+.anno-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 40px 20px;
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.35);
+}
+
+// 面板底部统计
+.anno-panel-footer {
+  padding: 10px 14px;
+  border-top: 1px solid rgba(0, 212, 255, 0.12);
+  flex-shrink: 0;
+}
+
+.anno-stat-total {
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.5);
+  margin-bottom: 6px;
+}
+
+.anno-stat-categories {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.anno-stat-tag {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 3px;
+  font-size: 11px;
+  background: rgba(0, 212, 255, 0.1);
+  border: 1px solid rgba(0, 212, 255, 0.2);
+  color: rgba(255, 255, 255, 0.7);
+}
+</style>

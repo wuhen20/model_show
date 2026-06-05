@@ -4,6 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.core.config import settings
 from app.api.routes.models import router as models_router
 from app.api.routes.chat import router as chat_router
+from app.api.routes.sample import router as sample_router
 
 os.makedirs(settings.upload_dir, exist_ok=True)
 
@@ -19,6 +20,7 @@ app.add_middleware(
 
 app.include_router(models_router, prefix="/api/models", tags=["模型管理"])
 app.include_router(chat_router, prefix="/api", tags=["对话服务"])
+app.include_router(sample_router, prefix="/api/sample", tags=["样本管理"])
 
 @app.get("/api/health")
 def health_check():
@@ -26,4 +28,4 @@ def health_check():
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("app.main:app", host="0.0.0.0", port=settings.server_port, reload=True)
+    uvicorn.run("app.main:app", host="0.0.0.0", port=settings.server_port, reload=False)

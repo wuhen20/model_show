@@ -12,6 +12,12 @@ class Settings(BaseSettings):
     allowed_image_types: str = "image/jpeg,image/png,image/gif,image/webp,image/bmp"
     upload_dir: str = "uploads"
 
+    db_host: str = "localhost"
+    db_port: int = 3306
+    db_user: str = "root"
+    db_password: str = "root"
+    db_name: str = "sample_platform"
+
     models: list[dict] = [
         {
             "id": "qwen-plus",
