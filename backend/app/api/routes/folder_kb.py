@@ -87,6 +87,17 @@ async def list_all_kb_files(
       - valuable: only high-value standard documents (score >= 5)
       - pending:  recently added files (modified in last 3 days)
     """
+    if settings.fake_mode:
+        result = fake_data.get_fake_response(
+            "/folder/list",
+            tab=tab,
+            keyword=keyword,
+            category_id=category_id,
+            page=page,
+            page_size=page_size,
+        )
+        return {"code": 0, "data": result}
+
     try:
         result = folder_kb_service.scan_all_kb_files(
             tab=tab,

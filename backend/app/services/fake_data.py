@@ -205,13 +205,56 @@ def get_fake_response(endpoint: str, **kwargs) -> dict[str, Any]:
             return {}
         result = deepcopy(data)
 
-    # Support pagination for list endpoints
+    # Support pagination and filtering for list endpoints
     if endpoint in ("/folder/list", "/folder/bases/{name}/files", "/bases/{id}/documents"):
-        page = kwargs.get("page", 1)
-        page_size = kwargs.get("page_size", 20)
         if isinstance(result, dict) and "items" in result:
-            all_items = result["items"]
+            all_items = list(result["items"])
+
+            # Filter by category_id (match category_name or parent_category)
+            category_id = kwargs.get("category_id")
+            if category_id:
+                all_items = [
+                    i for i in all_items
+                    if i.get("category_name") == category_id
+                    or i.get("parent_category") == category_id
+                ]
+
+            # Filter by keyword
+            keyword = kwargs.get("keyword")
+            if keyword:
+                kw = keyword.lower()
+                all_items = [
+                    i for i in all_items
+                    if kw in i.get("title", "").lower()
+                    or kw in i.get("description", "").lower()
+                ]
+
+            # Tab-based sorting / filtering (mirrors folder_kb_service logic)
+            tab = kwargs.get("tab", "latest")
+            if tab == "popular":
+                all_items = [i for i in all_items if i.get("score", 0) >= 4]
+                all_items.sort(key=lambda x: x.get("score", 0), reverse=True)
+            elif tab == "valuable":
+                all_items = [i for i in all_items if i.get("score", 0) >= 5]
+            elif tab == "pending":
+                all_items = [i for i in all_items if i.get("status") in ("待审核", "PENDING")]
+            else:
+                # latest: sort by update_time descending
+                all_items.sort(key=lambda x: x.get("update_time", ""), reverse=True)
+
             total = result.get("total", len(all_items))
+            if category_id or keyword:
+                total = len(all_items)
+            elif tab == "latest":
+                total = result.get("latest_total", total)
+            elif tab == "popular":
+                total = result.get("popular_total", result.get("latest_total", len(all_items)))
+            elif tab == "valuable":
+                total = result.get("valuable_total", len(all_items))
+            elif tab == "pending":
+                total = len(all_items)
+            page = kwargs.get("page", 1)
+            page_size = kwargs.get("page_size", 20)
             start = (page - 1) * page_size
             result["items"] = all_items[start : start + page_size]
             result["total"] = total

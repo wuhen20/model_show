@@ -53,6 +53,7 @@ from routers import predict as ts_predict
 from routers import analysis as ts_analysis
 
 
+
 # ---------------------------------------------------------------------------
 # 运行期目录
 # ---------------------------------------------------------------------------
@@ -135,12 +136,14 @@ app.include_router(kb_mgmt.router, prefix="/api/knowledge", tags=["知识库管�
 app.include_router(kb_folder.router, prefix="/api/knowledge/folder", tags=["文件夹知识库"])
 
 # ===== 时序功能（路由自带 /api/upload、/api/process 等前缀）=====
+
 app.include_router(ts_upload.router, tags=["时序-数据上传"])
 app.include_router(ts_process.router, tags=["时序-数据预处理"])
 app.include_router(ts_download.router, tags=["时序-文件下载与管理"])
 app.include_router(ts_merge.router, tags=["时序-样本整合"])
 app.include_router(ts_predict.router, tags=["时序-数据预测"])
 app.include_router(ts_analysis.router, tags=["时序-数据分析"])
+
 
 
 @app.get("/api/health")

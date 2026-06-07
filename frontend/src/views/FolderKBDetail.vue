@@ -646,7 +646,7 @@ async function loadFiles() {
     const data = await fetchFolderKBFiles(kbName.value, currentPage.value, pageSize)
     files.value = data.items
     totalFiles.value = data.total
-    totalSize.value = calcTotalSize(data.items)
+    totalSize.value = data.total_size != null ? formatFileSize(data.total_size) : calcTotalSize(data.items)
   } catch (e: any) {
     ElMessage.error(e.message || '加载文件列表失败')
     files.value = []

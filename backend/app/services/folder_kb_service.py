@@ -314,6 +314,7 @@ def scan_kb_files(
 
     # Paginate
     total = len(filtered)
+    total_size = sum(f.get("file_size", 0) for f in filtered)
     start = (page - 1) * page_size
     end = start + page_size
     items = filtered[start:end]
@@ -321,6 +322,7 @@ def scan_kb_files(
     return {
         "items": items,
         "total": total,
+        "total_size": total_size,
         "page": page,
         "page_size": page_size,
     }
@@ -415,6 +417,7 @@ def scan_all_kb_files(
 
     # Tab-based sorting/filtering
     if tab == "popular":
+        items = [i for i in items if i["score"] >= 4]
         items.sort(key=lambda x: x["score"], reverse=True)
     elif tab == "valuable":
         items = [i for i in items if i["score"] >= 5]

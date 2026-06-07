@@ -465,7 +465,7 @@ export function fetchFolderKBFiles(
   page?: number,
   pageSize?: number,
   keyword?: string
-): Promise<{ items: FolderDocumentResponse[]; total: number; page: number; page_size: number }> {
+): Promise<{ items: FolderDocumentResponse[]; total: number; total_size?: number; page: number; page_size: number }> {
   const params = new URLSearchParams()
   if (page) params.set('page', String(page))
   if (pageSize) params.set('page_size', String(pageSize))
