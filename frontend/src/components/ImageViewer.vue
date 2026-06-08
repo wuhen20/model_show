@@ -129,34 +129,75 @@ function render() {
 
   // 绘制标注
   if (props.annotations && props.annotations.length > 0) {
+    const scale = transform.value.scale
+
+    // 固定屏幕像素线宽，除以 scale 转换到图像坐标系
+    const thinLine = 1.5 / scale
+    const thickLine = 2.5 / scale
+
+    // 标签尺寸基于屏幕像素，再转换到图像坐标
+    const fontSize = 13 / scale
+    const labelPadX = 5 / scale
+    const labelPadY = 3 / scale
+    const labelLineHeight = fontSize + labelPadY * 2
+
+    // 统计每个标签的已占用位置，解决重叠问题
+    const placedLabels: { x: number; y: number; w: number; h: number }[] = []
+
     props.annotations.forEach((det, idx) => {
       if (!det.bbox || det.bbox.length < 4) return
       const [x1, y1, x2, y2] = det.bbox
       const color = props.labelColors?.[det.label] || getDefaultColor(idx)
       const isHighlighted = props.highlightIndex === idx
 
+      // 绘制目标框
       ctx.strokeStyle = color
-      ctx.lineWidth = isHighlighted ? 3 / transform.value.scale : 2 / transform.value.scale
+      ctx.lineWidth = isHighlighted ? thickLine : thinLine
       ctx.strokeRect(x1, y1, x2 - x1, y2 - y1)
 
+      // 高亮时填充半透明背景
       if (isHighlighted) {
-        ctx.fillStyle = color.replace(')', ', 0.15)').replace('rgb', 'rgba').replace('#', '')
-        ctx.globalAlpha = 0.2
+        ctx.globalAlpha = 0.15
+        ctx.fillStyle = color
         ctx.fillRect(x1, y1, x2 - x1, y2 - y1)
         ctx.globalAlpha = 1.0
       }
 
-      // 标签背景
-      const fontSize = Math.max(12, 14 / transform.value.scale)
-      ctx.font = `${fontSize}px sans-serif`
+      // 计算标签文本
+      ctx.font = `bold ${fontSize}px "Microsoft YaHei", "PingFang SC", sans-serif`
       const label = det.confidence ? `${det.label} ${(det.confidence * 100).toFixed(0)}%` : det.label
       const textWidth = ctx.measureText(label).width
-      const labelHeight = fontSize + 4
+      const labelW = textWidth + labelPadX * 2
+      const labelH = labelLineHeight
 
+      // 计算标签位置，自动向下偏移避免重叠
+      let labelX = x1
+      let labelY = y1 - labelH  // 默认在框上方
+      let attempt = 0
+      while (attempt < 20) {
+        const overlap = placedLabels.some(
+          p => labelX < p.x + p.w && labelX + labelW > p.x &&
+               labelY < p.y + p.h && labelY + labelH > p.y
+        )
+        if (!overlap) break
+        labelY += labelH  // 向下偏移一个标签高度
+        attempt++
+      }
+      placedLabels.push({ x: labelX, y: labelY, w: labelW, h: labelH })
+
+      // 绘制标签背景（半透明深色，提高可读性）
+      ctx.fillStyle = 'rgba(0, 0, 0, 0.7)'
+      ctx.fillRect(labelX, labelY, labelW, labelH)
+
+      // 左侧色条标识
       ctx.fillStyle = color
-      ctx.fillRect(x1, y1 - labelHeight, textWidth + 8, labelHeight)
-      ctx.fillStyle = '#fff'
-      ctx.fillText(label, x1 + 4, y1 - 4)
+      ctx.fillRect(labelX, labelY, 3 / scale, labelH)
+
+      // 绘制标签文字（白色，高对比度）
+      ctx.fillStyle = '#ffffff'
+      ctx.textBaseline = 'middle'
+      ctx.fillText(label, labelX + labelPadX + 3 / scale, labelY + labelH / 2)
+      ctx.textBaseline = 'alphabetic'
     })
   }
 

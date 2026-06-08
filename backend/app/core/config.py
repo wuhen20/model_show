@@ -6,6 +6,16 @@ class Settings(BaseSettings):
     dashscope_api_key: str = ""
     dashscope_base_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
 
+    # ---- 多模态目标检测 ----
+    detection_endpoint: str = ""
+    detection_api_key: str = ""
+    detection_model_id: str = ""
+    detection_system_prompt: str = ""
+    detection_user_prompt: str = "请检测这张图片中的目标，以JSON格式返回结果。"
+    detection_temperature: float = 0.3
+    detection_max_tokens: int = 4096
+    detection_enable_thinking: bool = False
+
     server_port: int = 3002
     # 多个允许的源用逗号分隔；保持 "*" 时会自动禁用 credentials（避免浏览器拒绝）。
     cors_origin: str = "*"

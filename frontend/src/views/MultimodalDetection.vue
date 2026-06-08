@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, watch, onMounted } from 'vue'
+import { ref, reactive, computed, watch, onMounted } from 'vue'
 import Header from '@/components/Header.vue'
 import Sidebar from '@/components/Sidebar.vue'
 import ImageViewer from '@/components/ImageViewer.vue'
@@ -9,14 +9,60 @@ import { detectObjects, testApiConnection, type BoundingBox, type DetectionApiCo
 const activeTab = ref('meter-box')
 const scene = computed(() => getSceneById(activeTab.value))
 
-// API 配置
-const configVisible = ref(true)
-const apiEndpoint = ref('')
+// API 配置（apiKey 全局共享，其余按场景独立）
+const configVisible = ref(false)
 const apiKey = ref('')
-const apiModelId = ref('')
 const showApiKey = ref(false)
+
+// 当前场景的表单字段
+const apiEndpoint = ref('')
+const apiModelId = ref('')
 const systemPrompt = ref('')
 const userPrompt = ref('')
+const temperature = ref(0.3)
+const maxTokens = ref(4096)
+const enableThinking = ref(false)
+
+// 每个场景的独立配置缓存
+interface SceneConfig {
+  endpoint: string
+  modelId: string
+  systemPrompt: string
+  userPrompt: string
+  temperature: number
+  maxTokens: number
+  enableThinking: boolean
+}
+const sceneConfigs = reactive<Record<string, SceneConfig>>({})
+
+function defaultSceneConfig(): SceneConfig {
+  return { endpoint: '', modelId: '', systemPrompt: '', userPrompt: '', temperature: 0.3, maxTokens: 4096, enableThinking: false }
+}
+
+// 将当前表单值写入指定场景缓存
+function saveToCache(sceneId: string) {
+  sceneConfigs[sceneId] = {
+    endpoint: apiEndpoint.value,
+    modelId: apiModelId.value,
+    systemPrompt: systemPrompt.value,
+    userPrompt: userPrompt.value,
+    temperature: temperature.value,
+    maxTokens: maxTokens.value,
+    enableThinking: enableThinking.value,
+  }
+}
+
+// 从指定场景缓存加载到表单
+function loadFromCache(sceneId: string) {
+  const cfg = sceneConfigs[sceneId] || defaultSceneConfig()
+  apiEndpoint.value = cfg.endpoint
+  apiModelId.value = cfg.modelId
+  systemPrompt.value = cfg.systemPrompt
+  userPrompt.value = cfg.userPrompt
+  temperature.value = cfg.temperature
+  maxTokens.value = cfg.maxTokens
+  enableThinking.value = cfg.enableThinking
+}
 
 // 图像与检测
 const originalImageSrc = ref<string | null>(null)
@@ -35,13 +81,17 @@ const originalViewer = ref<InstanceType<typeof ImageViewer> | null>(null)
 const resultViewer = ref<InstanceType<typeof ImageViewer> | null>(null)
 const syncing = ref(false)
 
-// 初始化场景配置
-watch(scene, (s) => {
-  apiEndpoint.value = s.endpoint
-  apiModelId.value = s.modelId
-  systemPrompt.value = s.defaultPrompt
-  userPrompt.value = s.userPrompt
-  // 清空上次结果
+// 场景切换时：保存旧场景配置 → 加载新场景配置 → 清空结果
+watch(activeTab, (newTab, oldTab) => {
+  if (oldTab) saveToCache(oldTab)
+  loadFromCache(newTab)
+  detections.value = []
+  highlightIndex.value = -1
+  rawResponse.value = ''
+})
+
+// 初始化
+watch(scene, () => {
   detections.value = []
   highlightIndex.value = -1
   rawResponse.value = ''
@@ -94,7 +144,10 @@ async function runDetection() {
     const config: DetectionApiConfig = {
       endpoint: apiEndpoint.value,
       apiKey: apiKey.value,
-      modelId: apiModelId.value
+      modelId: apiModelId.value,
+      temperature: temperature.value,
+      maxTokens: maxTokens.value,
+      enableThinking: enableThinking.value,
     }
     const result = await detectObjects(uploadedFile.value, config, systemPrompt.value, userPrompt.value)
     detections.value = result.detections || []
@@ -114,7 +167,7 @@ async function handleTestConnection() {
     const config: DetectionApiConfig = {
       endpoint: apiEndpoint.value,
       apiKey: apiKey.value,
-      modelId: apiModelId.value
+      modelId: apiModelId.value,
     }
     const result = await testApiConnection(config)
     statusText.value = `连接成功${result.available_models?.length ? '，可用模型: ' + result.available_models.slice(0, 3).join(', ') : ''}`
@@ -124,13 +177,10 @@ async function handleTestConnection() {
 }
 
 function saveConfig() {
-  const key = `detection_config_${activeTab.value}`
-  localStorage.setItem(key, JSON.stringify({
-    endpoint: apiEndpoint.value,
-    modelId: apiModelId.value,
-    systemPrompt: systemPrompt.value,
-    userPrompt: userPrompt.value,
-  }))
+  const sceneId = activeTab.value
+  saveToCache(sceneId)
+  const key = `detection_config_${sceneId}`
+  localStorage.setItem(key, JSON.stringify(sceneConfigs[sceneId]))
   statusText.value = '配置已保存'
 }
 
@@ -148,17 +198,22 @@ function loadSavedConfig() {
       } catch {}
     }
   }
-  const key = `detection_config_${activeTab.value}`
-  const saved = localStorage.getItem(key)
-  if (saved) {
-    try {
-      const cfg = JSON.parse(saved)
-      if (cfg.endpoint) apiEndpoint.value = cfg.endpoint
-      if (cfg.modelId) apiModelId.value = cfg.modelId
-      if (cfg.systemPrompt) systemPrompt.value = cfg.systemPrompt
-      if (cfg.userPrompt) userPrompt.value = cfg.userPrompt
-    } catch {}
+  // 加载所有场景的配置到缓存
+  for (const s of detectionScenes) {
+    const key = `detection_config_${s.id}`
+    const saved = localStorage.getItem(key)
+    if (saved) {
+      try {
+        sceneConfigs[s.id] = { ...defaultSceneConfig(), ...JSON.parse(saved) }
+      } catch {
+        sceneConfigs[s.id] = defaultSceneConfig()
+      }
+    } else {
+      sceneConfigs[s.id] = defaultSceneConfig()
+    }
   }
+  // 加载当前场景配置到表单
+  loadFromCache(activeTab.value)
 }
 
 onMounted(() => {
@@ -214,18 +269,18 @@ function getLabelColor(label: string): string {
               <h3 class="panel-title">API 配置</h3>
               <div class="form-group">
                 <label>API 地址</label>
-                <input v-model="apiEndpoint" type="text" class="form-input" placeholder="http://localhost:11434/v1" />
+                <input v-model="apiEndpoint" type="text" class="form-input" />
               </div>
               <div class="form-group">
                 <label>API Key</label>
                 <div class="key-input-wrap">
-                  <input v-model="apiKey" :type="showApiKey ? 'text' : 'password'" class="form-input" placeholder="输入 API Key" />
+                  <input v-model="apiKey" :type="showApiKey ? 'text' : 'password'" class="form-input" />
                   <button class="toggle-key-btn" @click="showApiKey = !showApiKey">{{ showApiKey ? '隐藏' : '显示' }}</button>
                 </div>
               </div>
               <div class="form-group">
                 <label>模型 ID</label>
-                <input v-model="apiModelId" type="text" class="form-input" placeholder="qwen2.5-vl" />
+                <input v-model="apiModelId" type="text" class="form-input" />
               </div>
             </div>
 
@@ -233,11 +288,30 @@ function getLabelColor(label: string): string {
               <h3 class="panel-title">提示词配置</h3>
               <div class="form-group">
                 <label>系统提示词</label>
-                <textarea v-model="systemPrompt" class="form-textarea" rows="5" placeholder="系统角色设定..."></textarea>
+                <textarea v-model="systemPrompt" class="form-textarea" rows="5"></textarea>
               </div>
               <div class="form-group">
                 <label>用户提示词</label>
-                <textarea v-model="userPrompt" class="form-textarea" rows="3" placeholder="用户请求模板..."></textarea>
+                <textarea v-model="userPrompt" class="form-textarea" rows="3"></textarea>
+              </div>
+            </div>
+
+            <div class="panel-section">
+              <h3 class="panel-title">模型参数</h3>
+              <div class="form-group">
+                <label>Temperature: {{ temperature.toFixed(1) }}</label>
+                <input v-model.number="temperature" type="range" class="form-range" min="0" max="2" step="0.1" />
+              </div>
+              <div class="form-group">
+                <label>Max Tokens</label>
+                <input v-model.number="maxTokens" type="number" class="form-input" min="1" max="32768" />
+              </div>
+              <div class="form-group form-group-row">
+                <label>开启思考 (Thinking)</label>
+                <label class="toggle-switch">
+                  <input type="checkbox" v-model="enableThinking" />
+                  <span class="toggle-slider"></span>
+                </label>
               </div>
             </div>
 
@@ -583,6 +657,92 @@ function getLabelColor(label: string): string {
 
 .form-textarea:focus {
   border-color: rgba(0, 212, 255, 0.5);
+}
+
+.form-group-row {
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.form-range {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 4px;
+  background: rgba(0, 212, 255, 0.15);
+  border-radius: 2px;
+  outline: none;
+  cursor: pointer;
+}
+
+.form-range::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #00d4ff;
+  cursor: pointer;
+  border: 2px solid rgba(0, 0, 0, 0.3);
+}
+
+.form-range::-moz-range-thumb {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #00d4ff;
+  cursor: pointer;
+  border: 2px solid rgba(0, 0, 0, 0.3);
+}
+
+/* 开关按钮 */
+.toggle-switch {
+  position: relative;
+  display: inline-block;
+  width: 36px;
+  height: 20px;
+  cursor: pointer;
+}
+
+.toggle-switch input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+
+.toggle-slider {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(255, 255, 255, 0.1);
+  border: 1px solid rgba(0, 212, 255, 0.2);
+  border-radius: 20px;
+  transition: all 0.3s;
+}
+
+.toggle-slider::before {
+  content: '';
+  position: absolute;
+  width: 14px;
+  height: 14px;
+  left: 2px;
+  bottom: 2px;
+  background: rgba(255, 255, 255, 0.5);
+  border-radius: 50%;
+  transition: all 0.3s;
+}
+
+.toggle-switch input:checked + .toggle-slider {
+  background: rgba(0, 212, 255, 0.25);
+  border-color: rgba(0, 212, 255, 0.5);
+}
+
+.toggle-switch input:checked + .toggle-slider::before {
+  transform: translateX(16px);
+  background: #00d4ff;
 }
 
 .panel-actions {

@@ -1,10 +1,15 @@
 import re
 import io
 import json
+import time
+import logging
 import base64
 from PIL import Image
 from fastapi import APIRouter, HTTPException, UploadFile, File, Form
 from openai import OpenAI
+from app.core.config import settings
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -87,6 +92,15 @@ def _parse_detections(text: str) -> tuple:
         data = json.loads(text.strip())
         if isinstance(data, (list, dict)):
             return data, text
+        # 处理双重转义：模型返回的是一个被引号包裹的 JSON 字符串
+        # json.loads 解出来是 str，需要再解析一次
+        if isinstance(data, str):
+            try:
+                inner = json.loads(data)
+                if isinstance(inner, (list, dict)):
+                    return inner, text
+            except (json.JSONDecodeError, ValueError):
+                pass
     except json.JSONDecodeError:
         pass
 
@@ -106,9 +120,10 @@ def _parse_detections(text: str) -> tuple:
             except (json.JSONDecodeError, IndexError):
                 continue
 
-    # 尝试匹配 JSON 对象或数组
+    # 尝试将转义引号还原后，再匹配 JSON 对象或数组
+    unescaped = text.replace('\\"', '"').replace('\\\\', '\\')
     for pattern in [r'\[[\s\S]*\]', r'\{[\s\S]*\}']:
-        match = re.search(pattern, text)
+        match = re.search(pattern, unescaped)
         if match:
             try:
                 data = json.loads(match.group(0))
@@ -123,14 +138,27 @@ def _parse_detections(text: str) -> tuple:
 @router.post("/analyze")
 async def analyze_image(
     file: UploadFile = File(...),
-    endpoint: str = Form("http://localhost:11434/v1"),
-    api_key: str = Form("ollama"),
-    model_id: str = Form("qwen2.5-vl"),
-    system_prompt: str = Form(""),
-    user_prompt: str = Form("请检测这张图片中的目标，以JSON格式返回结果。"),
+    endpoint: str = Form(settings.detection_endpoint),
+    api_key: str = Form(settings.detection_api_key),
+    model_id: str = Form(settings.detection_model_id),
+    system_prompt: str = Form(settings.detection_system_prompt),
+    user_prompt: str = Form(settings.detection_user_prompt),
+    temperature: float = Form(settings.detection_temperature),
+    max_tokens: int = Form(settings.detection_max_tokens),
+    enable_thinking: bool = Form(settings.detection_enable_thinking),
 ):
     """上传图片并调用大模型进行目标检测/分类"""
     try:
+        logger.info(
+            "收到检测请求 | 文件: %s | endpoint: %s | model_id: %s | "
+            "temperature: %s | max_tokens: %s | enable_thinking: %s | "
+            "system_prompt: %s | user_prompt: %s",
+            file.filename, endpoint, model_id,
+            temperature, max_tokens, enable_thinking,
+            system_prompt[:80] + ('...' if len(system_prompt) > 80 else '') if system_prompt else '(空)',
+            user_prompt[:80] + ('...' if len(user_prompt) > 80 else '') if user_prompt else '(空)',
+        )
+
         content = await file.read()
         image_base64 = base64.b64encode(content).decode("utf-8")
         mime_type = file.content_type or "image/jpeg"
@@ -148,7 +176,7 @@ async def analyze_image(
         messages.append({
             "role": "user",
             "content": [
-                {"type": "text", "text": user_prompt or "请分析这张图片"},
+                {"type": "text", "text": user_prompt or settings.detection_user_prompt},
                 {
                     "type": "image_url",
                     "image_url": {"url": f"data:{mime_type};base64,{image_base64}"},
@@ -156,20 +184,29 @@ async def analyze_image(
             ],
         })
 
+        t0 = time.time()
         completion = client.chat.completions.create(
             model=model_id,
             messages=messages,
-            max_tokens=4096,
-            temperature=0.3,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            extra_body={"enable_thinking": enable_thinking},
         )
+        elapsed = time.time() - t0
+        logger.info("模型请求耗时: %.2fs | tokens: %s", elapsed, completion.usage.total_tokens if completion.usage else 'N/A')
 
         raw_content = completion.choices[0].message.content or ""
         raw_data, raw_text = _parse_detections(raw_content)
+
+        logger.info("模型原始返回: %s", raw_content)
+        logger.info("解析结果(raw_data): %s", json.dumps(raw_data, ensure_ascii=False) if raw_data is not None else "None")
 
         # 标准化检测结果 + 坐标转换
         detections = []
         if raw_data is not None:
             detections = _normalize_detections(raw_data, image_width, image_height)
+
+        logger.info("标准化检测结果(%d个目标): %s", len(detections), json.dumps(detections, ensure_ascii=False))
 
         result = {
             "detections": detections,
@@ -187,9 +224,8 @@ async def analyze_image(
 
 @router.post("/test-connection")
 async def test_connection(
-    endpoint: str = Form("http://localhost:11434/v1"),
-    api_key: str = Form("ollama"),
-    model_id: str = Form("qwen2.5-vl"),
+    endpoint: str = Form(settings.detection_endpoint),
+    api_key: str = Form(settings.detection_api_key),
 ):
     """测试 API 连接是否正常"""
     try:

@@ -168,6 +168,9 @@ export interface DetectionApiConfig {
   endpoint: string
   apiKey: string
   modelId: string
+  temperature?: number
+  maxTokens?: number
+  enableThinking?: boolean
 }
 
 export async function detectObjects(
@@ -183,6 +186,9 @@ export async function detectObjects(
   formData.append('model_id', config.modelId)
   formData.append('system_prompt', systemPrompt)
   formData.append('user_prompt', userPrompt)
+  if (config.temperature !== undefined) formData.append('temperature', String(config.temperature))
+  if (config.maxTokens !== undefined) formData.append('max_tokens', String(config.maxTokens))
+  if (config.enableThinking !== undefined) formData.append('enable_thinking', String(config.enableThinking))
 
   const res = await fetch(`${DIRECT_URL.replace('/api', '')}/api/detection/analyze`, {
     method: 'POST',
