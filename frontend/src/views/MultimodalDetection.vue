@@ -35,8 +35,16 @@ interface SceneConfig {
 }
 const sceneConfigs = reactive<Record<string, SceneConfig>>({})
 
-function defaultSceneConfig(): SceneConfig {
-  return { endpoint: '', modelId: '', systemPrompt: '', userPrompt: '', temperature: 0.3, maxTokens: 4096, enableThinking: false }
+function defaultSceneConfig(s?: typeof detectionScenes[number]): SceneConfig {
+  return {
+    endpoint: s?.endpoint || '',
+    modelId: s?.modelId || '',
+    systemPrompt: s?.defaultPrompt || '',
+    userPrompt: s?.userPrompt || '',
+    temperature: 0.3,
+    maxTokens: 4096,
+    enableThinking: false,
+  }
 }
 
 // 将当前表单值写入指定场景缓存
@@ -54,7 +62,8 @@ function saveToCache(sceneId: string) {
 
 // 从指定场景缓存加载到表单
 function loadFromCache(sceneId: string) {
-  const cfg = sceneConfigs[sceneId] || defaultSceneConfig()
+  const s = detectionScenes.find(x => x.id === sceneId)
+  const cfg = sceneConfigs[sceneId] || defaultSceneConfig(s)
   apiEndpoint.value = cfg.endpoint
   apiModelId.value = cfg.modelId
   systemPrompt.value = cfg.systemPrompt
@@ -204,12 +213,12 @@ function loadSavedConfig() {
     const saved = localStorage.getItem(key)
     if (saved) {
       try {
-        sceneConfigs[s.id] = { ...defaultSceneConfig(), ...JSON.parse(saved) }
+        sceneConfigs[s.id] = { ...defaultSceneConfig(s), ...JSON.parse(saved) }
       } catch {
-        sceneConfigs[s.id] = defaultSceneConfig()
+        sceneConfigs[s.id] = defaultSceneConfig(s)
       }
     } else {
-      sceneConfigs[s.id] = defaultSceneConfig()
+      sceneConfigs[s.id] = defaultSceneConfig(s)
     }
   }
   // 加载当前场景配置到表单
@@ -229,7 +238,7 @@ function onResultRowClick(idx: number) {
 }
 
 function getLabelColor(label: string): string {
-  return scene.value.labelColors[label] || '#00d4ff'
+  return scene.value.labelColors?.[label] || '#00d4ff'
 }
 </script>
 
