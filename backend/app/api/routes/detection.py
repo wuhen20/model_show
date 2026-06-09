@@ -4,6 +4,7 @@ import json
 import time
 import logging
 import base64
+from urllib.parse import urlparse
 from PIL import Image
 from fastapi import APIRouter, HTTPException, UploadFile, File, Form
 from openai import OpenAI
@@ -12,6 +13,27 @@ from app.core.config import settings
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+def _is_vllm_endpoint(endpoint: str) -> bool:
+    """
+    判断是否为私有 vLLM 部署（内网地址）。
+    外部供应商 API（如阿里云 DashScope）返回 False。
+    """
+    try:
+        host = urlparse(endpoint).hostname or ""
+        # 本地 / 内网地址视为 vLLM
+        if host in ("localhost", "127.0.0.1", "0.0.0.0", "::1"):
+            return True
+        if host.startswith("10.") or host.startswith("192.168."):
+            return True
+        # 172.16.0.0 – 172.31.255.255
+        if host.startswith("172."):
+            parts = host.split(".")
+            if len(parts) >= 2 and 16 <= int(parts[1]) <= 31:
+                return True
+        return False
+    except Exception:
+        return False
 
 
 def _get_image_size(image_bytes: bytes) -> tuple[int, int]:
@@ -163,11 +185,14 @@ async def analyze_image(
         image_base64 = base64.b64encode(content).decode("utf-8")
         mime_type = file.content_type or "image/jpeg"
 
-        # 获取图片实际尺寸
+        # 获取图片实际尺寸（用于坐标换算）
         image_width, image_height = _get_image_size(content)
 
         # 动态创建 OpenAI client
         client = OpenAI(api_key=api_key, base_url=endpoint)
+
+        is_vllm = _is_vllm_endpoint(endpoint)
+        logger.info("endpoint 类型: %s (vLLM=%s)", endpoint, is_vllm)
 
         messages = []
         if system_prompt:
@@ -185,20 +210,39 @@ async def analyze_image(
         })
 
         t0 = time.time()
+
+        # 根据 endpoint 类型构建 extra_body
+        extra_body = None
+        if enable_thinking is not None:
+            if is_vllm:
+                # vLLM: enable_thinking 必须嵌套在 chat_template_kwargs 中
+                extra_body = {"chat_template_kwargs": {"enable_thinking": enable_thinking}}
+            else:
+                # 外部供应商: 直接作为顶层参数传递
+                extra_body = {"enable_thinking": enable_thinking}
+
         completion = client.chat.completions.create(
             model=model_id,
             messages=messages,
             max_tokens=max_tokens,
             temperature=temperature,
-            extra_body={"enable_thinking": enable_thinking},
+            extra_body=extra_body,
         )
         elapsed = time.time() - t0
         logger.info("模型请求耗时: %.2fs | tokens: %s", elapsed, completion.usage.total_tokens if completion.usage else 'N/A')
 
-        raw_content = completion.choices[0].message.content or ""
+        # 优先读取 content；若为空则回退到 reasoning_content（模型开启思考时内容可能在此）
+        choice = completion.choices[0]
+        raw_content = choice.message.content or ""
+        if not raw_content:
+            reasoning = getattr(choice.message, "reasoning_content", None)
+            if reasoning:
+                logger.info("content 为空，尝试从 reasoning_content 提取结果 (长度=%d)", len(reasoning))
+                raw_content = reasoning
+
         raw_data, raw_text = _parse_detections(raw_content)
 
-        logger.info("模型原始返回: %s", raw_content)
+        logger.info("模型原始返回: %s", raw_content[:500] if raw_content else '(空)')
         logger.info("解析结果(raw_data): %s", json.dumps(raw_data, ensure_ascii=False) if raw_data is not None else "None")
 
         # 标准化检测结果 + 坐标转换
