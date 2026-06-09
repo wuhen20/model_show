@@ -9,6 +9,7 @@ from app.api.routes.models import router as models_router
 from app.api.routes.chat import router as chat_router
 from app.api.routes.dashboard import router as dashboard_router
 from app.api.routes.predict import router as predict_router
+from app.api.routes.datasets import router as datasets_router
 from app.db.database import init_db
 from app.registry.model_registry import sync_registry
 
@@ -50,6 +51,7 @@ app.add_middleware(
 app.include_router(dashboard_router, prefix="/api/dashboard", tags=["首页"])
 app.include_router(models_router, prefix="/api/models", tags=["小模型管理"])
 app.include_router(predict_router, prefix="/api/predict", tags=["统一推理"])
+app.include_router(datasets_router, prefix="/api/datasets", tags=["训练数据集"])
 # 既有：LLM 解读对话
 app.include_router(chat_router, prefix="/api", tags=["对话服务"])
 

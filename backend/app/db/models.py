@@ -1,7 +1,8 @@
 """SQLite ORM 模型定义。
 
 M1 阶段实现核心三表：model_metadata / model_version / invocation_log。
-后续里程碑按需追加 training_task / dataset / mcp_service 等。
+M2 阶段追加 dataset / dataset_version。
+后续里程碑按需追加 training_task / mcp_service 等。
 """
 from __future__ import annotations
 
@@ -74,3 +75,47 @@ class InvocationLog(Base):
         Index("idx_log_invoked_at", "invoked_at"),
         Index("idx_log_model_code", "model_code"),
     )
+
+
+class Dataset(Base):
+    """训练数据集。
+
+    一个场景 + 一个模型编码 = 一个数据集目录。
+    文件存储在 backend/data/datasets/{scene}/{model_code}/。
+    """
+
+    __tablename__ = "dataset"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(128), nullable=False)
+    scene: Mapped[str] = mapped_column(String(8), nullable=False)
+    model_code: Mapped[Optional[str]] = mapped_column(String(16), nullable=True)
+    format: Mapped[str] = mapped_column(String(16), nullable=False)          # csv/txt/jpg/png/mp4/zip
+    dataset_type: Mapped[str] = mapped_column(String(16), default="general") # general / yolo_detection
+    description: Mapped[Optional[str]] = mapped_column(Text)
+    schema_json: Mapped[Optional[str]] = mapped_column(Text)                 # CSV 列定义 JSON
+    # YOLO 专用字段
+    classes_json: Mapped[Optional[str]] = mapped_column(Text)                # YOLO 类别名列表 JSON
+    image_count: Mapped[int] = mapped_column(Integer, default=0)             # 图片数
+    label_count: Mapped[int] = mapped_column(Integer, default=0)             # 标注框总数
+    sample_count: Mapped[int] = mapped_column(Integer, default=0)
+    file_count: Mapped[int] = mapped_column(Integer, default=0)
+    size_bytes: Mapped[int] = mapped_column(Integer, default=0)
+    current_version: Mapped[Optional[str]] = mapped_column(String(32))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+
+
+class DatasetVersion(Base):
+    """数据集版本历史。"""
+
+    __tablename__ = "dataset_version"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    dataset_id: Mapped[int] = mapped_column(Integer, ForeignKey("dataset.id"), nullable=False)
+    version: Mapped[str] = mapped_column(String(32), nullable=False)         # v1, v2, ...
+    file_path: Mapped[str] = mapped_column(Text, nullable=False)             # 相对路径
+    file_count: Mapped[int] = mapped_column(Integer, default=0)
+    sample_count: Mapped[int] = mapped_column(Integer, default=0)
+    size_bytes: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)

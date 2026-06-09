@@ -16,6 +16,10 @@ class Settings(BaseSettings):
     # 数据与模型权重根目录
     data_dir: str = "data"
     models_pool_dir: str = "models_pool"
+
+    # 数据集预览
+    dataset_preview_max: int = 500       # 预览最大行数/图片数
+    dataset_preview_page_size: int = 20  # 每页默认条数
     mcp_port_start: int = 8100
     mcp_port_end: int = 8199
 

@@ -56,3 +56,54 @@ class PredictResponse(BaseModel):
     latency_ms: int
     trace_id: Optional[str] = None
     mock: bool = False
+
+
+# ── 数据集相关 Schema ──────────────────────────────────────────────────────────────
+
+class DatasetBrief(BaseModel):
+    id: int
+    name: str
+    scene: str
+    model_code: Optional[str] = None
+    format: str
+    dataset_type: str = "general"
+    description: Optional[str] = None
+    classes: Optional[list[str]] = None
+    image_count: int = 0
+    label_count: int = 0
+    sample_count: int = 0
+    file_count: int = 0
+    size_bytes: int = 0
+    current_version: Optional[str] = None
+    version_count: int = 0
+    created_at: Optional[datetime] = None
+
+
+class DatasetVersionBrief(BaseModel):
+    id: int
+    version: str
+    file_count: int
+    sample_count: int
+    size_bytes: int
+    created_at: Optional[datetime] = None
+
+
+class DatasetDetail(DatasetBrief):
+    schema_json: Optional[str] = None
+    updated_at: Optional[datetime] = None
+    versions: list[DatasetVersionBrief] = []
+
+
+class YoloObject(BaseModel):
+    class_id: int
+    class_name: str
+    cx: float                                          # 归一化中心 x
+    cy: float                                          # 归一化中心 y
+    w: float                                           # 归一化宽度
+    h: float                                           # 归一化高度
+
+
+class YoloPreviewItem(BaseModel):
+    image_url: str
+    image_file: str
+    objects: list[YoloObject] = []

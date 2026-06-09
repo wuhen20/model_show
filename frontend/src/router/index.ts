@@ -47,6 +47,12 @@ const routes = [
     component: () => import('@/views/DatasetsList.vue'),
     meta: { title: '训练数据集' }
   },
+  {
+    path: '/datasets/:id',
+    name: 'DatasetDetail',
+    component: () => import('@/views/DatasetDetail.vue'),
+    meta: { title: '数据集详情' }
+  },
   // 小模型 MCP 服务管理
   {
     path: '/mcp',

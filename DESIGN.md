@@ -286,36 +286,48 @@ GET  /api/training/scaffolds/{code}    # 获取脚手架超参定义
 
 ### 4.5 模块 ⑤ 训练数据集管理 `/datasets`
 
-**目标**：登记、上传、版本化训练数据集；与训练任务双向绑定。
+**目标**：登记、上传、版本化训练数据集；与训练任务双向绑定。支持 ZIP 压缩包上传、YOLO 目标检测标注预览。
 
 **列表页字段**：
-- 数据集 ID / 名称 / 类型(timeseries/image/tabular) / 关联场景 / 样本数 / 大小 / 版本 / 创建人 / 创建时间
+- 数据集 ID / 名称 / 场景 / 关联模型编码 / 格式 / 类型（通用 / YOLO 目标检测）
+- 样本数/文件数/图片数/标注框数 / 大小 / 版本 / 创建时间
 
 **详情页 Tab**：
-1. **元信息 + Schema**：列定义、单位、含义
-2. **预览**：时序数据→折线；图片→缩略图墙；表格→DataTable（前 100 行）
-3. **统计**：基础统计 / 缺失率 / 异常值比例 / 类别分布
-4. **版本历史**：每次上传产生新版本，记录差异
-5. **关联模型**：哪些模型用该数据集训练过
+1. **基本信息**：名称、场景、关联模型、格式、类型、描述、版本、统计数字
+2. **样本预览**（按 `dataset_type` 区分）：
+   - 通用 CSV：DataTable（前 50 行）
+   - 通用图片：缩略图网格
+   - YOLO 目标检测：Canvas 叠加检测框 + 类别标签，支持分页与点击放大
+3. **统计信息**：CSV→缺失率；YOLO→每类标注框数量分布柱状图
+4. **版本历史**：版本列表，支持删除旧版本
 
 **上传方式**：
-- 单文件上传（CSV / ZIP 图片包 / Parquet）
-- 文件夹批量上传（FormData multi-files）
-- 引用本地路径（仅演示阶段，避免大文件复制）
+- **ZIP 压缩包**为主，上传后自动解压至目标目录
+- 一个场景 + 一个模型编码 = 一个数据集目录
+- 目录结构：`backend/data/datasets/{scene}/{model_code}/`
+
+**YOLO 数据集规范**：
+- ZIP 根目录包含 `images/` 和 `labels/` 子目录
+- `labels/` 下每张图片对应同名 `.txt`，每行 `class_id cx cy w h`（归一化）
+- 可选 `classes.txt`（类别名）或 `dataset.yaml`
+- 上传时自动识别 YOLO 格式
 
 **存储**：
-- 元数据 → SQLite
-- 文件 → `backend/data/datasets/{ds_id}/v{n}/`（gitignore）
+- 元数据 → SQLite（`dataset` + `dataset_version` 表）
+- 文件 → `backend/data/datasets/{scene}/{model_code}/`（gitignore）
 
 **后端 API**：
 ```
-GET    /api/datasets
-POST   /api/datasets                       # 创建（multipart/form-data）
-GET    /api/datasets/{id}
-GET    /api/datasets/{id}/preview?limit=100
-GET    /api/datasets/{id}/stats
-POST   /api/datasets/{id}/versions
-DELETE /api/datasets/{id}
+GET    /api/datasets                              # 列表（?scene=&format=&dataset_type=&model_code=）
+POST   /api/datasets                              # 创建（multipart/form-data，ZIP 上传）
+GET    /api/datasets/{id}                         # 详情
+DELETE /api/datasets/{id}                         # 删除（级联删除文件）
+POST   /api/datasets/{id}/versions                # 上传新 ZIP 版本
+DELETE /api/datasets/{id}/versions/{vid}          # 删除指定版本
+GET    /api/datasets/{id}/preview                 # 通用预览
+GET    /api/datasets/{id}/yolo-preview?page=&size= # YOLO 标注预览（分页）
+GET    /api/datasets/{id}/files/{path}            # 静态文件访问
+GET    /api/datasets/{id}/stats                   # 统计信息
 ```
 
 ---
@@ -527,22 +539,31 @@ CREATE TABLE model_version (
 CREATE TABLE dataset (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL,
-    io_type TEXT,
-    scene TEXT,
+    scene TEXT NOT NULL,
+    model_code TEXT,
+    format TEXT NOT NULL,              -- csv/txt/jpg/png/mp4/zip
+    dataset_type TEXT DEFAULT 'general', -- general / yolo_detection
     description TEXT,
     schema_json TEXT,
-    sample_count INTEGER,
-    size_bytes INTEGER,
+    classes_json TEXT,                 -- YOLO 类别名 JSON
+    image_count INTEGER DEFAULT 0,
+    label_count INTEGER DEFAULT 0,
+    sample_count INTEGER DEFAULT 0,
+    file_count INTEGER DEFAULT 0,
+    size_bytes INTEGER DEFAULT 0,
     current_version TEXT,
-    created_at TIMESTAMP
+    created_at TIMESTAMP,
+    updated_at TIMESTAMP
 );
 
 CREATE TABLE dataset_version (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     dataset_id INTEGER NOT NULL,
-    version TEXT,
+    version TEXT NOT NULL,
     file_path TEXT,
-    sample_count INTEGER,
+    file_count INTEGER DEFAULT 0,
+    sample_count INTEGER DEFAULT 0,
+    size_bytes INTEGER DEFAULT 0,
     created_at TIMESTAMP
 );
 

@@ -62,7 +62,7 @@ def dashboard_stats(db: Session = Depends(get_db)):
             "mcp_services": 0,  # M5 接入
             "today_calls": int(today_calls),
             "avg_latency_ms": round(float(avg_latency or 0), 2),
-            "success_rate": round(success_rate, 2),
+            "success_rate": success_rate,
         },
     }
 

@@ -76,3 +76,69 @@ export const statusLabels: Record<ModelStatus, { text: string; type: string }> =
   offline: { text: '已下线', type: 'warning' },
   error: { text: '异常', type: 'danger' }
 }
+
+// ── 数据集相关类型 ──────────────────────────────────────────────────────────────────
+
+export type DatasetFormat = 'csv' | 'txt' | 'jpg' | 'png' | 'mp4' | 'zip'
+export type DatasetType = 'general' | 'yolo_detection'
+
+export const datasetFormatLabels: Record<DatasetFormat, string> = {
+  csv: 'CSV', txt: 'TXT', jpg: 'JPG', png: 'PNG', mp4: 'MP4', zip: 'ZIP'
+}
+
+export const datasetTypeLabels: Record<DatasetType, string> = {
+  general: '通用', yolo_detection: 'YOLO 目标检测'
+}
+
+export interface DatasetBrief {
+  id: number
+  name: string
+  scene: SceneCode
+  model_code?: string | null
+  format: DatasetFormat
+  dataset_type: DatasetType
+  description?: string | null
+  classes?: string[] | null
+  image_count: number
+  label_count: number
+  sample_count: number
+  file_count: number
+  size_bytes: number
+  current_version?: string | null
+  version_count: number
+  created_at?: string | null
+}
+
+export interface DatasetVersionBrief {
+  id: number
+  version: string
+  file_count: number
+  sample_count: number
+  size_bytes: number
+  created_at?: string | null
+}
+
+export interface DatasetDetail extends DatasetBrief {
+  schema_json?: string | null
+  updated_at?: string | null
+  versions: DatasetVersionBrief[]
+}
+
+export interface YoloObject {
+  class_id: number
+  class_name: string
+  cx: number
+  cy: number
+  w: number
+  h: number
+}
+
+export interface YoloPreviewItem {
+  image_url: string
+  image_file: string
+  objects: YoloObject[]
+}
+
+export interface DatasetPreviewRow {
+  [key: string]: string
+}
