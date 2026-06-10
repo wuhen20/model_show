@@ -3,6 +3,9 @@ import { onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { modelsApi, predictApi, type PredictResult } from '@/api/models'
 import { ioTypeLabels, type ModelDetail } from '@/data/models'
+import TerminalDemo from '@/views/TerminalDemo.vue'
+import MeterDemo from '@/views/MeterDemo.vue'
+import MeterHealthDemo from '@/views/MeterHealthDemo.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -12,6 +15,12 @@ const inputText = ref('{}')
 const result = ref<PredictResult | null>(null)
 const invoking = ref(false)
 const errorMsg = ref('')
+const activeTab = ref('terminal')
+
+const demoTable = [
+  { key: 'terminal', label: '终端异常研判演示' },
+  { key: 'meter', label: '电表异常研判演示' },
+]
 
 async function load() {
   const code = route.params.code as string
@@ -20,6 +29,7 @@ async function load() {
     detail.value = await modelsApi.detail(code)
     inputText.value = buildSample(detail.value)
     result.value = null
+    activeTab.value = 'terminal'
   } catch (e: any) {
     errorMsg.value = e?.message || '加载失败'
   }
@@ -69,55 +79,83 @@ onMounted(load)
         <button class="btn-link" @click="router.push(`/models/${detail.code}`)">查看详情</button>
       </header>
 
-      <section class="panel grid-2">
-        <div class="card">
-          <div class="card-title">输入参数（JSON）</div>
-          <textarea v-model="inputText" rows="14" class="json-editor"></textarea>
-          <button class="btn" :disabled="invoking" @click="invoke">
-            {{ invoking ? '推理中…' : '运行推理' }}
-          </button>
-        </div>
+      <!-- ZJ-05 演示 Tab 布局 -->
+      <template v-if="detail.code === 'ZJ-05'">
+        <nav class="tabs">
+          <button
+            v-for="t in demoTable" :key="t.key"
+            class="tab-btn"
+            :class="{ active: activeTab === t.key }"
+            @click="activeTab = t.key"
+          >{{ t.label }}</button>
+        </nav>
 
-        <div class="card">
-          <div class="card-title">
-            推理结果
-            <span v-if="result?.mock" class="mock-tag">MOCK</span>
-          </div>
-          <div v-if="errorMsg" class="error">⚠ {{ errorMsg }}</div>
-          <div v-else-if="!result" class="placeholder">点击「运行推理」查看输出</div>
-          <div v-else>
-            <div class="result-meta">
-              <span>延时 {{ result.latency_ms }} ms</span>
-              <span v-if="result.trace_id">trace: {{ result.trace_id }}</span>
-            </div>
-            <pre class="output">{{ JSON.stringify(result.output, null, 2) }}</pre>
-          </div>
-        </div>
-      </section>
+        <!-- Tab: 终端异常研判演示 -->
+        <KeepAlive>
+          <TerminalDemo v-if="activeTab === 'terminal'" />
+        </KeepAlive>
 
-      <section class="panel">
-        <div class="card">
-          <div class="card-title">字段说明</div>
-          <div class="spec-grid">
-            <div>
-              <h4>输入</h4>
-              <ul>
-                <li v-for="(f, i) in detail.input_spec" :key="i">
-                  <code>{{ f.field }}</code> {{ f.type || '' }} {{ f.required ? '(必填)' : '' }}
-                </li>
-              </ul>
+        <!-- Tab: 电表异常研判演示 -->
+        <KeepAlive>
+          <MeterDemo v-if="activeTab === 'meter'" />
+        </KeepAlive>
+      </template>
+
+      <!-- ZJ-02 电表健康评价 -->
+      <template v-else-if="detail.code === 'ZJ-02'">
+        <MeterHealthDemo />
+      </template>
+
+      <!-- 非 ZJ-05 模型：保持原有布局 -->
+      <template v-else>
+        <section class="panel grid-2">
+          <div class="card">
+            <div class="card-title">输入参数（JSON）</div>
+            <textarea v-model="inputText" rows="14" class="json-editor"></textarea>
+            <button class="btn" :disabled="invoking" @click="invoke">
+              {{ invoking ? '推理中…' : '运行推理' }}
+            </button>
+          </div>
+          <div class="card">
+            <div class="card-title">
+              推理结果
+              <span v-if="result?.mock" class="mock-tag">MOCK</span>
             </div>
-            <div>
-              <h4>输出</h4>
-              <ul>
-                <li v-for="(f, i) in detail.output_spec" :key="i">
-                  <code>{{ f.field }}</code> — {{ f.description || '' }}
-                </li>
-              </ul>
+            <div v-if="errorMsg" class="error">⚠ {{ errorMsg }}</div>
+            <div v-else-if="!result" class="placeholder">点击「运行推理」查看输出</div>
+            <div v-else>
+              <div class="result-meta">
+                <span>延时 {{ result.latency_ms }} ms</span>
+                <span v-if="result.trace_id">trace: {{ result.trace_id }}</span>
+              </div>
+              <pre class="output">{{ JSON.stringify(result.output, null, 2) }}</pre>
             </div>
           </div>
-        </div>
-      </section>
+        </section>
+        <section class="panel">
+          <div class="card">
+            <div class="card-title">字段说明</div>
+            <div class="spec-grid">
+              <div>
+                <h4>输入</h4>
+                <ul>
+                  <li v-for="(f, i) in detail.input_spec" :key="i">
+                    <code>{{ f.field }}</code> {{ f.type || '' }} {{ f.required ? '(必填)' : '' }}
+                  </li>
+                </ul>
+              </div>
+              <div>
+                <h4>输出</h4>
+                <ul>
+                  <li v-for="(f, i) in detail.output_spec" :key="i">
+                    <code>{{ f.field }}</code> — {{ f.description || '' }}
+                  </li>
+                </ul>
+              </div>
+            </div>
+          </div>
+        </section>
+      </template>
     </template>
   </div>
 </template>
@@ -159,4 +197,23 @@ onMounted(load)
 .spec-grid h4 { font-size: 13px; color: rgba(255,255,255,0.6); margin: 0 0 8px; }
 .spec-grid ul { margin: 0; padding-left: 18px; font-size: 12px; line-height: 1.9; }
 .spec-grid code { color: #00d4ff; background: rgba(0,212,255,0.1); padding: 1px 5px; border-radius: 3px; }
+
+/* Tab 导航 */
+.tabs {
+  display: flex; gap: 0;
+  border-bottom: 1px solid rgba(0,212,255,0.15);
+  margin-bottom: 16px;
+}
+.tab-btn {
+  background: transparent; border: none; color: rgba(255,255,255,0.5);
+  padding: 10px 20px; cursor: pointer; font-size: 14px;
+  border-bottom: 2px solid transparent; transition: all 0.2s;
+}
+.tab-btn:hover { color: #00d4ff; }
+.tab-btn.active {
+  color: #00d4ff;
+  border-bottom-color: #00d4ff;
+}
+
+
 </style>

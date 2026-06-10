@@ -16,6 +16,7 @@ class Settings(BaseSettings):
     # 数据与模型权重根目录
     data_dir: str = "data"
     models_pool_dir: str = "models_pool"
+    experience_data_dir: str = "experience_data"
 
     # 数据集预览
     dataset_preview_max: int = 500       # 预览最大行数/图片数

@@ -10,6 +10,9 @@ from app.api.routes.chat import router as chat_router
 from app.api.routes.dashboard import router as dashboard_router
 from app.api.routes.predict import router as predict_router
 from app.api.routes.datasets import router as datasets_router
+from app.api.routes.demo_terminal import router as demo_terminal_router
+from app.api.routes.demo_meter import router as demo_meter_router
+from app.api.routes.demo_meter_health import router as demo_meter_health_router
 from app.db.database import init_db
 from app.registry.model_registry import sync_registry
 
@@ -17,6 +20,7 @@ from app.registry.model_registry import sync_registry
 os.makedirs(settings.upload_dir, exist_ok=True)
 os.makedirs(settings.data_dir, exist_ok=True)
 os.makedirs(settings.models_pool_dir, exist_ok=True)
+os.makedirs(settings.experience_data_dir, exist_ok=True)
 
 
 @asynccontextmanager
@@ -54,6 +58,10 @@ app.include_router(predict_router, prefix="/api/predict", tags=["统一推理"])
 app.include_router(datasets_router, prefix="/api/datasets", tags=["训练数据集"])
 # 既有：LLM 解读对话
 app.include_router(chat_router, prefix="/api", tags=["对话服务"])
+# 演示路由
+app.include_router(demo_terminal_router, prefix="/api/demo/terminal", tags=["终端演示"])
+app.include_router(demo_meter_router, prefix="/api/demo/meter", tags=["电表演示"])
+app.include_router(demo_meter_health_router, prefix="/api/demo/meter-health", tags=["电表健康演示"])
 
 
 @app.get("/api/health")
