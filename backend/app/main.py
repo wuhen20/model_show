@@ -1,6 +1,14 @@
 import os
 from contextlib import asynccontextmanager
 
+# --- DLL 预加载修复 ---
+# 确保 torch 的 VC++ runtime DLL 在 sqlalchemy C 扩展之前加载，
+# 避免 System32 的旧版 vcruntime140.dll (14.00) 被锁定在进程中导致 WinError 1114。
+# 原理：先导入 torch 将正确的 vcruntime140.dll (由 Python 3.11 提供，14.38+) 
+# 锁定到进程中，之后 sqlalchemy .pyd 只能复用已加载的版本。
+import torch as _torch  # noqa: F401 （必须在所有 sqlalchemy 相关导入之前）
+# --- DLL 预加载修复结束 ---
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -13,6 +21,7 @@ from app.api.routes.datasets import router as datasets_router
 from app.api.routes.demo_terminal import router as demo_terminal_router
 from app.api.routes.demo_meter import router as demo_meter_router
 from app.api.routes.demo_meter_health import router as demo_meter_health_router
+from app.api.routes.demo_terminal_health import router as demo_terminal_health_router
 from app.db.database import init_db
 from app.registry.model_registry import sync_registry
 
@@ -62,6 +71,7 @@ app.include_router(chat_router, prefix="/api", tags=["对话服务"])
 app.include_router(demo_terminal_router, prefix="/api/demo/terminal", tags=["终端演示"])
 app.include_router(demo_meter_router, prefix="/api/demo/meter", tags=["电表演示"])
 app.include_router(demo_meter_health_router, prefix="/api/demo/meter-health", tags=["电表健康演示"])
+app.include_router(demo_terminal_health_router, prefix="/api/demo/terminal-health", tags=["终端健康演示"])
 
 
 @app.get("/api/health")

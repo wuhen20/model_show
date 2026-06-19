@@ -6,6 +6,7 @@ import { ioTypeLabels, type ModelDetail } from '@/data/models'
 import TerminalDemo from '@/views/TerminalDemo.vue'
 import MeterDemo from '@/views/MeterDemo.vue'
 import MeterHealthDemo from '@/views/MeterHealthDemo.vue'
+import TerminalHealthDemo from '@/views/TerminalHealthDemo.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -99,6 +100,11 @@ onMounted(load)
         <KeepAlive>
           <MeterDemo v-if="activeTab === 'meter'" />
         </KeepAlive>
+      </template>
+
+      <!-- ZJ-01 终端健康评价 -->
+      <template v-else-if="detail.code === 'ZJ-01'">
+        <TerminalHealthDemo />
       </template>
 
       <!-- ZJ-02 电表健康评价 -->

@@ -344,3 +344,161 @@ export function createMeterHealthApi() {
 }
 
 export type MeterHealthApi = ReturnType<typeof createMeterHealthApi>
+
+// ============ 终端健康评价 API ============
+
+export interface TerminalHealthDataInfo {
+  status: string
+  rows: number
+  columns: number
+  column_names: string[]
+  removal_rate: number | null
+  removal_count: number | null
+  manufacturers: string[] | null
+  manufacturer_count: number | null
+}
+
+export interface TerminalHealthScoreStats {
+  mean: number
+  std: number
+  min: number
+  max: number
+  median: number
+}
+
+export interface TerminalHealthTrainResult {
+  status: string
+  message: string
+  score_stats: Record<string, TerminalHealthScoreStats>
+  grade_dist: Record<string, number>
+  mfr_analysis: { MFR: string; mean: number; count: number; std: number }[] | null
+  score_distribution: { counts: number[]; edges: number[]; labels: string[] } | null
+  removal_distribution: { removed: number[]; normal: number[] } | null
+  total_samples: number
+  weights: Record<string, number>
+}
+
+export interface TerminalHealthGridSearchModule {
+  status: string
+  module: string
+  module_name: string
+  best_params: { n_estimators: number; max_samples: number; max_features: number }
+  best_auc: number
+  max_features_values: number[]
+  heatmaps: Record<string, { x_labels: number[]; y_labels: number[]; matrix: number[][] }>
+}
+
+export interface TerminalHealthGridSearchResult {
+  status: string
+  message: string
+  modules: TerminalHealthGridSearchModule[]
+  auto_trained: boolean
+}
+
+export interface TerminalHealthCVResult {
+  status: string
+  message: string
+  n_folds: number
+  fold_results: {
+    fold: number
+    train_size: number
+    test_size: number
+    auc: number | null
+    avg_rank_quantile: number | null
+    removed_count: number
+    mean_score: number
+    std_score: number
+  }[]
+  mean_auc: number | null
+  std_auc: number | null
+  overall_auc: number | null
+  avg_rank_quantile: number | null
+  evaluation: string
+  auc_chart: { labels: string[]; values: number[] }
+}
+
+export interface TerminalHealthPredictResult {
+  status: string
+  message: string
+  results: Record<string, any>[]
+  grade_dist: Record<string, number>
+  total_samples: number
+  columns: string[]
+}
+
+/** 创建终端健康评价 API 客户端 */
+export function createTerminalHealthApi() {
+  const base = '/api/demo/terminal-health'
+
+  return {
+    async ping(): Promise<{ status: string; message: string }> {
+      const resp = await fetch(`${BASE_URL}${base}/ping`)
+      if (!resp.ok) throw new Error(`服务连接失败: ${resp.status}`)
+      return resp.json()
+    },
+
+    async modelInfo(): Promise<any> {
+      const resp = await fetch(`${BASE_URL}${base}/model_info`)
+      if (!resp.ok) throw new Error(`获取模型信息失败: ${resp.status}`)
+      return resp.json()
+    },
+
+    getDemoCsvUrl(): string {
+      return `${BASE_URL}${base}/demo_csv`
+    },
+
+    async upload(file: File): Promise<{ status: string; message: string; rows: number; columns: number }> {
+      const form = new FormData()
+      form.append('file', file)
+      const resp = await fetch(`${BASE_URL}${base}/upload`, { method: 'POST', body: form })
+      if (!resp.ok) { const err = await resp.json(); throw new Error(err.detail || '上传失败') }
+      return resp.json()
+    },
+
+    async dataInfo(): Promise<TerminalHealthDataInfo> {
+      const resp = await fetch(`${BASE_URL}${base}/data_info`)
+      if (!resp.ok) throw new Error(`获取数据信息失败: ${resp.status}`)
+      return resp.json()
+    },
+
+    async train(params: { use_optimization: boolean; optimize_n_calls: number }): Promise<TerminalHealthTrainResult> {
+      const resp = await fetch(`${BASE_URL}${base}/train`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(params),
+      })
+      if (!resp.ok) { const err = await resp.json(); throw new Error(err.detail || '训练失败') }
+      return resp.json()
+    },
+
+    async gridSearch(params: Record<string, any>): Promise<TerminalHealthGridSearchResult> {
+      const resp = await fetch(`${BASE_URL}${base}/grid_search`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(params),
+      })
+      if (!resp.ok) { const err = await resp.json(); throw new Error(err.detail || 'Grid Search 失败') }
+      return resp.json()
+    },
+
+    async crossValidate(params: { n_folds: number; use_optimization: boolean }): Promise<TerminalHealthCVResult> {
+      const resp = await fetch(`${BASE_URL}${base}/cross_validate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(params),
+      })
+      if (!resp.ok) { const err = await resp.json(); throw new Error(err.detail || '交叉验证失败') }
+      return resp.json()
+    },
+
+    async predict(file: File): Promise<TerminalHealthPredictResult> {
+      const form = new FormData()
+      form.append('file', file)
+      const resp = await fetch(`${BASE_URL}${base}/predict`, { method: 'POST', body: form })
+      if (!resp.ok) { const err = await resp.json(); throw new Error(err.detail || '预测失败') }
+      return resp.json()
+    },
+  }
+}
+
+export type TerminalHealthApi = ReturnType<typeof createTerminalHealthApi>

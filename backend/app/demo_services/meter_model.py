@@ -2,6 +2,8 @@
 电表异常研判 CNN+LSTM 多标签分类 — 模型核心逻辑
 从 meter_server.py 提取，适配 FastAPI 架构
 """
+import torch
+import torch.nn as nn
 import os
 import time
 import traceback
@@ -10,8 +12,6 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
-import torch
-import torch.nn as nn
 from sklearn.metrics import (
     accuracy_score, balanced_accuracy_score, f1_score,
     hamming_loss, precision_score, recall_score, roc_auc_score,
