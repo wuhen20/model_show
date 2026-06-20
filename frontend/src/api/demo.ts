@@ -502,3 +502,165 @@ export function createTerminalHealthApi() {
 }
 
 export type TerminalHealthApi = ReturnType<typeof createTerminalHealthApi>
+
+// ============ 采集策略智能调度 API ============
+
+export interface StrategyTableInfo {
+  name: string
+  rows: number
+  columns: number
+  size_kb: number
+  missing?: boolean
+  error?: string
+}
+
+export interface StrategyDatasetInfo {
+  status: string
+  path: string
+  total_tables: number
+  total_rows: number
+  tables: StrategyTableInfo[]
+  is_default: boolean
+}
+
+export interface StrategyRuleResult {
+  status: string
+  total: number
+  by_scenario: Record<string, number>
+  by_category: Record<string, number>
+  recommendations: Record<string, any>[]
+  scenario_meta?: Record<string, { name: string; category: string; action_type: string }>
+}
+
+export interface StrategyClusterResult {
+  status: string
+  total_terminals: number
+  cluster_counts: Record<number, number>
+  cluster_avg_curves: Record<number, number[]>
+  cluster_meta: Record<string, { name: string; n_terminals: number }>
+}
+
+export interface StrategyPredictionResult {
+  status: string
+  dow: number
+  curves: Record<number, { slot: number; hour: number; predicted_success: number }[]>
+}
+
+export interface StrategySchedule {
+  cluster_id: number
+  cluster_name: string
+  schedule_id: string
+  schedule_date: string
+  recall_slots: number[]
+  recall_times: string[]
+  n_slots: number
+  threshold: number
+  min_predicted: number
+  max_predicted: number
+  mean_predicted: number
+}
+
+export interface StrategyScheduleResult {
+  status: string
+  schedule_date: string
+  schedules: StrategySchedule[]
+}
+
+export interface StrategyPipelineResult {
+  status: string
+  today: string
+  schedule_date: string
+  rules: StrategyRuleResult
+  clustering: { total_terminals: number; cluster_counts: Record<number, number> }
+  prediction: { dow: number; curves: Record<number, any[]> }
+  schedules: StrategySchedule[]
+  strategy_comparison?: { total_c1: number; changes: StrategyChange[] }
+  scenario_meta?: Record<string, { name: string; category: string; action_type: string }>
+}
+
+export interface StrategyChange {
+  terminal_id: string
+  scenario: string
+  scenario_name: string
+  original: string
+  suggested: string
+  freq_change: string
+  data_item_change: string
+  expected_benefit: string
+  match_confidence: number
+}
+
+/** 创建采集策略 API 客户端 */
+export function createStrategyApi() {
+  const base = '/api/demo/strategy'
+
+  return {
+    async ping(): Promise<{ status: string; message: string }> {
+      const resp = await fetch(`${BASE_URL}${base}/ping`)
+      if (!resp.ok) throw new Error(`服务连接失败: ${resp.status}`)
+      return resp.json()
+    },
+
+    async modelInfo(): Promise<any> {
+      const resp = await fetch(`${BASE_URL}${base}/model_info`)
+      if (!resp.ok) throw new Error(`获取模型信息失败: ${resp.status}`)
+      return resp.json()
+    },
+
+    async scenarioMeta(): Promise<Record<string, { name: string; category: string; action_type: string }>> {
+      const resp = await fetch(`${BASE_URL}${base}/scenario_meta`)
+      if (!resp.ok) throw new Error(`获取场景信息失败: ${resp.status}`)
+      return resp.json()
+    },
+
+    async datasetInfo(): Promise<StrategyDatasetInfo> {
+      const resp = await fetch(`${BASE_URL}${base}/dataset_info`)
+      if (!resp.ok) throw new Error(`获取数据集信息失败: ${resp.status}`)
+      return resp.json()
+    },
+
+    async uploadDataset(file: File): Promise<{ status: string; message: string; path: string }> {
+      const form = new FormData()
+      form.append('file', file)
+      const resp = await fetch(`${BASE_URL}${base}/upload_dataset`, { method: 'POST', body: form })
+      if (!resp.ok) { const err = await resp.json(); throw new Error(err.detail || '上传失败') }
+      return resp.json()
+    },
+
+    async runRules(): Promise<StrategyRuleResult> {
+      const resp = await fetch(`${BASE_URL}${base}/run_rules`, { method: 'POST' })
+      if (!resp.ok) { const err = await resp.json(); throw new Error(err.detail || '规则研判失败') }
+      return resp.json()
+    },
+
+    async runClustering(): Promise<StrategyClusterResult> {
+      const resp = await fetch(`${BASE_URL}${base}/run_clustering`, { method: 'POST' })
+      if (!resp.ok) { const err = await resp.json(); throw new Error(err.detail || '聚类失败') }
+      return resp.json()
+    },
+
+    async runPrediction(): Promise<StrategyPredictionResult> {
+      const resp = await fetch(`${BASE_URL}${base}/run_prediction`, { method: 'POST' })
+      if (!resp.ok) { const err = await resp.json(); throw new Error(err.detail || '预测失败') }
+      return resp.json()
+    },
+
+    async runSchedule(): Promise<StrategyScheduleResult> {
+      const resp = await fetch(`${BASE_URL}${base}/run_schedule`, { method: 'POST' })
+      if (!resp.ok) { const err = await resp.json(); throw new Error(err.detail || '排程失败') }
+      return resp.json()
+    },
+
+    async runFullPipeline(): Promise<StrategyPipelineResult> {
+      const resp = await fetch(`${BASE_URL}${base}/run_full_pipeline`, { method: 'POST' })
+      if (!resp.ok) { const err = await resp.json(); throw new Error(err.detail || '全流程失败') }
+      return resp.json()
+    },
+
+    getExportCsvUrl(): string {
+      return `${BASE_URL}${base}/export_csv`
+    },
+  }
+}
+
+export type StrategyApi = ReturnType<typeof createStrategyApi>

@@ -1,0 +1,4 @@
+﻿period_id,period_name,start_time,end_time,priority
+SP01,居民低谷,00:00,06:00,3
+SP02,负荷管理特护,18:00,22:00,1
+SP03,光伏发电高峰,10:00,15:00,2

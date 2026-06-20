@@ -1,0 +1,107 @@
+{
+  "default": {
+    "description": "采集策略智能调度数据集 - 24 张 CSV 表",
+    "homepage": "",
+    "license": "internal",
+    "features": {
+      "terminal_id": {
+        "_type": "Value",
+        "dtype": "string"
+      },
+      "user_id": {
+        "_type": "Value",
+        "dtype": "string"
+      },
+      "area_id": {
+        "_type": "Value",
+        "dtype": "string"
+      },
+      "stat_date": {
+        "_type": "Value",
+        "dtype": "string"
+      },
+      "slot": {
+        "_type": "Value",
+        "dtype": "int32"
+      },
+      "success_rate": {
+        "_type": "Value",
+        "dtype": "float32"
+      }
+    },
+    "splits": {
+      "anomaly_alerts": {
+        "path": "anomaly_alerts.csv"
+      },
+      "area_collection_stats": {
+        "path": "area_collection_stats.csv"
+      },
+      "area_loss_rates": {
+        "path": "area_loss_rates.csv"
+      },
+      "areas": {
+        "path": "areas.csv"
+      },
+      "business_changes": {
+        "path": "business_changes.csv"
+      },
+      "collection_stats": {
+        "path": "collection_stats.csv"
+      },
+      "collection_strategy_master": {
+        "path": "collection_strategy_master.csv"
+      },
+      "complaints": {
+        "path": "complaints.csv"
+      },
+      "cross_conn_suspects": {
+        "path": "cross_conn_suspects.csv"
+      },
+      "daily_consumption": {
+        "path": "daily_consumption.csv"
+      },
+      "event_report_task_existing": {
+        "path": "event_report_task_existing.csv"
+      },
+      "fee_control_status": {
+        "path": "fee_control_status.csv"
+      },
+      "history_success_curve": {
+        "path": "history_success_curve.csv"
+      },
+      "load_curve_summary": {
+        "path": "load_curve_summary.csv"
+      },
+      "meters": {
+        "path": "meters.csv"
+      },
+      "param_consistency": {
+        "path": "param_consistency.csv"
+      },
+      "restart_log": {
+        "path": "restart_log.csv"
+      },
+      "special_periods": {
+        "path": "special_periods.csv"
+      },
+      "terminal_heartbeat": {
+        "path": "terminal_heartbeat.csv"
+      },
+      "terminal_strategy_bind": {
+        "path": "terminal_strategy_bind.csv"
+      },
+      "terminals": {
+        "path": "terminals.csv"
+      },
+      "user_risk_tags": {
+        "path": "user_risk_tags.csv"
+      },
+      "user_tags": {
+        "path": "user_tags.csv"
+      },
+      "users": {
+        "path": "users.csv"
+      }
+    }
+  }
+}
