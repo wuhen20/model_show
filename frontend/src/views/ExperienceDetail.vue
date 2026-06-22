@@ -8,6 +8,7 @@ import MeterDemo from '@/views/MeterDemo.vue'
 import MeterHealthDemo from '@/views/MeterHealthDemo.vue'
 import TerminalHealthDemo from '@/views/TerminalHealthDemo.vue'
 import StrategyDemo from '@/views/StrategyDemo.vue'
+import StationHealthDemo from '@/views/StationHealthDemo.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -111,6 +112,11 @@ onMounted(load)
       <!-- ZJ-02 电表健康评价 -->
       <template v-else-if="detail.code === 'ZJ-02'">
         <MeterHealthDemo />
+      </template>
+
+      <!-- ZJ-03 主站异常研判 -->
+      <template v-else-if="detail.code === 'ZJ-03'">
+        <StationHealthDemo />
       </template>
 
       <!-- ZJ-04 采集策略智能调度 -->
