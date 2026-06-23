@@ -113,11 +113,59 @@ def get_dropped_features(model_dir: str = None) -> list:
 
 
 # ===================== 推理 =====================
+def _normalize_cnn_proba(cnn_out, n_samples: int) -> np.ndarray:
+    """将 CNN 输出规范化为 (n_samples, N_CLASSES) 的概率矩阵。"""
+    # TFSMLayer 加载 SavedModel 时输出常为 dict，例如 {'dense_2': array}
+    if isinstance(cnn_out, dict):
+        # 优先选择包含 'dense' 或 'softmax' 的键，否则取第一个值
+        arr = None
+        for k, v in cnn_out.items():
+            arr = np.asarray(v)
+            break
+        if arr is None:
+            raise ValueError(f"CNN 输出 dict 为空: {list(cnn_out.keys())}")
+    else:
+        arr = np.asarray(cnn_out)
+
+    # 处理形状
+    if arr.ndim == 1:
+        # 可能是 (N,) 的 argmax 结果或单值，转为 (N, 1) 后独热
+        arr = arr.reshape(-1, 1)
+    if arr.shape[1] == 1:
+        # 二分类输出，转为独热概率 (N, 2)
+        p1 = np.clip(arr[:, 0], 0, 1)
+        arr = np.hstack([1 - p1, p1]).reshape(-1, 2)
+    if arr.shape[1] != N_CLASSES:
+        # 列数不匹配，按 argmax 转为独热
+        idx = np.argmax(arr, axis=1)
+        one_hot = np.zeros((arr.shape[0], N_CLASSES), dtype=float)
+        one_hot[np.arange(arr.shape[0]), idx] = 1.0
+        arr = one_hot
+    if arr.shape[0] != n_samples:
+        # 行数不匹配（可能是 batch 维度问题），裁剪或填充
+        if arr.shape[0] > n_samples:
+            arr = arr[:n_samples]
+        else:
+            pad = np.zeros((n_samples - arr.shape[0], N_CLASSES), dtype=float)
+            arr = np.vstack([arr, pad])
+    return arr
+
+
 def stacking_predict(xgb_proba, rf_proba, cnn_proba, meta_learner):
     meta_features = np.hstack([xgb_proba, rf_proba, cnn_proba])
     y_pred = meta_learner.predict(meta_features)
     y_proba = meta_learner.predict_proba(meta_features)
     return y_pred, y_proba
+
+
+def _align_features(X: pd.DataFrame, model_xgb) -> pd.DataFrame:
+    """将输入特征对齐到模型期望的特征列表，缺失列补 0"""
+    expected = list(model_xgb.get_booster().feature_names)
+    # 只保留数值列
+    X_num = X.select_dtypes(include=[np.number])
+    # 对齐列：保留期望列，缺失补 0
+    X_aligned = X_num.reindex(columns=expected, fill_value=0)
+    return X_aligned
 
 
 def predict(df: pd.DataFrame, model_dir: str = None) -> dict:
@@ -129,14 +177,17 @@ def predict(df: pd.DataFrame, model_dir: str = None) -> dict:
 
     X = df.copy()
     existing_drop = [f for f in drop_features if f in X.columns]
-    X_selected = X.drop(columns=existing_drop, errors="ignore")
+    X = X.drop(columns=existing_drop, errors="ignore")
+    # 对齐特征到模型期望（含数值列过滤）
+    X_selected = _align_features(X, model_xgb)
 
     xgb_proba = model_xgb.predict_proba(X_selected)
     rf_proba = model_rf.predict_proba(X_selected)
 
     X_scaled = cnn_scaler.transform(X_selected)
     X_cnn = np.expand_dims(X_scaled, axis=-1)
-    cnn_proba = model_cnn.predict(X_cnn, verbose=0)
+    cnn_out = model_cnn.predict(X_cnn, verbose=0)
+    cnn_proba = _normalize_cnn_proba(cnn_out, n_samples=len(X_selected))
 
     y_pred, y_proba = stacking_predict(xgb_proba, rf_proba, cnn_proba, meta_learner)
 

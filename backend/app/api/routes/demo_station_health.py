@@ -8,6 +8,7 @@ import os
 import traceback
 import threading
 
+import numpy as np
 import pandas as pd
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Query
 from fastapi.responses import FileResponse
@@ -74,18 +75,19 @@ def evaluate():
         df = pd.read_csv(str(test_path))
         X = df.iloc[:, :-2]
         y = df.iloc[:, -2].squeeze()
-        # 对齐特征
+        # 对齐特征到模型期望（含数值列过滤）
         existing_drop = [f for f in drop_features if f in X.columns]
-        X_sel = X.drop(columns=existing_drop, errors="ignore")
+        X_drop = X.drop(columns=existing_drop, errors="ignore")
+        X_sel = engine._align_features(X_drop, model_xgb)
         # 各模型预测
         xgb_proba = model_xgb.predict_proba(X_sel)
         rf_proba = model_rf.predict_proba(X_sel)
         X_scaled = cnn_scaler.transform(X_sel)
         X_cnn = np.expand_dims(X_scaled, axis=-1)
-        cnn_proba = model_cnn.predict(X_cnn, verbose=0)
+        cnn_out = model_cnn.predict(X_cnn, verbose=0)
+        cnn_proba = engine._normalize_cnn_proba(cnn_out, n_samples=len(X_sel))
         y_pred_stack, _ = engine.stacking_predict(xgb_proba, rf_proba, cnn_proba, meta_learner)
         # 标签编码
-        import numpy as np
         from sklearn.preprocessing import LabelEncoder
         le = LabelEncoder()
         y_enc = pd.Series(le.fit_transform(y.astype(str)), index=y.index)
