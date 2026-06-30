@@ -9,6 +9,8 @@ import MeterHealthDemo from '@/views/MeterHealthDemo.vue'
 import TerminalHealthDemo from '@/views/TerminalHealthDemo.vue'
 import StrategyDemo from '@/views/StrategyDemo.vue'
 import StationHealthDemo from '@/views/StationHealthDemo.vue'
+import MeterRemovalDemo from '@/views/MeterRemovalDemo.vue'
+import MeterInstallDemo from '@/views/MeterInstallDemo.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -122,6 +124,16 @@ onMounted(load)
       <!-- ZJ-04 采集策略智能调度 -->
       <template v-else-if="detail.code === 'ZJ-04'">
         <StrategyDemo />
+      </template>
+
+      <!-- XC-01 拆除旧表作业识别 -->
+      <template v-else-if="detail.code === 'XC-01'">
+        <MeterRemovalDemo />
+      </template>
+
+      <!-- XC-02 安装新表作业识别 -->
+      <template v-else-if="detail.code === 'XC-02'">
+        <MeterInstallDemo />
       </template>
 
       <!-- 非 ZJ-05 模型：保持原有布局 -->

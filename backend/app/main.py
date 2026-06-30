@@ -24,6 +24,8 @@ from app.api.routes.demo_meter_health import router as demo_meter_health_router
 from app.api.routes.demo_terminal_health import router as demo_terminal_health_router
 from app.api.routes.demo_strategy import router as demo_strategy_router
 from app.api.routes.demo_station_health import router as demo_station_health_router
+from app.api.routes.demo_meter_removal import router as demo_meter_removal_router
+from app.api.routes.demo_meter_install import router as demo_meter_install_router
 from app.db.database import init_db
 from app.registry.model_registry import sync_registry
 
@@ -76,6 +78,8 @@ app.include_router(demo_meter_health_router, prefix="/api/demo/meter-health", ta
 app.include_router(demo_terminal_health_router, prefix="/api/demo/terminal-health", tags=["终端健康演示"])
 app.include_router(demo_strategy_router, prefix="/api/demo/strategy", tags=["采集策略演示"])
 app.include_router(demo_station_health_router, prefix="/api/demo/station-health", tags=["主站异常演示"])
+app.include_router(demo_meter_removal_router, prefix="/api/demo/meter-removal", tags=["拆表作业演示"])
+app.include_router(demo_meter_install_router, prefix="/api/demo/meter-install", tags=["装表作业演示"])
 
 
 @app.get("/api/health")

@@ -1,0 +1,204 @@
+"""
+安装新表作业识别 — FastAPI 路由
+双 YOLO 模型 + PaddleOCR + 状态机
+"""
+import os
+import uuid
+import threading
+import traceback
+from pathlib import Path
+
+from fastapi import APIRouter, UploadFile, File, HTTPException
+from fastapi.responses import FileResponse
+
+from app.demo_services import meter_install_engine as engine
+
+router = APIRouter()
+
+_BACKEND_DIR = Path(__file__).parent.parent.parent.parent
+_EXPERIENCE_DIR = _BACKEND_DIR / "experience_data" / "XC" / "meter_install"
+_UPLOAD_DIR = _BACKEND_DIR / "data" / "uploads"
+
+# 异步任务存储
+_tasks: dict[str, dict] = {}
+
+
+@router.get("/ping")
+def ping():
+    return {"status": "ok", "message": "meter install demo is alive"}
+
+
+@router.get("/model_info")
+def model_info():
+    main_model = _BACKEND_DIR / "models_pool" / "XC" / "meter_install" / "best.pt"
+    nameplate_model = _BACKEND_DIR / "models_pool" / "XC" / "meter_install" / "nameplate_best.pt"
+    return {
+        "model_type": "YOLOv8 (dual) + PaddleOCR + State Machine",
+        "main_model_path": "models_pool/XC/meter_install/best.pt",
+        "nameplate_model_path": "models_pool/XC/meter_install/nameplate_best.pt",
+        "main_model_available": main_model.exists(),
+        "nameplate_model_available": nameplate_model.exists(),
+        "classes": [
+            {"id": 0, "name": "meter", "cn": "电表"},
+            {"id": 1, "name": "cover", "cn": "端子盖"},
+            {"id": 2, "name": "terminal", "cn": "端子"},
+            {"id": 3, "name": "glove", "cn": "手套"},
+            {"id": 4, "name": "screwdriver", "cn": "螺丝刀"},
+            {"id": 5, "name": "wire", "cn": "导线"},
+        ],
+        "nameplate_classes": [
+            {"id": 0, "name": "nameplate", "cn": "铭牌"},
+        ],
+        "config": {
+            "conf_thresh": engine.CONF_THRESH,
+            "need_sec": engine.NEED_SEC,
+            "buffer_frames": engine.BUFFER_FRAMES,
+            "screwdriver_install_time": 5,
+        },
+        "description": "基于双YOLO模型+PaddleOCR，对电表安装过程进行自动化识别。主模型检测电表/端子/螺丝刀/端子盖/手套/导线，铭牌模型检测铭牌并通过OCR识别铭牌编号。状态机流转：铭牌识别→电表安装→端子接线→安装完成。",
+    }
+
+
+@router.get("/videos")
+def list_videos():
+    """列出内置测试视频"""
+    videos = []
+    if _EXPERIENCE_DIR.exists():
+        for f in sorted(_EXPERIENCE_DIR.iterdir()):
+            if f.suffix.lower() in (".mp4", ".avi", ".mov", ".mkv"):
+                videos.append(f.name)
+    return {"videos": videos, "directory": str(_EXPERIENCE_DIR)}
+
+
+@router.get("/video/{filename}")
+def serve_video(filename: str):
+    """流式返回内置测试视频"""
+    filepath = _EXPERIENCE_DIR / filename
+    if not filepath.exists():
+        raise HTTPException(status_code=404, detail=f"视频文件不存在: {filename}")
+    return FileResponse(str(filepath), media_type="video/mp4")
+
+
+@router.post("/analyze")
+async def analyze(file: UploadFile = File(...)):
+    """上传视频并启动异步分析任务"""
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="未提供文件")
+
+    task_id = str(uuid.uuid4())[:8]
+    os.makedirs(str(_UPLOAD_DIR), exist_ok=True)
+    video_path = str(_UPLOAD_DIR / f"{task_id}_input.mp4")
+    with open(video_path, "wb") as f:
+        f.write(await file.read())
+
+    output_dir = str(_UPLOAD_DIR / task_id)
+    os.makedirs(output_dir, exist_ok=True)
+
+    _tasks[task_id] = {"status": "running", "progress": 0, "current_frame": 0,
+                       "total_frames": 0, "current_state": "starting", "result": None, "error": None}
+
+    def run_analysis():
+        def progress_cb(current, total, state):
+            _tasks[task_id]["current_frame"] = current
+            _tasks[task_id]["total_frames"] = total
+            _tasks[task_id]["current_state"] = state
+            if total > 0:
+                _tasks[task_id]["progress"] = round(current / total * 100, 1)
+
+        try:
+            result = engine.analyze_video(video_path, output_dir, progress_callback=progress_cb)
+            _tasks[task_id]["result"] = result
+            _tasks[task_id]["status"] = "completed"
+            _tasks[task_id]["progress"] = 100
+        except Exception as e:
+            traceback.print_exc()
+            _tasks[task_id]["status"] = "error"
+            _tasks[task_id]["error"] = str(e)
+
+    threading.Thread(target=run_analysis, daemon=True).start()
+    return {"status": "ok", "task_id": task_id, "message": "分析任务已启动"}
+
+
+@router.post("/analyze-builtin")
+async def analyze_builtin(filename: str = ""):
+    """选择内置视频进行分析"""
+    filepath = _EXPERIENCE_DIR / filename
+    if not filepath.exists():
+        raise HTTPException(status_code=404, detail=f"内置视频不存在: {filename}")
+
+    task_id = str(uuid.uuid4())[:8]
+    output_dir = str(_UPLOAD_DIR / task_id)
+    os.makedirs(output_dir, exist_ok=True)
+
+    _tasks[task_id] = {"status": "running", "progress": 0, "current_frame": 0,
+                       "total_frames": 0, "current_state": "starting", "result": None, "error": None}
+
+    def run_analysis():
+        def progress_cb(current, total, state):
+            _tasks[task_id]["current_frame"] = current
+            _tasks[task_id]["total_frames"] = total
+            _tasks[task_id]["current_state"] = state
+            if total > 0:
+                _tasks[task_id]["progress"] = round(current / total * 100, 1)
+
+        try:
+            result = engine.analyze_video(str(filepath), output_dir, progress_callback=progress_cb)
+            _tasks[task_id]["result"] = result
+            _tasks[task_id]["status"] = "completed"
+            _tasks[task_id]["progress"] = 100
+        except Exception as e:
+            traceback.print_exc()
+            _tasks[task_id]["status"] = "error"
+            _tasks[task_id]["error"] = str(e)
+
+    threading.Thread(target=run_analysis, daemon=True).start()
+    return {"status": "ok", "task_id": task_id, "message": "分析任务已启动"}
+
+
+@router.get("/status/{task_id}")
+def get_status(task_id: str):
+    if task_id not in _tasks:
+        raise HTTPException(status_code=404, detail="任务不存在")
+    t = _tasks[task_id]
+    return {
+        "task_id": task_id,
+        "status": t["status"],
+        "progress": t["progress"],
+        "current_frame": t["current_frame"],
+        "total_frames": t["total_frames"],
+        "current_state": t["current_state"],
+        "error": t["error"],
+    }
+
+
+@router.get("/results/{task_id}")
+def get_results(task_id: str):
+    if task_id not in _tasks:
+        raise HTTPException(status_code=404, detail="任务不存在")
+    t = _tasks[task_id]
+    if t["status"] != "completed":
+        raise HTTPException(status_code=400, detail=f"任务尚未完成 (当前状态: {t['status']})")
+    result = t["result"]
+    return {
+        "status": "ok",
+        "task_id": task_id,
+        "annotated_video_url": f"/api/demo/meter-install/annotated-video/{task_id}",
+        "report": result["report"],
+        "key_frames": result["key_frames"],
+        "total_frames": result["total_frames"],
+        "fps": result["fps"],
+        "duration_seconds": result["duration_seconds"],
+    }
+
+
+@router.get("/annotated-video/{task_id}")
+def serve_annotated_video(task_id: str):
+    if task_id not in _tasks:
+        raise HTTPException(status_code=404, detail="任务不存在")
+    t = _tasks[task_id]
+    if t["status"] != "completed" or not t["result"]:
+        raise HTTPException(status_code=400, detail="标注视频尚未生成")
+    video_path = t["result"]["annotated_video_path"]
+    if not os.path.exists(video_path):
+        raise HTTPException(status_code=404, detail="标注视频文件不存在")
+    return FileResponse(video_path, media_type="video/mp4")

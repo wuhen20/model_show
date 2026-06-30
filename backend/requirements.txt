@@ -15,3 +15,8 @@ xgboost>=2.0.0
 torch>=2.0.0
 scikit-optimize>=0.9
 matplotlib>=3.7
+# 现场作业场景依赖（XC-01/02 电能表拆装检测）
+ultralytics>=8.1.0
+opencv-python-headless>=4.8.0
+paddleocr>=2.7.0
+paddlepaddle>=2.6.0

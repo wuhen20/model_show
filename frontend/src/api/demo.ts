@@ -664,3 +664,188 @@ export function createStrategyApi() {
 }
 
 export type StrategyApi = ReturnType<typeof createStrategyApi>
+
+// ============ 拆表/装表作业识别 API ============
+
+export interface MeterOperationModelInfo {
+  model_type: string
+  model_path: string
+  model_available: boolean
+  classes: { id: number; name: string; cn: string }[]
+  nameplate_classes?: { id: number; name: string; cn: string }[]
+  config: Record<string, number>
+  description: string
+  main_model_path?: string
+  nameplate_model_path?: string
+  main_model_available?: boolean
+  nameplate_model_available?: boolean
+}
+
+export interface MeterOperationTaskStatus {
+  task_id: string
+  status: string
+  progress: number
+  current_frame: number
+  total_frames: number
+  current_state: string
+  error: string | null
+}
+
+export interface MeterOperationKeyFrame {
+  title: string
+  frame: number
+  time_seconds: number
+  image: string
+}
+
+export interface MeterOperationReportMeter {
+  meter_id: number
+  wire_removal_time?: number | null
+  wire_installation_time?: number | null
+  verified_time: number | null
+}
+
+export interface MeterOperationReport {
+  final_state: string
+  recognized_nameplate_text?: string | null
+  meters: MeterOperationReportMeter[]
+}
+
+export interface MeterOperationResults {
+  status: string
+  task_id: string
+  annotated_video_url: string
+  report: MeterOperationReport
+  key_frames: MeterOperationKeyFrame[]
+  total_frames: number
+  fps: number
+  duration_seconds: number
+}
+
+/** 创建拆表作业识别 API 客户端 */
+export function createMeterRemovalApi() {
+  const base = '/api/demo/meter-removal'
+
+  return {
+    async ping(): Promise<{ status: string; message: string }> {
+      const resp = await fetch(`${BASE_URL}${base}/ping`)
+      if (!resp.ok) throw new Error(`服务连接失败: ${resp.status}`)
+      return resp.json()
+    },
+
+    async modelInfo(): Promise<MeterOperationModelInfo> {
+      const resp = await fetch(`${BASE_URL}${base}/model_info`)
+      if (!resp.ok) throw new Error(`获取模型信息失败: ${resp.status}`)
+      return resp.json()
+    },
+
+    async listVideos(): Promise<{ videos: string[]; directory: string }> {
+      const resp = await fetch(`${BASE_URL}${base}/videos`)
+      if (!resp.ok) throw new Error(`获取视频列表失败: ${resp.status}`)
+      return resp.json()
+    },
+
+    getVideoUrl(filename: string): string {
+      return `${BASE_URL}${base}/video/${encodeURIComponent(filename)}`
+    },
+
+    async analyze(file: File): Promise<{ status: string; task_id: string; message: string }> {
+      const form = new FormData()
+      form.append('file', file)
+      const resp = await fetch(`${BASE_URL}${base}/analyze`, { method: 'POST', body: form })
+      if (!resp.ok) throw new Error(`启动分析失败: ${resp.status}`)
+      return resp.json()
+    },
+
+    async analyzeBuiltin(filename: string): Promise<{ status: string; task_id: string; message: string }> {
+      const resp = await fetch(`${BASE_URL}${base}/analyze-builtin?filename=${encodeURIComponent(filename)}`, { method: 'POST' })
+      if (!resp.ok) throw new Error(`启动分析失败: ${resp.status}`)
+      return resp.json()
+    },
+
+    async getStatus(taskId: string): Promise<MeterOperationTaskStatus> {
+      const resp = await fetch(`${BASE_URL}${base}/status/${taskId}`)
+      if (!resp.ok) throw new Error(`获取状态失败: ${resp.status}`)
+      return resp.json()
+    },
+
+    async getResults(taskId: string): Promise<MeterOperationResults> {
+      const resp = await fetch(`${BASE_URL}${base}/results/${taskId}`)
+      if (!resp.ok) {
+        const err = await resp.json().catch(() => ({}))
+        throw new Error(err.detail || '获取结果失败')
+      }
+      return resp.json()
+    },
+
+    getAnnotatedVideoUrl(taskId: string): string {
+      return `${BASE_URL}${base}/annotated-video/${taskId}`
+    },
+  }
+}
+
+export type MeterRemovalApi = ReturnType<typeof createMeterRemovalApi>
+
+/** 创建装表作业识别 API 客户端 */
+export function createMeterInstallApi() {
+  const base = '/api/demo/meter-install'
+
+  return {
+    async ping(): Promise<{ status: string; message: string }> {
+      const resp = await fetch(`${BASE_URL}${base}/ping`)
+      if (!resp.ok) throw new Error(`服务连接失败: ${resp.status}`)
+      return resp.json()
+    },
+
+    async modelInfo(): Promise<MeterOperationModelInfo> {
+      const resp = await fetch(`${BASE_URL}${base}/model_info`)
+      if (!resp.ok) throw new Error(`获取模型信息失败: ${resp.status}`)
+      return resp.json()
+    },
+
+    async listVideos(): Promise<{ videos: string[]; directory: string }> {
+      const resp = await fetch(`${BASE_URL}${base}/videos`)
+      if (!resp.ok) throw new Error(`获取视频列表失败: ${resp.status}`)
+      return resp.json()
+    },
+
+    getVideoUrl(filename: string): string {
+      return `${BASE_URL}${base}/video/${encodeURIComponent(filename)}`
+    },
+
+    async analyze(file: File): Promise<{ status: string; task_id: string; message: string }> {
+      const form = new FormData()
+      form.append('file', file)
+      const resp = await fetch(`${BASE_URL}${base}/analyze`, { method: 'POST', body: form })
+      if (!resp.ok) throw new Error(`启动分析失败: ${resp.status}`)
+      return resp.json()
+    },
+
+    async analyzeBuiltin(filename: string): Promise<{ status: string; task_id: string; message: string }> {
+      const resp = await fetch(`${BASE_URL}${base}/analyze-builtin?filename=${encodeURIComponent(filename)}`, { method: 'POST' })
+      if (!resp.ok) throw new Error(`启动分析失败: ${resp.status}`)
+      return resp.json()
+    },
+
+    async getStatus(taskId: string): Promise<MeterOperationTaskStatus> {
+      const resp = await fetch(`${BASE_URL}${base}/status/${taskId}`)
+      if (!resp.ok) throw new Error(`获取状态失败: ${resp.status}`)
+      return resp.json()
+    },
+
+    async getResults(taskId: string): Promise<MeterOperationResults> {
+      const resp = await fetch(`${BASE_URL}${base}/results/${taskId}`)
+      if (!resp.ok) {
+        const err = await resp.json().catch(() => ({}))
+        throw new Error(err.detail || '获取结果失败')
+      }
+      return resp.json()
+    },
+
+    getAnnotatedVideoUrl(taskId: string): string {
+      return `${BASE_URL}${base}/annotated-video/${taskId}`
+    },
+  }
+}
+
+export type MeterInstallApi = ReturnType<typeof createMeterInstallApi>
