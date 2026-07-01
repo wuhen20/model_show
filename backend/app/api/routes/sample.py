@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Query, UploadFile, File, Form
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
-from app.core.database import query_code_dict, query_sample_set, query_sample_info, save_sample_set, sample_statistic, sample_trend, query_audio_text, update_sample_score, insert_sample_info, update_label_think, generate_task_no, query_data_collect_task, save_data_collect_task, save_data_collect_task_det, query_data_collect_task_det, update_data_collect_task_det
+from app.core.database import query_code_dict, query_sample_set, query_sample_info, save_sample_set, sample_statistic, sample_trend, query_audio_text, update_sample_score, insert_sample_info, update_label_think, generate_task_no, query_data_collect_task, save_data_collect_task, save_data_collect_task_det, query_data_collect_task_det, update_data_collect_task_det, get_task_det_raw, update_task_status, insert_collect_log, finish_collect_log, execute_source_sql, save_query_result_to_desktop
 import os
 import io
 import zipfile
@@ -452,3 +452,73 @@ def save_collect_task_det_api(payload: dict):
             return {"code": 0, "message": "保存成功"}
     except Exception as e:
         return {"code": 1, "message": f"保存失败: {str(e)}"}
+
+
+class ExecuteCollectTaskRequest(BaseModel):
+    taskNo: str
+
+
+@router.post("/execute-collect-task")
+def execute_collect_task_api(req: ExecuteCollectTaskRequest):
+    """执行数据采集任务：连接源数据库执行SQL，保存结果到桌面"""
+    task_no = req.taskNo.strip()
+    if not task_no:
+        return {"code": 1, "message": "任务编号不能为空"}
+
+    # 查询任务明细
+    det = get_task_det_raw(task_no)
+    if not det:
+        return {"code": 1, "message": "未找到任务明细，请先配置采集信息"}
+
+    collect_sql = det.get("collect_sql")
+    if not collect_sql:
+        return {"code": 1, "message": "采集SQL不能为空"}
+
+    # 更新任务状态为执行中
+    update_task_status(task_no, "02")
+    # 写入执行日志
+    log_id = insert_collect_log(task_no)
+
+    try:
+        # 连接源数据库执行SQL
+        columns, rows = execute_source_sql(
+            db_type=det["source_db_type"],
+            host=det["source_db_host"],
+            port=str(det.get("source_db_port") or ""),
+            user=det["source_db_usr"],
+            pwd=det.get("source_db_pwd") or "",
+            sql=collect_sql,
+        )
+        # 保存查询结果到桌面
+        filepath = save_query_result_to_desktop(columns, rows)
+
+        # 更新日志：成功
+        finish_collect_log(log_id, success=True)
+        # 更新任务状态：已完成，last_execute_flag=1（成功）
+        update_task_status(task_no, "03", last_execute_flag=1)
+
+        return {
+            "code": 0,
+            "message": f"执行成功，共查询到 {len(rows)} 条数据，结果已保存至：{filepath}",
+            "data": {"filepath": filepath, "rowCount": len(rows)},
+        }
+    except Exception as e:
+        fail_info = str(e)
+        # 更新日志：失败
+        finish_collect_log(log_id, success=False, fail_info=fail_info)
+        # 更新任务状态：已完成，last_execute_flag=2（失败）
+        update_task_status(task_no, "03", last_execute_flag=2)
+        return {"code": 1, "message": f"执行失败: {fail_info}"}
+
+
+@router.post("/stop-collect-task")
+def stop_collect_task_api(req: ExecuteCollectTaskRequest):
+    """停止数据采集任务"""
+    task_no = req.taskNo.strip()
+    if not task_no:
+        return {"code": 1, "message": "任务编号不能为空"}
+    try:
+        update_task_status(task_no, "04")
+        return {"code": 0, "message": "已停止"}
+    except Exception as e:
+        return {"code": 1, "message": f"停止失败: {str(e)}"}

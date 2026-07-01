@@ -172,6 +172,8 @@ export interface CollectTask {
   lastExecuteTime: string
   lastExecuteFlagCode: number
   lastExecuteFlagName: string
+  taskStatusCode: string
+  taskStatusName: string
 }
 
 export async function getCollectTasks(): Promise<CollectTask[]> {
@@ -232,4 +234,25 @@ export async function saveCollectTaskDet(params: CollectTaskDetParams): Promise<
   })
   const json = await res.json()
   if (json.code !== 0) throw new Error(json.message || '保存失败')
+}
+
+export async function executeCollectTask(taskNo: string): Promise<string> {
+  const res = await fetch(`${BASE_URL}/execute-collect-task`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ taskNo })
+  })
+  const json = await res.json()
+  if (json.code !== 0) throw new Error(json.message || '执行失败')
+  return json.message
+}
+
+export async function stopCollectTask(taskNo: string): Promise<void> {
+  const res = await fetch(`${BASE_URL}/stop-collect-task`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ taskNo })
+  })
+  const json = await res.json()
+  if (json.code !== 0) throw new Error(json.message || '停止失败')
 }

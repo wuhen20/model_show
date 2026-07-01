@@ -388,7 +388,16 @@ def query_data_collect_task():
                         WHEN s.last_execute_flag = 1 THEN '成功'
                         WHEN s.last_execute_flag = 2 THEN '失败'
                         ELSE '未执行'
-                    END as lastExecuteFlagName
+                    END as lastExecuteFlagName,
+                    s.task_status as taskStatusCode,
+                    (
+                    select
+                        scd.code_name
+                    from
+                        sys_code_dict scd
+                    where
+                        scd.code_value = s.task_status
+                        and scd.sort_no = 'DATA_COLLECT_TASK_STATUS') as taskStatusName
                 FROM s_data_collect_task s
                 ORDER BY s.create_time DESC
             """
@@ -487,3 +496,166 @@ def update_data_collect_task_det(data: dict):
         return cursor.rowcount
     finally:
         conn.close()
+
+
+# ==================== 任务执行相关 ====================
+
+def get_task_det_raw(task_no: str):
+    """查询任务明细原始数据（用于执行，不做日期格式化）"""
+    conn = get_connection()
+    try:
+        with conn.cursor() as cursor:
+            sql = """
+                SELECT
+                    task_no, source_db_type, source_db_host, source_db_port,
+                    source_db_usr, source_db_pwd, target_table, collect_sql
+                FROM s_data_collect_task_det
+                WHERE task_no = %s
+                ORDER BY record_id DESC
+                LIMIT 1
+            """
+            cursor.execute(sql, (task_no,))
+            row = cursor.fetchone()
+            if row and row.get("collect_sql") and isinstance(row["collect_sql"], bytes):
+                row["collect_sql"] = row["collect_sql"].decode("utf-8")
+            return row
+    finally:
+        conn.close()
+
+
+def update_task_status(task_no: str, status: str, last_execute_flag: int = None):
+    """更新任务执行状态。status: 01-未执行 02-执行中 03-已完成 04-已停止"""
+    conn = get_connection()
+    try:
+        with conn.cursor() as cursor:
+            if last_execute_flag is not None:
+                sql = """
+                    UPDATE s_data_collect_task
+                    SET task_status = %s, last_execute_time = NOW(), last_execute_flag = %s
+                    WHERE task_no = %s
+                """
+                cursor.execute(sql, (status, last_execute_flag, task_no))
+            else:
+                sql = """
+                    UPDATE s_data_collect_task
+                    SET task_status = %s, last_execute_time = NOW()
+                    WHERE task_no = %s
+                """
+                cursor.execute(sql, (status, task_no))
+        conn.commit()
+        return cursor.rowcount
+    finally:
+        conn.close()
+
+
+def insert_collect_log(task_no: str):
+    """插入执行日志，返回 log_id"""
+    conn = get_connection()
+    try:
+        with conn.cursor() as cursor:
+            sql = """
+                INSERT INTO s_data_collect_log (task_no, start_time, execute_status)
+                VALUES (%s, NOW(), 0)
+            """
+            cursor.execute(sql, (task_no,))
+        conn.commit()
+        return cursor.lastrowid
+    finally:
+        conn.close()
+
+
+def finish_collect_log(log_id: int, success: bool, fail_info: str = None):
+    """更新执行日志：结束时间、执行结果、错误信息"""
+    conn = get_connection()
+    try:
+        with conn.cursor() as cursor:
+            if fail_info:
+                sql = """
+                    UPDATE s_data_collect_log
+                    SET end_time = NOW(), execute_status = %s, fail_info = %s
+                    WHERE record_id = %s
+                """
+                cursor.execute(sql, (1 if success else 0, fail_info, log_id))
+            else:
+                sql = """
+                    UPDATE s_data_collect_log
+                    SET end_time = NOW(), execute_status = %s
+                    WHERE record_id = %s
+                """
+                cursor.execute(sql, (1 if success else 0, log_id))
+        conn.commit()
+        return cursor.rowcount
+    finally:
+        conn.close()
+
+
+def execute_source_sql(db_type: str, host: str, port: str, user: str, pwd: str, sql: str):
+    """连接源数据库执行SQL，返回 (columns, rows)"""
+    if db_type == "01":
+        # MySQL
+        import pymysql
+        conn = pymysql.connect(
+            host=host,
+            port=int(port) if port else 3306,
+            user=user,
+            password=pwd,
+            charset="utf8mb4",
+            cursorclass=pymysql.cursors.DictCursor,
+            connect_timeout=10,
+        )
+    elif db_type == "02":
+        # PostgreSQL
+        import psycopg2
+        conn = psycopg2.connect(
+            host=host,
+            port=int(port) if port else 5432,
+            user=user,
+            password=pwd,
+            connect_timeout=10,
+        )
+    elif db_type == "03":
+        # Oracle
+        import oracledb
+        conn = oracledb.connect(user=user, password=pwd, dsn=f"{host}:{port or 1521}")
+    else:
+        raise ValueError(f"不支持的数据库类型: {db_type}")
+
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute(sql)
+            rows = cursor.fetchall()
+            if db_type == "01":
+                # pymysql DictCursor
+                columns = [desc[0] for desc in cursor.description] if cursor.description else []
+                row_list = [tuple(row.values()) for row in rows]
+            elif db_type == "02":
+                columns = [desc[0] for desc in cursor.description] if cursor.description else []
+                row_list = list(rows)
+            else:
+                columns = [desc[0] for desc in cursor.description] if cursor.description else []
+                row_list = [tuple(row) for row in rows]
+            return columns, row_list
+    finally:
+        conn.close()
+
+
+def save_query_result_to_desktop(columns: list, rows: list):
+    """将查询结果保存到桌面，文件名格式：测试查询_时分秒"""
+    import csv
+    import os
+    from datetime import datetime
+
+    desktop = r"C:\Users\Administrator\Desktop"
+    if not os.path.exists(desktop):
+        os.makedirs(desktop, exist_ok=True)
+
+    timestamp = datetime.now().strftime("%H%M%S")
+    filename = f"测试查询_{timestamp}.csv"
+    filepath = os.path.join(desktop, filename)
+
+    with open(filepath, "w", newline="", encoding="utf-8-sig") as f:
+        writer = csv.writer(f)
+        writer.writerow(columns)
+        writer.writerows(rows)
+
+    return filepath

@@ -3,13 +3,14 @@ import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import Header from '@/components/Header.vue'
 import Sidebar from '@/components/Sidebar.vue'
-import { getCollectTasks, saveCollectTask, type CollectTask } from '@/api/sample'
-import { ElMessage } from 'element-plus'
+import { getCollectTasks, saveCollectTask, executeCollectTask, stopCollectTask, type CollectTask } from '@/api/sample'
+import { ElMessage, ElMessageBox } from 'element-plus'
 
 const router = useRouter()
 
 const taskList = ref<CollectTask[]>([])
 const loading = ref(false)
+const executingSet = ref<Set<string>>(new Set())
 
 // 筛选
 const filterName = ref('')
@@ -76,6 +77,50 @@ function resultColor(flagName: string): string {
   return 'rgba(255, 255, 255, 0.5)' // 未执行
 }
 
+// 执行状态颜色
+function statusColor(statusCode: string): string {
+  if (statusCode === '02') return '#ffaa00'   // 执行中
+  if (statusCode === '03') return '#00ff88'   // 已完成
+  if (statusCode === '04') return '#ff5555'   // 已停止
+  return 'rgba(255, 255, 255, 0.5)'           // 未执行
+}
+
+// 执行任务
+async function handleExecute(taskNo: string) {
+  try {
+    await ElMessageBox.confirm('确认执行该采集任务？', '提示', { type: 'warning' })
+  } catch {
+    return
+  }
+  executingSet.value.add(taskNo)
+  try {
+    const msg = await executeCollectTask(taskNo)
+    ElMessage.success(msg)
+    await loadTasks()
+  } catch (e: any) {
+    ElMessage.error(e.message || '执行失败')
+    await loadTasks()
+  } finally {
+    executingSet.value.delete(taskNo)
+  }
+}
+
+// 停止任务
+async function handleStop(taskNo: string) {
+  try {
+    await ElMessageBox.confirm('确认停止该采集任务？', '提示', { type: 'warning' })
+  } catch {
+    return
+  }
+  try {
+    await stopCollectTask(taskNo)
+    ElMessage.success('已停止')
+    await loadTasks()
+  } catch (e: any) {
+    ElMessage.error(e.message || '停止失败')
+  }
+}
+
 function goToDetail(taskNo: string) {
   router.push({ path: '/collect-task-detail', query: { taskNo } })
 }
@@ -121,6 +166,8 @@ onMounted(() => {
             <span class="col col-create">创建时间</span>
             <span class="col col-exec">最近执行时间</span>
             <span class="col col-result">执行结果</span>
+            <span class="col col-status">执行状态</span>
+            <span class="col col-action">操作</span>
           </div>
           <div v-if="loading" class="loading-state">
             <span>加载中...</span>
@@ -142,6 +189,26 @@ onMounted(() => {
                 <span class="result-tag" :style="{ color: resultColor(item.lastExecuteFlagName) }">
                   {{ item.lastExecuteFlagName || '未执行' }}
                 </span>
+              </span>
+              <span class="col col-status">
+                <span class="status-tag" :style="{ color: statusColor(item.taskStatusCode) }">
+                  {{ item.taskStatusName || '未执行' }}
+                </span>
+              </span>
+              <span class="col col-action">
+                <el-button
+                  type="primary"
+                  size="small"
+                  :loading="executingSet.has(item.taskNo)"
+                  :disabled="item.taskStatusCode === '02'"
+                  @click="handleExecute(item.taskNo)"
+                >执行</el-button>
+                <el-button
+                  type="danger"
+                  size="small"
+                  :disabled="item.taskStatusCode !== '02'"
+                  @click="handleStop(item.taskNo)"
+                >停止</el-button>
               </span>
             </div>
           </div>
@@ -310,6 +377,8 @@ onMounted(() => {
 .col-create { width: 170px; flex-shrink: 0; color: rgba(255, 255, 255, 0.6); }
 .col-exec { width: 170px; flex-shrink: 0; color: rgba(255, 255, 255, 0.6); }
 .col-result { width: 100px; flex-shrink: 0; text-align: center; }
+.col-status { width: 100px; flex-shrink: 0; text-align: center; }
+.col-action { width: 160px; flex-shrink: 0; display: flex; align-items: center; gap: 8px; }
 
 .link-col {
   cursor: pointer;
@@ -322,6 +391,11 @@ onMounted(() => {
 }
 
 .result-tag {
+  font-weight: 600;
+  font-size: 13px;
+}
+
+.status-tag {
   font-weight: 600;
   font-size: 13px;
 }

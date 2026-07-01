@@ -14,7 +14,7 @@
     "@vue-office/excel": "^1.7.14",
     "@vue-office/pdf": "^2.0.10",
     "@vue-office/pptx": "^1.0.1",
-    "axios": "^1.6.5",
+    "axios": "^1.17.0",
     "echarts": "^5.5.0",
     "element-plus": "^2.9.7",
     "vue": "^3.4.21",
