@@ -35,7 +35,8 @@ const menuItems: MenuItem[] = [
   {
     id: 'sampleset', name: '样本集管理', icon: 'folder', children: [
       { id: 'sampleset-base', name: '样本集管理', path: '/sample-set' },
-      { id: 'sampleset-ts', name: '时序样本集管理', path: '/timeseries/sample-set' }
+      { id: 'sampleset-ts', name: '时序样本集管理', path: '/timeseries/sample-set' },
+      { id: 'sampleset-collect', name: '数据采集任务', path: '/collect-task' }
     ]
   },
   {

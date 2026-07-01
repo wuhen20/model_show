@@ -1,7 +1,7 @@
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Query, UploadFile, File, Form
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
-from app.core.database import query_code_dict, query_sample_set, query_sample_info, save_sample_set, sample_statistic, sample_trend, query_audio_text, update_sample_score
+from app.core.database import query_code_dict, query_sample_set, query_sample_info, save_sample_set, sample_statistic, sample_trend, query_audio_text, update_sample_score, insert_sample_info, update_label_think, generate_task_no, query_data_collect_task, save_data_collect_task, save_data_collect_task_det, query_data_collect_task_det, update_data_collect_task_det
 import os
 import io
 import zipfile
@@ -290,3 +290,165 @@ def download_sample_set(setNo: str = Query(..., description="样本集编号"), 
         media_type="application/x-zip-compressed",
         headers={"Content-Disposition": f"attachment; filename*=UTF-8''{encoded_name}"}
     )
+
+
+@router.post("/upload-samples")
+async def upload_samples(
+    setNo: str = Form(..., description="样本集编号"),
+    setName: str = Form(..., description="样本集名称"),
+    typeCode: str = Form(..., description="样本类型编码"),
+    files: list[UploadFile] = File(..., description="上传的文件列表"),
+):
+    """上传样本文件：保存到 sample_upload_dir/setName/ 目录，并写入 s_sample_info 表"""
+    from app.core.config import settings
+
+    # 目标目录：配置路径 / 样本集名称
+    target_dir = os.path.join(settings.sample_upload_dir, setName)
+    os.makedirs(target_dir, exist_ok=True)
+
+    success_count = 0
+    errors = []
+
+    for file in files:
+        if not file.filename:
+            continue
+        ext = os.path.splitext(file.filename)[1].lower()
+        # 保存文件
+        file_path = os.path.join(target_dir, file.filename)
+        try:
+            content = await file.read()
+            with open(file_path, "wb") as f:
+                f.write(content)
+            # 写入数据库
+            insert_sample_info(
+                set_no=setNo,
+                sample_name=file.filename,
+                suffix=ext,
+                type_code=typeCode,
+                file_path=file_path,
+                file_size=len(content),
+            )
+            success_count += 1
+        except Exception as e:
+            errors.append(f"{file.filename}: 保存失败 - {str(e)}")
+
+    msg = f"成功上传 {success_count} 个文件"
+    if errors:
+        msg += f"，失败 {len(errors)} 个: {'; '.join(errors[:5])}"
+    return {"code": 0, "message": msg}
+
+
+@router.post("/update-label-think")
+async def update_label_think_api(payload: dict):
+    """保存样本思维链"""
+    sample_no = payload.get("sampleNo", "")
+    sample_name = payload.get("sampleName", "")
+    label_think = payload.get("labelThink", "")
+    if not sample_no or not sample_name:
+        return {"code": 1, "message": "sampleNo 和 sampleName 不能为空"}
+    try:
+        update_label_think(sample_no, sample_name, label_think)
+        return {"code": 0, "message": "保存成功"}
+    except Exception as e:
+        return {"code": 1, "message": f"保存失败: {str(e)}"}
+
+
+@router.get("/query-collect-task")
+def query_collect_task_api():
+    """查询数据采集任务列表"""
+    try:
+        rows = query_data_collect_task()
+        data = []
+        for row in rows:
+            item = {}
+            for k, v in row.items():
+                parts = k.split("_")
+                camel = parts[0] + "".join(p.capitalize() for p in parts[1:])
+                if hasattr(v, "isoformat"):
+                    v = v.isoformat()
+                item[camel] = v
+            data.append(item)
+        return {"code": 0, "data": data}
+    except Exception as e:
+        return {"code": 1, "message": f"查询失败: {str(e)}"}
+
+
+@router.post("/save-collect-task")
+def save_collect_task_api(payload: dict):
+    """新增数据采集任务，任务编号自动生成"""
+    task_name = payload.get("taskName", "").strip()
+    remark = payload.get("remark", "").strip()
+    if not task_name:
+        return {"code": 1, "message": "任务名称不能为空"}
+    try:
+        task_no = generate_task_no()
+        save_data_collect_task(task_no, task_name, remark)
+        return {"code": 0, "message": "保存成功", "data": {"taskNo": task_no}}
+    except Exception as e:
+        return {"code": 1, "message": f"保存失败: {str(e)}"}
+
+
+@router.get("/query-collect-task-det")
+def query_collect_task_det_api(taskNo: str = Query(..., description="任务编号")):
+    """查询数据采集任务明细"""
+    try:
+        row = query_data_collect_task_det(taskNo)
+        if not row:
+            return {"code": 0, "data": None}
+        item = {}
+        for k, v in row.items():
+            parts = k.split("_")
+            camel = parts[0] + "".join(p.capitalize() for p in parts[1:])
+            if hasattr(v, "isoformat"):
+                v = v.isoformat()
+            # blob 类型转字符串
+            if k == "collect_sql" and v is not None:
+                if isinstance(v, bytes):
+                    v = v.decode("utf-8")
+            item[camel] = v
+        return {"code": 0, "data": item}
+    except Exception as e:
+        return {"code": 1, "message": f"查询失败: {str(e)}"}
+
+
+@router.post("/save-collect-task-det")
+def save_collect_task_det_api(payload: dict):
+    """保存数据采集任务明细（新增或更新）"""
+    task_no = payload.get("taskNo", "").strip()
+    source_db_type = payload.get("sourceDbType", "").strip()
+    source_db_host = payload.get("sourceDbHost", "").strip()
+    source_db_port = payload.get("sourceDbPort", "").strip()
+    source_db_usr = payload.get("sourceDbUsr", "").strip()
+    source_db_pwd = payload.get("sourceDbPwd", "").strip()
+    target_table = payload.get("targetTable", "").strip()
+    collect_sql = payload.get("collectSql", "").strip()
+
+    if not task_no:
+        return {"code": 1, "message": "任务编号不能为空"}
+    if not source_db_type or not source_db_host or not source_db_usr or not collect_sql or not target_table:
+        return {"code": 1, "message": "数据库类型、地址、用户名、SQL、目标表不能为空"}
+
+    data = {
+        "taskNo": task_no,
+        "sourceDbType": source_db_type,
+        "sourceDbHost": source_db_host,
+        "sourceDbPort": source_db_port,
+        "sourceDbUsr": source_db_usr,
+        "sourceDbPwd": source_db_pwd,
+        "targetTable": target_table,
+        "collectSql": collect_sql,
+    }
+
+    try:
+        # 查询是否已有明细
+        existing = query_data_collect_task_det(task_no)
+        if existing:
+            # 已有明细，执行更新
+            update_data_collect_task_det(data)
+            return {"code": 0, "message": "更新成功"}
+        else:
+            # 无明细，执行新增
+            save_data_collect_task_det(data)
+            return {"code": 0, "message": "保存成功"}
+    except Exception as e:
+        return {"code": 1, "message": f"保存失败: {str(e)}"}

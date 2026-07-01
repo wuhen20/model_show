@@ -106,7 +106,8 @@ def query_sample_info(set_no: str):
                     date_format(s.create_time, '%%Y-%%m-%%d %%H:%%i:%%s') as createTime,
                     s.label_flag as labelFlagCode,
 	                case s.label_flag when 1 then '已标注' else '未标注' end as labelFlag,
-                    s.sample_score
+                    s.sample_score,
+                    s.label_think
                 from
                     s_sample_info s
                 where
@@ -292,6 +293,22 @@ def query_audio_text(sample_no: str, sample_name: str):
         conn.close()
 
 
+def insert_sample_info(set_no: str, sample_name: str, suffix: str, type_code: str, file_path: str, file_size: int):
+    """插入样本信息到 s_sample_info 表"""
+    conn = get_connection()
+    try:
+        with conn.cursor() as cursor:
+            sql = """
+                INSERT INTO s_sample_info (set_no, sample_name, suffix, type_code, file_path, file_size, label_flag)
+                VALUES (%s, %s, %s, %s, %s, %s, 0)
+            """
+            cursor.execute(sql, (set_no, sample_name, suffix, type_code, file_path, file_size))
+        conn.commit()
+        return cursor.rowcount
+    finally:
+        conn.close()
+
+
 def update_sample_score(sample_no: str, sample_name: str, score_code: str):
     """更新样本质量评分（编码：01-优质/02-良好/03-一般/04-较差）"""
     conn = get_connection()
@@ -303,6 +320,169 @@ def update_sample_score(sample_no: str, sample_name: str, score_code: str):
                 WHERE sample_no = %s AND sample_name = %s
             """
             cursor.execute(sql, (score_code, sample_no, sample_name))
+        conn.commit()
+        return cursor.rowcount
+    finally:
+        conn.close()
+
+
+def update_label_think(sample_no: str, sample_name: str, label_think: str):
+    """更新样本思维链"""
+    conn = get_connection()
+    try:
+        with conn.cursor() as cursor:
+            sql = """
+                UPDATE s_sample_info
+                SET label_think = %s
+                WHERE sample_no = %s AND sample_name = %s
+            """
+            cursor.execute(sql, (label_think, sample_no, sample_name))
+        conn.commit()
+        return cursor.rowcount
+    finally:
+        conn.close()
+
+
+def generate_task_no():
+    """生成任务编号：年月日+3位序列号，如 20260701001"""
+    from datetime import datetime
+    today = datetime.now().strftime('%Y%m%d')
+    conn = get_connection()
+    try:
+        with conn.cursor() as cursor:
+            sql = """
+                SELECT task_no
+                FROM s_data_collect_task
+                WHERE task_no LIKE %s
+                ORDER BY task_no DESC
+                LIMIT 1
+            """
+            cursor.execute(sql, (today + '%',))
+            row = cursor.fetchone()
+            if row:
+                seq_part = row['task_no'][len(today):]
+                seq_str = ''.join(c for c in seq_part if c.isdigit())
+                seq = int(seq_str) + 1 if seq_str else 1
+            else:
+                seq = 1
+            return f"{today}{seq:03d}"
+    finally:
+        conn.close()
+
+
+def query_data_collect_task():
+    """查询所有数据采集任务"""
+    conn = get_connection()
+    try:
+        with conn.cursor() as cursor:
+            sql = """
+                SELECT
+                    s.task_no,
+                    s.task_name,
+                    s.remark,
+                    date_format(s.create_time, '%%Y-%%m-%%d %%H:%%i:%%s') as createTime,
+                    date_format(s.last_execute_time, '%%Y-%%m-%%d %%H:%%i:%%s') as lastExecuteTime,
+                    s.last_execute_flag as lastExecuteFlagCode,
+                    CASE
+                        WHEN s.last_execute_flag = 0 THEN '未执行'
+                        WHEN s.last_execute_flag = 1 THEN '成功'
+                        WHEN s.last_execute_flag = 2 THEN '失败'
+                        ELSE '未执行'
+                    END as lastExecuteFlagName
+                FROM s_data_collect_task s
+                ORDER BY s.create_time DESC
+            """
+            cursor.execute(sql, ())
+            return cursor.fetchall()
+    finally:
+        conn.close()
+
+
+def save_data_collect_task(task_no: str, task_name: str, remark: str):
+    """新增数据采集任务"""
+    conn = get_connection()
+    try:
+        with conn.cursor() as cursor:
+            sql = """
+                INSERT INTO s_data_collect_task (task_no, task_name, remark)
+                VALUES (%s, %s, %s)
+            """
+            cursor.execute(sql, (task_no, task_name, remark))
+        conn.commit()
+        return cursor.rowcount
+    finally:
+        conn.close()
+
+
+def save_data_collect_task_det(data: dict):
+    """保存数据采集任务明细"""
+    conn = get_connection()
+    try:
+        with conn.cursor() as cursor:
+            sql = """
+                INSERT INTO s_data_collect_task_det
+                    (task_no, source_db_type, source_db_host, source_db_port, source_db_usr, source_db_pwd, target_table, collect_sql)
+                VALUES
+                    (%(taskNo)s, %(sourceDbType)s, %(sourceDbHost)s, %(sourceDbPort)s, %(sourceDbUsr)s, %(sourceDbPwd)s, %(targetTable)s, %(collectSql)s)
+            """
+            cursor.execute(sql, data)
+        conn.commit()
+        return cursor.rowcount
+    finally:
+        conn.close()
+
+
+def query_data_collect_task_det(task_no: str):
+    """查询任务明细"""
+    conn = get_connection()
+    try:
+        with conn.cursor() as cursor:
+            sql = """
+                SELECT
+                    task_no,
+                    source_db_type,
+                    source_db_host,
+                    source_db_port,
+                    source_db_usr,
+                    source_db_pwd,
+                    target_table,
+                    collect_sql,
+                    date_format(last_execute_time, '%%Y-%%m-%%d %%H:%%i:%%s') as lastExecuteTime,
+                    last_execute_flag as lastExecuteFlagCode,
+                    CASE
+                        WHEN last_execute_flag = 0 THEN '未执行'
+                        WHEN last_execute_flag = 1 THEN '成功'
+                        WHEN last_execute_flag = 2 THEN '失败'
+                        ELSE '未执行'
+                    END as lastExecuteFlagName
+                FROM s_data_collect_task_det
+                WHERE task_no = %s
+                ORDER BY record_id DESC
+                LIMIT 1
+            """
+            cursor.execute(sql, (task_no,))
+            return cursor.fetchone()
+    finally:
+        conn.close()
+
+
+def update_data_collect_task_det(data: dict):
+    """更新任务明细"""
+    conn = get_connection()
+    try:
+        with conn.cursor() as cursor:
+            sql = """
+                UPDATE s_data_collect_task_det
+                SET source_db_type = %(sourceDbType)s,
+                    source_db_host = %(sourceDbHost)s,
+                    source_db_port = %(sourceDbPort)s,
+                    source_db_usr = %(sourceDbUsr)s,
+                    source_db_pwd = %(sourceDbPwd)s,
+                    target_table = %(targetTable)s,
+                    collect_sql = %(collectSql)s
+                WHERE task_no = %(taskNo)s
+            """
+            cursor.execute(sql, data)
         conn.commit()
         return cursor.rowcount
     finally:

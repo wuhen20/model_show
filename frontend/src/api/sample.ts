@@ -9,9 +9,10 @@ export interface CodeDictResult {
   SAMPLE_TYPE?: CodeDictItem[]
   QUALITY_LEVEL?: CodeDictItem[]
   SAMPLE_FIELD?: CodeDictItem[]
+  DATABASE_TYPE?: CodeDictItem[]
 }
 
-export async function getCodeDict(sortNo: string[] = ['SAMPLE_TYPE', 'QUALITY_LEVEL', 'SAMPLE_FIELD']): Promise<CodeDictResult> {
+export async function getCodeDict(sortNo: string[] = ['SAMPLE_TYPE', 'QUALITY_LEVEL', 'SAMPLE_FIELD', 'DATABASE_TYPE']): Promise<CodeDictResult> {
   const params = sortNo.map(s => `sortNo=${encodeURIComponent(s)}`).join('&')
   const res = await fetch(`${BASE_URL}/code-dict?${params}`)
   const json = await res.json()
@@ -105,6 +106,16 @@ export async function updateSampleScore(sampleNo: string, sampleName: string, sc
   if (json.code !== 0) throw new Error(json.message || '评分失败')
 }
 
+export async function saveLabelThink(sampleNo: string, sampleName: string, labelThink: string): Promise<void> {
+  const res = await fetch(`${BASE_URL}/update-label-think`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ sampleNo, sampleName, labelThink })
+  })
+  const json = await res.json()
+  if (json.code !== 0) throw new Error(json.message || '保存思维链失败')
+}
+
 export interface SampleStatistic {
   setCount: number
   sampleCount: number
@@ -137,4 +148,88 @@ export async function getSampleTrend(): Promise<SampleTrend> {
   const json = await res.json()
   if (json.code !== 0) throw new Error(json.message || '获取趋势数据失败')
   return json.data
+}
+
+export async function uploadSamples(setNo: string, setName: string, typeCode: string, files: File[]): Promise<string> {
+  const formData = new FormData()
+  formData.append('setNo', setNo)
+  formData.append('setName', setName)
+  formData.append('typeCode', typeCode)
+  files.forEach(f => formData.append('files', f))
+  const res = await fetch(`${BASE_URL}/upload-samples`, { method: 'POST', body: formData })
+  const json = await res.json()
+  if (json.code !== 0) throw new Error(json.message || '上传失败')
+  return json.message
+}
+
+// ========== 数据采集任务 ==========
+
+export interface CollectTask {
+  taskNo: string
+  taskName: string
+  remark: string
+  createTime: string
+  lastExecuteTime: string
+  lastExecuteFlagCode: number
+  lastExecuteFlagName: string
+}
+
+export async function getCollectTasks(): Promise<CollectTask[]> {
+  const res = await fetch(`${BASE_URL}/query-collect-task`)
+  const json = await res.json()
+  if (json.code !== 0) throw new Error(json.message || '查询采集任务失败')
+  return json.data
+}
+
+export async function saveCollectTask(taskName: string, remark: string): Promise<string> {
+  const res = await fetch(`${BASE_URL}/save-collect-task`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ taskName, remark })
+  })
+  const json = await res.json()
+  if (json.code !== 0) throw new Error(json.message || '保存失败')
+  return json.data.taskNo
+}
+
+export interface CollectTaskDetParams {
+  taskNo: string
+  sourceDbType: string
+  sourceDbHost: string
+  sourceDbPort: string
+  sourceDbUsr: string
+  sourceDbPwd: string
+  targetTable: string
+  collectSql: string
+}
+
+export interface CollectTaskDet {
+  taskNo: string
+  sourceDbType: string
+  sourceDbHost: string
+  sourceDbPort: string
+  sourceDbUsr: string
+  sourceDbPwd: string
+  targetTable: string
+  collectSql: string
+  lastExecuteTime: string
+  lastExecuteFlagCode: number
+  lastExecuteFlagName: string
+}
+
+export async function getCollectTaskDet(taskNo: string): Promise<CollectTaskDet | null> {
+  const res = await fetch(`${BASE_URL}/query-collect-task-det?taskNo=${encodeURIComponent(taskNo)}`)
+  const json = await res.json()
+  if (json.code !== 0) throw new Error(json.message || '查询明细失败')
+  return json.data
+}
+
+export async function saveCollectTaskDet(params: CollectTaskDetParams): Promise<void> {
+  const res = await fetch(`${BASE_URL}/save-collect-task-det`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(params)
+  })
+  const json = await res.json()
+  if (json.code !== 0) throw new Error(json.message || '保存失败')
 }

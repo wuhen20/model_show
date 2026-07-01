@@ -1,9 +1,9 @@
 <script setup lang="ts">
-import { ref, computed, nextTick, onMounted, watch, onBeforeUnmount } from 'vue'
+import { ref, computed, nextTick, onMounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import Header from '@/components/Header.vue'
 import Sidebar from '@/components/Sidebar.vue'
-import { getSamples, getImageUrl, getAnnotations, getAudioText, updateSampleScore, type SampleInfoRow, type AnnotationData, type AnnotationBox } from '@/api/sample'
+import { getSamples, getImageUrl, getAnnotations, getAudioText, updateSampleScore, uploadSamples, saveLabelThink, type SampleInfoRow, type AnnotationData, type AnnotationBox } from '@/api/sample'
 import { ElMessage } from 'element-plus'
 
 const route = useRoute()
@@ -11,10 +11,83 @@ const router = useRouter()
 
 const setNo = ref(typeof route.query.setNo === 'string' ? route.query.setNo : '')
 const setName = ref(typeof route.query.setName === 'string' ? route.query.setName : '')
+const typeCode = ref(typeof route.query.typeCode === 'string' ? route.query.typeCode : '')
 
 const loading = ref(false)
 const sampleList = ref<SampleInfoRow[]>([])
 const columns = ref<{ key: string; label: string }[]>([])
+
+// 判断是否为图片样本集
+const isImageSet = computed(() => typeCode.value === '05')
+
+// 视图模式：缩略图 / 列表
+const viewMode = ref<'thumbnail' | 'list'>('list')
+
+// ========== 上传样本弹框 ==========
+const uploadDialogVisible = ref(false)
+const uploadSaving = ref(false)
+const uploadFileList = ref<File[]>([])
+
+// 样本类型编码 → 允许的文件扩展名
+const typeCodeToExtensions: Record<string, string[]> = {
+  '05': ['.jpg', '.jpeg', '.png', '.bmp', '.gif', '.webp', '.tif', '.tiff'],
+  '02': ['.txt', '.csv', '.json', '.xml', '.doc', '.docx', '.pdf'],
+  '03': ['.mp3', '.wav', '.ogg', '.flac', '.aac', '.wma', '.m4a'],
+  '04': ['.mp4', '.avi', '.mov', '.mkv', '.wmv', '.flv'],
+}
+
+// 样本类型编码 → 允许的 accept 值
+const typeCodeToAccept: Record<string, string> = {
+  '05': 'image/*',
+  '02': '.txt,.csv,.json,.xml,.doc,.docx,.pdf',
+  '03': 'audio/*',
+  '04': 'video/*',
+}
+
+function openUploadDialog() {
+  uploadFileList.value = []
+  uploadDialogVisible.value = true
+}
+
+function handleUploadFileChange(_file: any, fileList: any[]) {
+  uploadFileList.value = fileList.map((f: any) => f.raw)
+}
+
+function handleUploadFileRemove(_file: any, fileList: any[]) {
+  uploadFileList.value = fileList.map((f: any) => f.raw)
+}
+
+async function handleUploadConfirm() {
+  if (uploadFileList.value.length === 0) {
+    ElMessage.warning('请选择要上传的文件')
+    return
+  }
+
+  // 前端校验文件类型
+  const allowedExts = typeCodeToExtensions[typeCode.value]
+  if (allowedExts) {
+    const invalidFiles = uploadFileList.value.filter(f => {
+      const ext = '.' + f.name.split('.').pop()?.toLowerCase()
+      return !allowedExts.includes(ext)
+    })
+    if (invalidFiles.length > 0) {
+      ElMessage.warning(`以下文件类型不符合该样本集要求：${invalidFiles.map(f => f.name).join('、')}`)
+      return
+    }
+  }
+
+  uploadSaving.value = true
+  try {
+    const msg = await uploadSamples(setNo.value, setName.value, typeCode.value, uploadFileList.value)
+    ElMessage.success(msg)
+    uploadDialogVisible.value = false
+    loadSamples()
+  } catch (e: any) {
+    ElMessage.error(e.message || '上传失败')
+  } finally {
+    uploadSaving.value = false
+  }
+}
 
 // 筛选条件
 const filterName = ref('')
@@ -149,7 +222,56 @@ const boxColors = [
 const selectedBoxIndex = ref<number | null>(null)
 const panelSearchKeyword = ref('')
 const panelCategoryFilter = ref('')
-let highlightFlashTimer: ReturnType<typeof setInterval> | null = null
+
+// ========== 思维链状态 ==========
+const thinkVisible = ref(false)       // 思维链框是否展开
+const thinkCollapsed = ref(false)     // 思维链框是否最小化
+const thinkContent = ref('')          // 思维链文本内容
+const thinkHeight = ref(200)          // 思维链框高度（px）
+const thinkSaving = ref(false)        // 保存中
+const thinkSampleNo = ref('')         // 当前样本编号
+const thinkSampleName = ref('')       // 当前样本名称
+let thinkResizing = false             // 是否正在拖拽调整大小
+let thinkResizeStartY = 0
+let thinkResizeStartH = 0
+
+function startThinkResize(e: MouseEvent) {
+  thinkResizing = true
+  thinkResizeStartY = e.clientY
+  thinkResizeStartH = thinkHeight.value
+  document.addEventListener('mousemove', onThinkResize)
+  document.addEventListener('mouseup', stopThinkResize)
+  e.preventDefault()
+}
+
+function onThinkResize(e: MouseEvent) {
+  if (!thinkResizing) return
+  const delta = thinkResizeStartY - e.clientY
+  thinkHeight.value = Math.max(80, Math.min(600, thinkResizeStartH + delta))
+}
+
+function stopThinkResize() {
+  thinkResizing = false
+  document.removeEventListener('mousemove', onThinkResize)
+  document.removeEventListener('mouseup', stopThinkResize)
+}
+
+function toggleThinkCollapse() {
+  thinkCollapsed.value = !thinkCollapsed.value
+}
+
+async function handleSaveThink() {
+  if (!thinkSampleNo.value || !thinkSampleName.value) return
+  thinkSaving.value = true
+  try {
+    await saveLabelThink(thinkSampleNo.value, thinkSampleName.value, thinkContent.value)
+    ElMessage.success('思维链保存成功')
+  } catch (e: any) {
+    ElMessage.error(e.message || '保存失败')
+  } finally {
+    thinkSaving.value = false
+  }
+}
 
 // ========== 音频播放状态 ==========
 const audioRef = ref<HTMLAudioElement | null>(null)
@@ -278,6 +400,14 @@ async function openPreview(row: SampleInfoRow) {
     previewType.value = 'image'
     previewVisible.value = true
     previewLoading.value = true
+
+    // 初始化思维链状态
+    thinkSampleNo.value = String(row.sampleNo || '')
+    thinkSampleName.value = String(row.sampleName || '')
+    const thinkText = (row.labelThink as string) || ''
+    thinkContent.value = thinkText
+    thinkVisible.value = true
+    thinkCollapsed.value = !thinkText  // 有值则展开，无值则最小化
 
     try {
       const ann = await getAnnotations(filePath)
@@ -413,35 +543,17 @@ function drawAnnotations(highlightIndex?: number | null) {
 
 // ========== 双向联动 ==========
 
-// 点击面板中的标注项 → 左侧图片高亮闪烁
+// 点击面板中的标注项 → 左侧图片高亮，其他框变暗
 function selectBoxFromPanel(index: number) {
   if (selectedBoxIndex.value === index) {
-    // 取消选中
+    // 取消选中，恢复所有框原色
     selectedBoxIndex.value = null
-    clearHighlightFlash()
     drawAnnotations(null)
     return
   }
   selectedBoxIndex.value = index
-  startHighlightFlash(index)
-}
-
-function startHighlightFlash(index: number) {
-  clearHighlightFlash()
-  let flashOn = true
-  highlightFlashTimer = setInterval(() => {
-    flashOn = !flashOn
-    drawAnnotations(flashOn ? index : null)
-  }, 400)
-  // 立即高亮一次
+  // 选中框高亮，其他框变暗（不闪烁）
   drawAnnotations(index)
-}
-
-function clearHighlightFlash() {
-  if (highlightFlashTimer) {
-    clearInterval(highlightFlashTimer)
-    highlightFlashTimer = null
-  }
 }
 
 // 点击 canvas 上的标注框 → 右侧面板滚动高亮
@@ -480,23 +592,23 @@ function handleCanvasClick(e: MouseEvent) {
   }
   // 点击空白区域取消选中
   selectedBoxIndex.value = null
-  clearHighlightFlash()
   drawAnnotations(null)
 }
 
 // 面板搜索/筛选变化时重置选中
 watch([panelSearchKeyword, panelCategoryFilter], () => {
   selectedBoxIndex.value = null
-  clearHighlightFlash()
   drawAnnotations(null)
 })
 
 // 弹框关闭时清理
 watch(previewVisible, (val) => {
   if (!val) {
-    clearHighlightFlash()
     selectedBoxIndex.value = null
     cachedImage = null
+    thinkVisible.value = false
+    thinkCollapsed.value = false
+    thinkContent.value = ''
   }
 })
 
@@ -536,10 +648,6 @@ function getScoreLabel(score: string | null | undefined): string {
   return scoreCodeMap[score] || '未评分'
 }
 
-onBeforeUnmount(() => {
-  clearHighlightFlash()
-})
-
 onMounted(() => {
   loadSamples()
 })
@@ -561,6 +669,19 @@ onMounted(() => {
             </h2>
             <p>样本集编号：{{ setNo }}，共 {{ filteredList.length }} 条样本</p>
           </div>
+          <div class="page-actions">
+            <div v-if="isImageSet" class="view-toggle">
+              <button class="view-btn" :class="{ active: viewMode === 'thumbnail' }" @click="viewMode = 'thumbnail'" title="缩略图视图">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg>
+                <span>缩略图</span>
+              </button>
+              <button class="view-btn" :class="{ active: viewMode === 'list' }" @click="viewMode = 'list'" title="列表视图">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><circle cx="4" cy="6" r="1"/><circle cx="4" cy="12" r="1"/><circle cx="4" cy="18" r="1"/></svg>
+                <span>列表</span>
+              </button>
+            </div>
+            <el-button type="primary" @click="openUploadDialog">上传样本</el-button>
+          </div>
         </div>
 
         <!-- 筛选条件 -->
@@ -579,7 +700,29 @@ onMounted(() => {
           <el-button size="default" @click="resetFilters">重置</el-button>
         </div>
 
-        <div class="table-wrapper" v-loading="loading">
+        <!-- 缩略图视图 -->
+        <div v-if="isImageSet && viewMode === 'thumbnail'" class="thumbnail-grid" v-loading="loading">
+          <div class="thumbnail-card" v-for="(row, idx) in pagedList" :key="idx" @click="openPreview(row)">
+            <div class="thumbnail-img-wrap">
+              <img v-if="isImageRow(row) && row.filePath" :src="getImageUrl(row.filePath)" :alt="row.sampleName" class="thumbnail-img" />
+              <div v-else class="thumbnail-placeholder">
+                <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="rgba(0,212,255,0.3)" stroke-width="1.5"><path d="M4 16l4.586-4.586a2 2 0 0 1 2.828 0L16 16m-2-2l1.586-1.586a2 2 0 0 1 2.828 0L20 14m-6-6h.01M6 20h12a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2z"/></svg>
+              </div>
+            </div>
+            <div class="thumbnail-name" :title="row.sampleName">{{ row.sampleName }}</div>
+            <div class="thumbnail-meta">
+              <span class="thumbnail-score" :class="`score-${getScoreStars(row.sampleScore)}`">{{ getScoreLabel(row.sampleScore) }}</span>
+              <span class="thumbnail-label-flag">{{ row.labelFlag || '未标注' }}</span>
+            </div>
+          </div>
+          <div v-if="pagedList.length === 0 && !loading" class="empty-state">
+            <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="rgba(0,212,255,0.3)" stroke-width="1"><path d="M4 20h16v-2H4v2zm0-6h16v-2H4v2zm0-6h16V6H4v2z"/></svg>
+            <p>暂无样本数据</p>
+          </div>
+        </div>
+
+        <!-- 列表视图 -->
+        <div class="table-wrapper" v-if="!isImageSet || viewMode === 'list'" v-loading="loading">
           <table v-if="pagedList.length > 0" class="sample-table">
             <thead>
               <tr>
@@ -636,6 +779,40 @@ onMounted(() => {
       </main>
     </div>
 
+    <!-- 上传样本弹框 -->
+    <el-dialog v-model="uploadDialogVisible" title="上传样本" width="520px" :close-on-click-modal="false" class="upload-dialog">
+      <div class="upload-dialog-content">
+        <div class="upload-info-row">
+          <span class="upload-info-label">样本集：</span>
+          <span class="upload-info-value">{{ setName }}</span>
+        </div>
+        <div class="upload-info-row">
+          <span class="upload-info-label">允许格式：</span>
+          <span class="upload-info-value">{{ typeCode === '05' ? '图像文件（jpg/png/bmp等）' : typeCode === '02' ? '文本文件（txt/csv/doc等）' : typeCode === '03' ? '音频文件（mp3/wav等）' : typeCode === '04' ? '视频文件（mp4/avi等）' : '不限' }}</span>
+        </div>
+        <el-upload
+          :accept="typeCodeToAccept[typeCode] || ''"
+          :auto-upload="false"
+          :on-change="handleUploadFileChange"
+          :on-remove="handleUploadFileRemove"
+          multiple
+          drag
+        >
+          <div class="upload-drag-content">
+            <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="rgba(0,212,255,0.5)" stroke-width="1.5">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M17 8l-5-5-5 5M12 3v12"/>
+            </svg>
+            <p>将文件拖到此处，或<em>点击上传</em></p>
+            <p class="upload-tip">仅支持该样本集对应类型的文件</p>
+          </div>
+        </el-upload>
+      </div>
+      <template #footer>
+        <el-button type="primary" :loading="uploadSaving" @click="handleUploadConfirm">确认上传</el-button>
+        <el-button @click="uploadDialogVisible = false">取消</el-button>
+      </template>
+    </el-dialog>
+
     <!-- 文件预览弹框 -->
     <el-dialog v-model="previewVisible" :title="previewName || '文件预览'" width="90vw" :close-on-click-modal="true" class="preview-dialog" destroy-on-close top="3vh">
       <div class="preview-container" v-loading="previewLoading">
@@ -643,10 +820,32 @@ onMounted(() => {
         <template v-if="previewType === 'image'">
           <template v-if="annotationData?.hasAnnotations">
             <div class="split-layout">
-              <!-- 左侧：图片预览区 -->
+              <!-- 左侧：上方图片 + 下方思维链 -->
               <div class="split-left">
-                <div class="canvas-scroll">
-                  <canvas ref="previewCanvas" class="preview-canvas" @click="handleCanvasClick"></canvas>
+                <!-- 上方：图片预览区 -->
+                <div class="split-left-image">
+                  <div class="canvas-scroll">
+                    <canvas ref="previewCanvas" class="preview-canvas" @click="handleCanvasClick"></canvas>
+                  </div>
+                </div>
+                <!-- 下方：思维链框 -->
+                <div v-if="thinkVisible" class="think-box" :class="{ collapsed: thinkCollapsed }">
+                  <div class="think-header" @click="toggleThinkCollapse">
+                    <span class="think-title">思维链</span>
+                    <span class="think-toggle-icon">
+                      <svg v-if="thinkCollapsed" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9l6 6 6-6"/></svg>
+                      <svg v-else width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 15l-6-6-6 6"/></svg>
+                    </span>
+                  </div>
+                  <template v-if="!thinkCollapsed">
+                    <div class="think-resize-handle" @mousedown="startThinkResize"></div>
+                    <div class="think-body" :style="{ height: thinkHeight + 'px' }">
+                      <textarea v-model="thinkContent" class="think-textarea" placeholder="请输入思维链内容..."></textarea>
+                      <div class="think-footer">
+                        <el-button type="primary" size="small" :loading="thinkSaving" @click="handleSaveThink">保存</el-button>
+                      </div>
+                    </div>
+                  </template>
                 </div>
               </div>
               <!-- 右侧：标注信息面板 -->
@@ -729,7 +928,32 @@ onMounted(() => {
             </div>
           </template>
           <template v-else>
-            <img :src="getImageUrl(previewFilePath)" class="preview-img" @error="() => ElMessage.error('图片加载失败')" />
+            <div class="split-layout">
+              <!-- 左侧：上方图片 + 下方思维链 -->
+              <div class="split-left">
+                <div class="split-left-image">
+                  <img :src="getImageUrl(previewFilePath)" class="preview-img" @error="() => ElMessage.error('图片加载失败')" />
+                </div>
+                <div v-if="thinkVisible" class="think-box" :class="{ collapsed: thinkCollapsed }">
+                  <div class="think-header" @click="toggleThinkCollapse">
+                    <span class="think-title">思维链</span>
+                    <span class="think-toggle-icon">
+                      <svg v-if="thinkCollapsed" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9l6 6 6-6"/></svg>
+                      <svg v-else width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 15l-6-6-6 6"/></svg>
+                    </span>
+                  </div>
+                  <template v-if="!thinkCollapsed">
+                    <div class="think-resize-handle" @mousedown="startThinkResize"></div>
+                    <div class="think-body" :style="{ height: thinkHeight + 'px' }">
+                      <textarea v-model="thinkContent" class="think-textarea" placeholder="请输入思维链内容..."></textarea>
+                      <div class="think-footer">
+                        <el-button type="primary" size="small" :loading="thinkSaving" @click="handleSaveThink">保存</el-button>
+                      </div>
+                    </div>
+                  </template>
+                </div>
+              </div>
+            </div>
           </template>
         </template>
         <!-- 音频播放 -->
@@ -860,6 +1084,45 @@ onMounted(() => {
   margin: 0;
 }
 
+.page-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.view-toggle {
+  display: flex;
+  gap: 2px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(0, 212, 255, 0.15);
+  border-radius: 8px;
+  padding: 2px;
+}
+
+.view-btn {
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  padding: 6px 10px;
+  color: rgba(255, 255, 255, 0.4);
+  cursor: pointer;
+  transition: all 0.2s;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  white-space: nowrap;
+
+  &.active {
+    background: rgba(0, 212, 255, 0.15);
+    color: #00d4ff;
+  }
+
+  &:hover {
+    color: #00d4ff;
+  }
+}
+
 .back-btn {
   display: inline-flex;
   align-items: center;
@@ -869,6 +1132,94 @@ onMounted(() => {
   &:hover {
     color: #00d4ff;
   }
+}
+
+// ========== 缩略图视图 ==========
+.thumbnail-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  gap: 16px;
+  padding: 16px;
+  background: linear-gradient(135deg, rgba(17, 24, 39, 0.9) 0%, rgba(26, 35, 50, 0.8) 100%);
+  border: 1px solid rgba(0, 212, 255, 0.2);
+  border-radius: 12px;
+  min-height: 200px;
+}
+
+.thumbnail-card {
+  background: rgba(0, 0, 0, 0.3);
+  border: 1px solid rgba(0, 212, 255, 0.15);
+  border-radius: 8px;
+  overflow: hidden;
+  cursor: pointer;
+  transition: all 0.25s;
+
+  &:hover {
+    border-color: rgba(0, 212, 255, 0.5);
+    box-shadow: 0 4px 16px rgba(0, 212, 255, 0.12);
+    transform: translateY(-2px);
+  }
+}
+
+.thumbnail-img-wrap {
+  width: 100%;
+  height: 140px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.2);
+  overflow: hidden;
+}
+
+.thumbnail-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  transition: transform 0.3s;
+
+  .thumbnail-card:hover & {
+    transform: scale(1.05);
+  }
+}
+
+.thumbnail-placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+}
+
+.thumbnail-name {
+  padding: 8px 10px 4px;
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.85);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.thumbnail-meta {
+  padding: 0 10px 8px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.thumbnail-score {
+  font-size: 11px;
+  font-weight: 600;
+
+  &.score-1, &.score-2 { color: #f56c6c; }
+  &.score-3 { color: #e6a23c; }
+  &.score-4 { color: #67c23a; }
+  &.score-5 { color: #00d4ff; }
+  &.score-0 { color: rgba(255, 255, 255, 0.3); }
+}
+
+.thumbnail-label-flag {
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.4);
 }
 
 .table-wrapper {
@@ -1309,6 +1660,85 @@ onMounted(() => {
   justify-content: center !important;
   align-items: flex-start !important;
 }
+
+// 上传弹框暗色主题
+.el-dialog.upload-dialog {
+  background: linear-gradient(135deg, rgba(17, 24, 39, 0.98) 0%, rgba(26, 35, 50, 0.95) 100%) !important;
+  border: 1px solid rgba(0, 212, 255, 0.25) !important;
+  border-radius: 12px !important;
+
+  --el-text-color-regular: rgba(255, 255, 255, 0.85);
+  --el-text-color-primary: #fff;
+  --el-text-color-placeholder: rgba(255, 255, 255, 0.3);
+  --el-fill-color-blank: rgba(255, 255, 255, 0.05);
+  --el-fill-color-light: rgba(255, 255, 255, 0.05);
+  --el-border-color: rgba(0, 212, 255, 0.2);
+  --el-bg-color: rgba(17, 24, 39, 0.98);
+  --el-bg-color-overlay: rgba(17, 24, 39, 0.98);
+  --el-color-primary: #00d4ff;
+
+  .el-dialog__header {
+    border-bottom: 1px solid rgba(0, 212, 255, 0.15);
+    padding: 16px 20px;
+    margin-right: 0;
+  }
+
+  .el-dialog__title {
+    color: #fff !important;
+    font-weight: 600;
+  }
+
+  .el-dialog__headerbtn .el-dialog__close {
+    color: rgba(255, 255, 255, 0.5) !important;
+  }
+
+  .el-dialog__headerbtn:hover .el-dialog__close {
+    color: #00d4ff !important;
+  }
+
+  .el-dialog__body {
+    padding: 24px 20px;
+    color: rgba(255, 255, 255, 0.85) !important;
+  }
+
+  .el-dialog__footer {
+    border-top: 1px solid rgba(0, 212, 255, 0.15);
+    padding: 12px 20px;
+  }
+
+  .el-upload {
+    width: 100%;
+  }
+
+  .el-upload-dragger {
+    background: rgba(255, 255, 255, 0.03) !important;
+    border: 1px dashed rgba(0, 212, 255, 0.3) !important;
+    &:hover {
+      border-color: #00d4ff !important;
+    }
+  }
+
+  .el-upload-list__item {
+    color: rgba(255, 255, 255, 0.85) !important;
+    &:hover {
+      background: rgba(0, 212, 255, 0.08) !important;
+    }
+  }
+
+  .el-upload-list__item-name {
+    color: rgba(255, 255, 255, 0.85) !important;
+  }
+
+  .el-button--default {
+    background: rgba(255, 255, 255, 0.05) !important;
+    border-color: rgba(0, 212, 255, 0.3) !important;
+    color: rgba(255, 255, 255, 0.7) !important;
+    &:hover {
+      border-color: #00d4ff !important;
+      color: #00d4ff !important;
+    }
+  }
+}
 </style>
 
 <style scoped lang="scss">
@@ -1321,7 +1751,7 @@ onMounted(() => {
 
 .preview-img {
   max-width: 100%;
-  max-height: 85vh;
+  max-height: 100%;
   border-radius: 8px;
   object-fit: contain;
 }
@@ -1341,10 +1771,18 @@ onMounted(() => {
   flex: 1;
   min-width: 0;
   display: flex;
-  align-items: center;
-  justify-content: center;
+  flex-direction: column;
   background: rgba(0, 0, 0, 0.3);
   overflow: hidden;
+
+  .split-left-image {
+    flex: 1;
+    min-height: 0;
+    overflow: hidden;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
 
   .canvas-scroll {
     width: 100%;
@@ -1363,6 +1801,101 @@ onMounted(() => {
 
 .preview-canvas {
   display: block;
+}
+
+// ========== 思维链框 ==========
+.think-box {
+  flex-shrink: 0;
+  background: rgba(17, 24, 39, 0.95);
+  border-top: 1px solid rgba(0, 212, 255, 0.25);
+  display: flex;
+  flex-direction: column;
+
+  &.collapsed {
+    .think-header {
+      border-bottom: none;
+    }
+  }
+}
+
+.think-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 14px;
+  cursor: pointer;
+  border-bottom: 1px solid rgba(0, 212, 255, 0.12);
+  user-select: none;
+  transition: background 0.2s;
+
+  &:hover {
+    background: rgba(0, 212, 255, 0.05);
+  }
+}
+
+.think-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: #00d4ff;
+}
+
+.think-toggle-icon {
+  display: flex;
+  align-items: center;
+  color: rgba(255, 255, 255, 0.5);
+  transition: color 0.2s;
+
+  .think-header:hover & {
+    color: #00d4ff;
+  }
+}
+
+.think-resize-handle {
+  height: 4px;
+  background: rgba(0, 212, 255, 0.15);
+  cursor: ns-resize;
+  transition: background 0.2s;
+
+  &:hover {
+    background: rgba(0, 212, 255, 0.4);
+  }
+}
+
+.think-body {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.think-textarea {
+  flex: 1;
+  width: 100%;
+  resize: none;
+  border: none;
+  outline: none;
+  padding: 12px 14px;
+  background: rgba(0, 0, 0, 0.3);
+  color: rgba(255, 255, 255, 0.85);
+  font-size: 13px;
+  font-family: 'Consolas', 'Monaco', monospace;
+  line-height: 1.6;
+  overflow-y: auto;
+
+  &::placeholder {
+    color: rgba(255, 255, 255, 0.25);
+  }
+
+  &:focus {
+    background: rgba(0, 0, 0, 0.4);
+  }
+}
+
+.think-footer {
+  display: flex;
+  justify-content: flex-end;
+  padding: 8px 14px;
+  border-top: 1px solid rgba(0, 212, 255, 0.12);
+  flex-shrink: 0;
 }
 
 .split-right {
@@ -1520,5 +2053,40 @@ onMounted(() => {
   background: rgba(0, 212, 255, 0.1);
   border: 1px solid rgba(0, 212, 255, 0.2);
   color: rgba(255, 255, 255, 0.7);
+}
+
+// ========== 上传弹框 ==========
+.upload-dialog-content {
+  .upload-info-row {
+    display: flex;
+    align-items: center;
+    margin-bottom: 10px;
+    font-size: 14px;
+  }
+  .upload-info-label {
+    color: rgba(255, 255, 255, 0.5);
+    width: 80px;
+    flex-shrink: 0;
+  }
+  .upload-info-value {
+    color: rgba(255, 255, 255, 0.85);
+  }
+  .upload-drag-content {
+    text-align: center;
+    padding: 20px 0;
+    p {
+      margin: 8px 0 0;
+      color: rgba(255, 255, 255, 0.5);
+      font-size: 14px;
+      em {
+        color: #00d4ff;
+        font-style: normal;
+      }
+    }
+    .upload-tip {
+      font-size: 12px;
+      color: rgba(255, 255, 255, 0.3);
+    }
+  }
 }
 </style>

@@ -3,7 +3,7 @@ import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import Header from '@/components/Header.vue'
 import Sidebar from '@/components/Sidebar.vue'
-import { getCodeDict, saveSampleSet, querySampleSet, type CodeDictItem } from '@/api/sample'
+import { getCodeDict, saveSampleSet, querySampleSet, uploadSamples, type CodeDictItem } from '@/api/sample'
 import { ElMessage, ElLoading } from 'element-plus'
 
 type ViewMode = 'card' | 'list'
@@ -179,7 +179,7 @@ function toggleSort(field: SortField) {
 }
 
 function goToDetail(item: SampleSet) {
-  router.push({ path: '/sample-detail', query: { setNo: item.setNo, setName: item.name } })
+  router.push({ path: '/sample-detail', query: { setNo: item.setNo, setName: item.name, typeCode: item.modality[0] || '' } })
 }
 
 async function downloadSampleSet(item: SampleSet) {
@@ -222,6 +222,8 @@ function resetFilters() {
 function handleCardCommand(command: string, item: SampleSet) {
   if (command === 'download') {
     downloadSampleSet(item)
+  } else if (command === 'upload') {
+    openUploadDialog(item)
   }
 }
 
@@ -412,10 +414,87 @@ async function handleCreateConfirm() {
     })
     ElMessage.success('新建样本集成功')
     dialogVisible.value = false
+    loadSampleSets()
   } catch (e: any) {
     ElMessage.error(e.message || '新建失败')
   } finally {
     dialogSaving.value = false
+  }
+}
+
+// ========== 上传样本弹框 ==========
+const uploadDialogVisible = ref(false)
+const uploadSaving = ref(false)
+const uploadTarget = ref<SampleSet | null>(null)
+const uploadFileList = ref<File[]>([])
+
+// 样本类型编码 → 允许的文件扩展名
+const typeCodeToExtensions: Record<string, string[]> = {
+  '05': ['.jpg', '.jpeg', '.png', '.bmp', '.gif', '.webp', '.tif', '.tiff'],
+  '02': ['.txt', '.csv', '.json', '.xml', '.doc', '.docx', '.pdf'],
+  '03': ['.mp3', '.wav', '.ogg', '.flac', '.aac', '.wma', '.m4a'],
+  '04': ['.mp4', '.avi', '.mov', '.mkv', '.wmv', '.flv'],
+}
+
+// 样本类型编码 → 允许的 accept 值
+const typeCodeToAccept: Record<string, string> = {
+  '05': 'image/*',
+  '02': '.txt,.csv,.json,.xml,.doc,.docx,.pdf',
+  '03': 'audio/*',
+  '04': 'video/*',
+}
+
+function openUploadDialog(item: SampleSet) {
+  uploadTarget.value = item
+  uploadFileList.value = []
+  uploadDialogVisible.value = true
+}
+
+function handleUploadFileChange(_file: any, fileList: any[]) {
+  uploadFileList.value = fileList.map((f: any) => f.raw)
+}
+
+function handleUploadFileRemove(_file: any, fileList: any[]) {
+  uploadFileList.value = fileList.map((f: any) => f.raw)
+}
+
+async function handleUploadConfirm() {
+  if (!uploadTarget.value) return
+  if (uploadFileList.value.length === 0) {
+    ElMessage.warning('请选择要上传的文件')
+    return
+  }
+  const typeCode = uploadTarget.value.modality[0] || ''
+
+  // 前端校验文件类型
+  const allowedExts = typeCodeToExtensions[typeCode]
+  if (allowedExts) {
+    const invalidFiles = uploadFileList.value.filter(f => {
+      const ext = '.' + f.name.split('.').pop()?.toLowerCase()
+      return !allowedExts.includes(ext)
+    })
+    if (invalidFiles.length > 0) {
+      ElMessage.warning(`以下文件类型不符合该样本集要求：${invalidFiles.map(f => f.name).join('、')}`)
+      return
+    }
+  }
+
+  uploadSaving.value = true
+  try {
+    const msg = await uploadSamples(
+      uploadTarget.value.setNo,
+      uploadTarget.value.name,
+      typeCode,
+      uploadFileList.value
+    )
+    ElMessage.success(msg)
+    uploadDialogVisible.value = false
+    // 刷新样本集列表
+    loadSampleSets()
+  } catch (e: any) {
+    ElMessage.error(e.message || '上传失败')
+  } finally {
+    uploadSaving.value = false
   }
 }
 </script>
@@ -560,6 +639,7 @@ async function handleCreateConfirm() {
                 </span>
                 <template #dropdown>
                   <el-dropdown-menu>
+                    <el-dropdown-item command="upload">上传</el-dropdown-item>
                     <el-dropdown-item command="download">下载</el-dropdown-item>
                     <el-dropdown-item command="delete" disabled>删除</el-dropdown-item>
                   </el-dropdown-menu>
@@ -609,6 +689,7 @@ async function handleCreateConfirm() {
             </span>
             <span class="col col-update">{{ item.updateTime }}</span>
             <span class="col col-action">
+              <el-button text size="small" class="action-btn" @click="openUploadDialog(item)">上传</el-button>
               <el-button text size="small" class="action-btn" @click="downloadSampleSet(item)">下载</el-button>
             </span>
           </div>
@@ -652,6 +733,43 @@ async function handleCreateConfirm() {
       <template #footer>
         <el-button type="primary" :loading="dialogSaving" @click="handleCreateConfirm">确定</el-button>
         <el-button @click="dialogVisible = false">取消</el-button>
+      </template>
+    </el-dialog>
+
+    <el-dialog v-model="uploadDialogVisible" title="上传样本" width="520px" :close-on-click-modal="false" class="create-dialog">
+      <div v-if="uploadTarget" class="upload-dialog-content">
+        <div class="upload-info-row">
+          <span class="upload-info-label">样本集：</span>
+          <span class="upload-info-value">{{ uploadTarget.name }}</span>
+        </div>
+        <div class="upload-info-row">
+          <span class="upload-info-label">样本类型：</span>
+          <span class="upload-info-value">{{ uploadTarget.modality.map(m => modalityLabel[m]).join('、') || '未知' }}</span>
+        </div>
+        <div class="upload-info-row">
+          <span class="upload-info-label">允许格式：</span>
+          <span class="upload-info-value">{{ uploadTarget.modality[0] === '01' ? '图片文件（jpg/png/bmp等）' : uploadTarget.modality[0] === '02' ? '文本文件（txt/csv/doc等）' : uploadTarget.modality[0] === '03' ? '音频文件（mp3/wav等）' : uploadTarget.modality[0] === '04' ? '视频文件（mp4/avi等）' : '不限' }}</span>
+        </div>
+        <el-upload
+          :accept="typeCodeToAccept[uploadTarget.modality[0]] || ''"
+          :auto-upload="false"
+          :on-change="handleUploadFileChange"
+          :on-remove="handleUploadFileRemove"
+          multiple
+          drag
+        >
+          <div class="upload-drag-content">
+            <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="rgba(0,212,255,0.5)" stroke-width="1.5">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M17 8l-5-5-5 5M12 3v12"/>
+            </svg>
+            <p>将文件拖到此处，或<em>点击上传</em></p>
+            <p class="upload-tip">仅支持该样本集对应类型的文件</p>
+          </div>
+        </el-upload>
+      </div>
+      <template #footer>
+        <el-button type="primary" :loading="uploadSaving" @click="handleUploadConfirm">确认上传</el-button>
+        <el-button @click="uploadDialogVisible = false">取消</el-button>
       </template>
     </el-dialog>
   </div>
@@ -1123,7 +1241,7 @@ async function handleCreateConfirm() {
 }
 
 .col-action {
-  width: 80px;
+  width: 120px;
   text-align: center;
 }
 
@@ -1196,6 +1314,40 @@ async function handleCreateConfirm() {
     font-size: 16px;
     color: rgba(255, 255, 255, 0.4);
     margin: 0;
+  }
+}
+
+.upload-dialog-content {
+  .upload-info-row {
+    display: flex;
+    align-items: center;
+    margin-bottom: 10px;
+    font-size: 14px;
+  }
+  .upload-info-label {
+    color: rgba(255, 255, 255, 0.5);
+    width: 80px;
+    flex-shrink: 0;
+  }
+  .upload-info-value {
+    color: rgba(255, 255, 255, 0.85);
+  }
+  .upload-drag-content {
+    text-align: center;
+    padding: 20px 0;
+    p {
+      margin: 8px 0 0;
+      color: rgba(255, 255, 255, 0.5);
+      font-size: 14px;
+      em {
+        color: #00d4ff;
+        font-style: normal;
+      }
+    }
+    .upload-tip {
+      font-size: 12px;
+      color: rgba(255, 255, 255, 0.3);
+    }
   }
 }
 </style>
@@ -1314,6 +1466,34 @@ async function handleCreateConfirm() {
       border-color: #00d4ff !important;
       color: #00d4ff !important;
     }
+  }
+
+  .el-upload {
+    width: 100%;
+  }
+
+  .el-upload-dragger {
+    background: rgba(255, 255, 255, 0.03) !important;
+    border: 1px dashed rgba(0, 212, 255, 0.3) !important;
+    &:hover {
+      border-color: #00d4ff !important;
+    }
+  }
+
+  .el-upload-list__item {
+    color: rgba(255, 255, 255, 0.85) !important;
+    &:hover {
+      background: rgba(0, 212, 255, 0.08) !important;
+    }
+  }
+
+  .el-upload-list__item-name {
+    color: rgba(255, 255, 255, 0.85) !important;
+  }
+
+  .el-upload-list__item-status-label,
+  .el-icon--close {
+    color: rgba(255, 255, 255, 0.5) !important;
   }
 }
 

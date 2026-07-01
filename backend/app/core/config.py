@@ -22,10 +22,11 @@ class Settings(BaseSettings):
 
     # ---- 样本中心（sxy-sample-center，MySQL）----
     db_host: str = "localhost"
-    db_port: int = 3306
+    db_port: int = 13306
     db_user: str = "root"
-    db_password: str = "root"
+    db_password: str = "Faker@T169"
     db_name: str = "sample_platform"
+    sample_upload_dir: str = "E:\人工智能\现场作业专家系统"
 
     # ---- 知识管理 · LightRAG ----
     lightrag_enabled: bool = True

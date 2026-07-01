@@ -17,6 +17,8 @@ const routes = [
   { path: '/sample', name: 'SampleCenter', component: () => import('@/views/SampleCenter.vue'), meta: { title: '样本中心' } },
   { path: '/sample-set', name: 'SampleSetManagement', component: () => import('@/views/SampleSetManagement.vue'), meta: { title: '样本集管理' } },
   { path: '/sample-detail', name: 'SampleDetail', component: () => import('@/views/SampleDetail.vue'), meta: { title: '样本详情' } },
+  { path: '/collect-task', name: 'SampleCollectTask', component: () => import('@/views/SampleCollectTask.vue'), meta: { title: '数据采集任务管理' } },
+  { path: '/collect-task-detail', name: 'SampleCollectTaskDet', component: () => import('@/views/SampleCollectTaskDet.vue'), meta: { title: '采集任务明细' } },
 
   // ===== 知识管理（liuqi-knowledgebase）=====
   { path: '/knowledge-management', name: 'KnowledgeManagement', component: () => import('@/views/KnowledgeManagement.vue'), meta: { title: '知识管理' } },
