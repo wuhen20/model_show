@@ -16,8 +16,20 @@ import re
 import cv2
 import numpy as np
 
+# Fix: PyTorch 2.6+ changed torch.load default to weights_only=True,
+# which breaks ultralytics model loading. Restore the old default.
+import torch
+_orig_torch_load = torch.load
+if not getattr(_orig_torch_load, "_patched_weights_only", False):
+    def _torch_load_compat(*args, **kwargs):
+        if "weights_only" not in kwargs:
+            kwargs["weights_only"] = False
+        return _orig_torch_load(*args, **kwargs)
+    _torch_load_compat._patched_weights_only = True
+    torch.load = _torch_load_compat
+
 # ===================== 配置 =====================
-_BACKEND_DIR = Path(__file__).parent.parent.parent.parent
+_BACKEND_DIR = Path(__file__).parent.parent.parent  # backend/
 _MODELS_POOL = _BACKEND_DIR / "models_pool" / "XC" / "meter_install"
 _MAIN_MODEL_PATH = str(_MODELS_POOL / "best.pt")
 _NAMEPLATE_MODEL_PATH = str(_MODELS_POOL / "nameplate_best.pt")
