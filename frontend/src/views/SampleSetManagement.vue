@@ -850,31 +850,12 @@ async function handleUploadConfirm() {
   }
 
   :deep(.el-input),
-  :deep(.el-select),
-  :deep(.el-date-editor) {
+  :deep(.el-select) {
     width: 160px;
   }
 
-  :deep(.el-input__wrapper),
-  :deep(.el-select .el-input__wrapper) {
-    background: rgba(255, 255, 255, 0.05);
-    border: 1px solid rgba(0, 212, 255, 0.2);
-    box-shadow: none;
-    .el-input__inner {
-      color: rgba(255, 255, 255, 0.85);
-      &::placeholder {
-        color: rgba(255, 255, 255, 0.3);
-      }
-    }
-  }
-
-  :deep(.el-select .el-select__tags .el-tag) {
-    background: rgba(0, 212, 255, 0.15);
-    border-color: rgba(0, 212, 255, 0.3);
-    color: #00d4ff;
-  }
-
   :deep(.el-date-editor) {
+    width: 160px;
     .el-input__wrapper {
       width: 100%;
     }
@@ -1364,10 +1345,10 @@ async function handleUploadConfirm() {
   --el-text-color-regular: rgba(255, 255, 255, 0.85);
   --el-text-color-primary: #fff;
   --el-text-color-placeholder: rgba(255, 255, 255, 0.3);
-  --el-fill-color-blank: rgba(255, 255, 255, 0.05);
+  --el-fill-color-blank: transparent;
   --el-fill-color-light: rgba(255, 255, 255, 0.05);
   --el-border-color: rgba(0, 212, 255, 0.2);
-  --el-bg-color: rgba(17, 24, 39, 0.98);
+  --el-bg-color: transparent;
   --el-bg-color-overlay: rgba(17, 24, 39, 0.98);
   --el-color-primary: #00d4ff;
 
@@ -1408,33 +1389,11 @@ async function handleUploadConfirm() {
     color: #ff5555 !important;
   }
 
-  .el-input__wrapper {
-    background: rgba(255, 255, 255, 0.05) !important;
-    border: 1px solid rgba(0, 212, 255, 0.2) !important;
-    box-shadow: none !important;
-  }
-
-  .el-input__inner {
-    color: rgba(255, 255, 255, 0.85) !important;
-    &::placeholder {
-      color: rgba(255, 255, 255, 0.3) !important;
-    }
-  }
-
-  .el-textarea__inner {
-    background: rgba(255, 255, 255, 0.05) !important;
-    border: 1px solid rgba(0, 212, 255, 0.2) !important;
-    box-shadow: none !important;
-    color: rgba(255, 255, 255, 0.85) !important;
-    &::placeholder {
-      color: rgba(255, 255, 255, 0.3) !important;
-    }
-  }
-
-  // el-select 选中项和 placeholder
+  // el-select 组件需要特殊处理
   .el-select__wrapper {
-    background: rgba(255, 255, 255, 0.05) !important;
-    box-shadow: 0 0 0 1px rgba(0, 212, 255, 0.2) inset !important;
+    background: transparent !important;
+    border: 1px solid rgba(0, 212, 255, 0.25) !important;
+    box-shadow: none !important;
     color: rgba(255, 255, 255, 0.85) !important;
   }
 
@@ -1451,11 +1410,6 @@ async function handleUploadConfirm() {
 
   .el-select__suffix .el-select__caret {
     color: rgba(255, 255, 255, 0.5) !important;
-  }
-
-  .el-select .el-input__wrapper {
-    background: rgba(255, 255, 255, 0.05) !important;
-    border: 1px solid rgba(0, 212, 255, 0.2) !important;
   }
 
   .el-button--default {

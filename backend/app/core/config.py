@@ -20,12 +20,13 @@ class Settings(BaseSettings):
     mcp_port_start: int = 8100
     mcp_port_end: int = 8199
 
-    # ---- 样本中心（sxy-sample-center，MySQL）----
+    # ---- 样本中心（sxy-sample-center，MySQL/Oracle）----
+    db_type: str = "mysql"  # "mysql" 或 "oracle"
     db_host: str = "localhost"
     db_port: int = 13306
     db_user: str = "root"
     db_password: str = "Faker@T169"
-    db_name: str = "sample_platform"
+    db_name: str = "sample_platform"  # Oracle 模式下为 SID/服务名
     sample_upload_dir: str = "E:\人工智能\现场作业专家系统"
 
     # ---- 知识管理 · LightRAG ----

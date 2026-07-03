@@ -38,6 +38,7 @@ from app.api.routes.detection import router as detection_router
 
 # ===== 样本中心（sxy-sample-center）=====
 from app.api.routes.sample import router as sample_router
+from app.api.routes.clean import router as clean_router
 
 # ===== 知识管理（liuqi-knowledgebase）=====
 from app.api.routes import knowledge as kb_knowledge
@@ -95,7 +96,21 @@ async def lifespan(app: FastAPI):
     else:
         print("[startup] Memgraph 未启用，跳过节点标签处理")
 
+    # 数据采集：初始化定时调度器，加载所有 execute_type='02' 的定时任务
+    try:
+        from app.services.scheduler_service import init_scheduler
+        init_scheduler()
+    except Exception as e:
+        print(f"[startup] 数据采集定时调度器初始化失败: {e}")
+
     yield
+
+    # 关闭定时调度器
+    try:
+        from app.services.scheduler_service import shutdown_scheduler
+        shutdown_scheduler()
+    except Exception:
+        pass
 
 
 app = FastAPI(
@@ -129,6 +144,7 @@ app.include_router(detection_router, prefix="/api/detection", tags=["多模态�
 
 # ===== 样本中心 =====
 app.include_router(sample_router, prefix="/api/sample", tags=["样本管理"])
+app.include_router(clean_router, prefix="/api/clean", tags=["样本数据清理"])
 
 # ===== 知识管理 =====
 app.include_router(kb_knowledge.router, prefix="/api/knowledge", tags=["知识管理"])

@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Query, UploadFile, File, Form
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
-from app.core.database import query_code_dict, query_sample_set, query_sample_info, save_sample_set, sample_statistic, sample_trend, query_audio_text, update_sample_score, insert_sample_info, update_label_think, generate_task_no, query_data_collect_task, save_data_collect_task, save_data_collect_task_det, query_data_collect_task_det, update_data_collect_task_det, get_task_det_raw, update_task_status, insert_collect_log, finish_collect_log, execute_source_sql, save_query_result_to_desktop
+from app.core.database import query_code_dict, query_sample_set, query_sample_info, save_sample_set, sample_statistic, sample_trend, query_audio_text, update_sample_score, insert_sample_info, update_label_think, generate_task_no, query_data_collect_task, save_data_collect_task, save_data_collect_task_det, query_data_collect_task_det, update_data_collect_task_det, get_task_det_raw, update_task_status, insert_collect_log, append_collect_log, finish_collect_log, query_collect_log, query_all_scheduled_tasks, get_task_execute_type, update_task_execute_type, delete_data_collect_task, execute_source_sql, save_query_result_to_desktop, query_target_table_columns, query_col_map, save_col_map, write_to_target_table
 import os
 import io
 import zipfile
@@ -378,11 +378,25 @@ def save_collect_task_api(payload: dict):
     """新增数据采集任务，任务编号自动生成"""
     task_name = payload.get("taskName", "").strip()
     remark = payload.get("remark", "").strip()
+    execute_type = payload.get("executeType", "01").strip() or "01"
+    cron_formula = payload.get("cronFormula", "").strip()
+
     if not task_name:
         return {"code": 1, "message": "任务名称不能为空"}
+    if execute_type not in ("01", "02"):
+        return {"code": 1, "message": "执行方式无效，应为 01-手动 或 02-定时"}
+    if execute_type == "02" and not cron_formula:
+        return {"code": 1, "message": "执行方式为定时时，cron 表达式不能为空"}
+
     try:
         task_no = generate_task_no()
-        save_data_collect_task(task_no, task_name, remark)
+        save_data_collect_task(task_no, task_name, remark, execute_type, cron_formula)
+
+        # 定时任务：保存成功后注册到调度器
+        if execute_type == "02":
+            from app.services.scheduler_service import add_scheduled_task
+            add_scheduled_task(task_no, cron_formula)
+
         return {"code": 0, "message": "保存成功", "data": {"taskNo": task_no}}
     except Exception as e:
         return {"code": 1, "message": f"保存失败: {str(e)}"}
@@ -420,6 +434,7 @@ def save_collect_task_det_api(payload: dict):
     source_db_port = payload.get("sourceDbPort", "").strip()
     source_db_usr = payload.get("sourceDbUsr", "").strip()
     source_db_pwd = payload.get("sourceDbPwd", "").strip()
+    source_db_name = payload.get("sourceDbName", "").strip()
     target_table = payload.get("targetTable", "").strip()
     collect_sql = payload.get("collectSql", "").strip()
 
@@ -435,6 +450,7 @@ def save_collect_task_det_api(payload: dict):
         "sourceDbPort": source_db_port,
         "sourceDbUsr": source_db_usr,
         "sourceDbPwd": source_db_pwd,
+        "sourceDbName": source_db_name,
         "targetTable": target_table,
         "collectSql": collect_sql,
     }
@@ -458,10 +474,12 @@ class ExecuteCollectTaskRequest(BaseModel):
     taskNo: str
 
 
-@router.post("/execute-collect-task")
-def execute_collect_task_api(req: ExecuteCollectTaskRequest):
-    """执行数据采集任务：连接源数据库执行SQL，保存结果到桌面"""
-    task_no = req.taskNo.strip()
+def execute_collect_task_internal(task_no: str, trigger_source: str = "manual") -> dict:
+    """执行数据采集任务的核心逻辑：连接源数据库执行SQL，通过字段映射写入目标表。
+
+    可被 HTTP 接口和定时调度器共同调用。
+    trigger_source: manual-手动触发，scheduler-定时调度触发（仅用于日志标识）
+    """
     if not task_no:
         return {"code": 1, "message": "任务编号不能为空"}
 
@@ -474,12 +492,40 @@ def execute_collect_task_api(req: ExecuteCollectTaskRequest):
     if not collect_sql:
         return {"code": 1, "message": "采集SQL不能为空"}
 
+    target_table = det.get("target_table")
+    if not target_table:
+        return {"code": 1, "message": "目标表未配置，请先配置目标表"}
+
+    # 查询字段映射配置
+    col_map = query_col_map(task_no)
+    if not col_map:
+        return {"code": 1, "message": "字段映射配置为空，请先配置字段映射"}
+
+    # 查询任务名称
+    task_name = ""
+    try:
+        from app.core.database import get_connection
+        conn = get_connection()
+        with conn.cursor() as cursor:
+            cursor.execute("SELECT task_name FROM s_data_collect_task WHERE task_no = %s", (task_no,))
+            row = cursor.fetchone()
+            if row:
+                task_name = row["task_name"]
+        conn.close()
+    except Exception:
+        pass
+
     # 更新任务状态为执行中
     update_task_status(task_no, "02")
-    # 写入执行日志
-    log_id = insert_collect_log(task_no)
+    # 写入执行日志，初始内容：数据采集任务：XXXX开始执行（触发方式）
+    trigger_label = "定时调度" if trigger_source == "scheduler" else "手动"
+    init_log = f"数据采集任务：{task_name or task_no}开始执行（{trigger_label}触发）"
+    log_id = insert_collect_log(task_no, init_log)
 
     try:
+        # 追加日志：开始连接源数据库
+        append_collect_log(log_id, "开始连接源数据库")
+
         # 连接源数据库执行SQL
         columns, rows = execute_source_sql(
             db_type=det["source_db_type"],
@@ -487,28 +533,51 @@ def execute_collect_task_api(req: ExecuteCollectTaskRequest):
             port=str(det.get("source_db_port") or ""),
             user=det["source_db_usr"],
             pwd=det.get("source_db_pwd") or "",
+            database=det.get("source_db_name") or "",
             sql=collect_sql,
         )
-        # 保存查询结果到桌面
-        filepath = save_query_result_to_desktop(columns, rows)
+
+        # 追加日志：数据获取成功
+        append_collect_log(log_id, f"数据获取成功，数据量:{len(rows)}")
+
+        # 追加日志：开始写入目标表
+        append_collect_log(log_id, f"开始写入目标表：{target_table}")
+
+        # 根据字段映射将数据写入目标表
+        write_count = write_to_target_table(target_table, col_map, columns, rows)
+
+        # 追加日志：写入完成
+        append_collect_log(log_id, f"数据写入完成，写入数据量:{write_count}")
 
         # 更新日志：成功
-        finish_collect_log(log_id, success=True)
+        finish_collect_log(log_id, success=True, log_content="任务执行完成")
         # 更新任务状态：已完成，last_execute_flag=1（成功）
         update_task_status(task_no, "03", last_execute_flag=1)
 
         return {
             "code": 0,
-            "message": f"执行成功，共查询到 {len(rows)} 条数据，结果已保存至：{filepath}",
-            "data": {"filepath": filepath, "rowCount": len(rows)},
+            "message": f"执行成功，共获取 {len(rows)} 条数据，写入目标表 {target_table} 共 {write_count} 条",
+            "data": {"targetTable": target_table, "rowCount": len(rows), "writeCount": write_count},
         }
     except Exception as e:
         fail_info = str(e)
-        # 更新日志：失败
-        finish_collect_log(log_id, success=False, fail_info=fail_info)
-        # 更新任务状态：已完成，last_execute_flag=2（失败）
-        update_task_status(task_no, "03", last_execute_flag=2)
+        # 先更新任务状态为失败，确保状态一定更新（即使日志写入失败也不会卡在执行中）
+        try:
+            update_task_status(task_no, "03", last_execute_flag=2)
+        except Exception:
+            pass
+        # 再写日志（独立 try，避免日志写入失败影响状态）
+        try:
+            finish_collect_log(log_id, success=False, log_content=f"执行出错:{fail_info}")
+        except Exception:
+            pass
         return {"code": 1, "message": f"执行失败: {fail_info}"}
+
+
+@router.post("/execute-collect-task")
+def execute_collect_task_api(req: ExecuteCollectTaskRequest):
+    """执行数据采集任务：连接源数据库执行SQL，通过字段映射写入目标表"""
+    return execute_collect_task_internal(req.taskNo.strip(), trigger_source="manual")
 
 
 @router.post("/stop-collect-task")
@@ -522,3 +591,195 @@ def stop_collect_task_api(req: ExecuteCollectTaskRequest):
         return {"code": 0, "message": "已停止"}
     except Exception as e:
         return {"code": 1, "message": f"停止失败: {str(e)}"}
+
+
+@router.post("/delete-collect-task")
+def delete_collect_task_api(req: ExecuteCollectTaskRequest):
+    """删除数据采集任务及其全部关联数据（明细、字段映射、执行日志）。
+
+    若任务为定时执行方式，同步从调度器移除。
+    """
+    task_no = req.taskNo.strip()
+    if not task_no:
+        return {"code": 1, "message": "任务编号不能为空"}
+
+    # 删除前查询执行方式，用于决定是否移除调度
+    task_info = get_task_execute_type(task_no)
+
+    try:
+        delete_data_collect_task(task_no)
+    except Exception as e:
+        return {"code": 1, "message": f"删除失败: {str(e)}"}
+
+    # 同步移除定时调度（无论原执行方式，统一调用 remove 静默处理不存在的情况）
+    try:
+        from app.services.scheduler_service import remove_scheduled_task
+        remove_scheduled_task(task_no)
+    except Exception:
+        pass
+
+    return {"code": 0, "message": "删除成功"}
+
+
+class UpdateExecTypeRequest(BaseModel):
+    taskNo: str
+    executeType: str
+    cronFormula: str = ""
+
+
+@router.post("/update-collect-task-exec-type")
+def update_collect_task_exec_type_api(req: UpdateExecTypeRequest):
+    """更新任务执行方式（手动/定时）和 cron 表达式，并同步调度器。
+
+    - 改为手动：从调度器移除
+    - 改为定时：新增/更新调度任务
+    - 定时改定时（cron 变化）：更新调度任务
+    """
+    task_no = req.taskNo.strip()
+    execute_type = req.executeType.strip()
+    cron_formula = req.cronFormula.strip()
+
+    if not task_no:
+        return {"code": 1, "message": "任务编号不能为空"}
+    if execute_type not in ("01", "02"):
+        return {"code": 1, "message": "执行方式无效，应为 01-手动 或 02-定时"}
+    if execute_type == "02" and not cron_formula:
+        return {"code": 1, "message": "执行方式为定时时，cron 表达式不能为空"}
+
+    # 查询原执行方式，用于判断是否需要变更调度
+    old_info = get_task_execute_type(task_no)
+    old_type = old_info.get("execute_type") if old_info else None
+
+    try:
+        update_task_execute_type(task_no, execute_type, cron_formula)
+    except Exception as e:
+        return {"code": 1, "message": f"保存失败: {str(e)}"}
+
+    # 同步调度器
+    try:
+        from app.services.scheduler_service import add_scheduled_task, remove_scheduled_task
+        if execute_type == "02":
+            # 改为定时：新增/更新调度（add 内部 replace_existing=True 会覆盖旧任务）
+            add_scheduled_task(task_no, cron_formula)
+        else:
+            # 改为手动：移除调度（原为定时才需要移除，remove 静默处理不存在情况）
+            if old_type == "02":
+                remove_scheduled_task(task_no)
+    except Exception as e:
+        # 调度同步失败不影响数据持久化，仅提示
+        print(f"[update-exec-type] 调度器同步异常: {e}")
+
+    return {"code": 0, "message": "保存成功"}
+
+
+@router.get("/query-collect-task-exec-type")
+def query_collect_task_exec_type_api(taskNo: str = Query(..., description="任务编号")):
+    """查询任务当前的执行方式和 cron 表达式"""
+    try:
+        row = get_task_execute_type(taskNo)
+        if not row:
+            return {"code": 0, "data": None}
+        execute_type = row.get("execute_type") or "01"
+        cron_formula = row.get("cron_formula") or ""
+        return {
+            "code": 0,
+            "data": {
+                "executeType": execute_type,
+                "executeTypeName": "定时" if execute_type == "02" else "手动",
+                "cronFormula": cron_formula,
+            },
+        }
+    except Exception as e:
+        return {"code": 1, "message": f"查询失败: {str(e)}"}
+
+
+@router.get("/query-collect-log")
+def query_collect_log_api(taskNo: str = Query(..., description="任务编号")):
+    """查询数据采集任务执行记录"""
+    try:
+        rows = query_collect_log(taskNo)
+        data = []
+        for row in rows:
+            item = {}
+            for k, v in row.items():
+                parts = k.split("_")
+                camel = parts[0] + "".join(p.capitalize() for p in parts[1:])
+                if hasattr(v, "isoformat"):
+                    v = v.isoformat()
+                item[camel] = v
+            data.append(item)
+        return {"code": 0, "data": data}
+    except Exception as e:
+        return {"code": 1, "message": f"查询失败: {str(e)}"}
+
+
+class QueryTableColumnsRequest(BaseModel):
+    taskNo: str
+    tableName: str
+
+
+@router.post("/query-table-columns")
+def query_table_columns_api(req: QueryTableColumnsRequest):
+    """查询目标表的字段信息"""
+    task_no = req.taskNo.strip()
+    table_name = req.tableName.strip()
+    if not task_no or not table_name:
+        return {"code": 1, "message": "任务编号和表名不能为空"}
+
+    det = get_task_det_raw(task_no)
+    if not det:
+        return {"code": 1, "message": "未找到任务明细"}
+
+    try:
+        columns = query_target_table_columns(
+            db_type=det["source_db_type"],
+            host=det["source_db_host"],
+            port=str(det.get("source_db_port") or ""),
+            user=det["source_db_usr"],
+            pwd=det.get("source_db_pwd") or "",
+            database=det.get("source_db_name") or "",
+            table_name=table_name,
+        )
+        data = []
+        for col in columns:
+            data.append({
+                "columnName": col["column_name"],
+                "columnType": col["column_type"],
+                "columnComment": col.get("column_comment", ""),
+            })
+        return {"code": 0, "data": data}
+    except Exception as e:
+        return {"code": 1, "message": f"查询表字段失败: {str(e)}"}
+
+
+@router.get("/query-col-map")
+def query_col_map_api(taskNo: str = Query(..., description="任务编号")):
+    """查询字段映射配置"""
+    try:
+        rows = query_col_map(taskNo)
+        data = []
+        for row in rows:
+            data.append({
+                "sourceColumn": row["source_column"] or "",
+                "targetColumn": row["target_colum"] or "",
+            })
+        return {"code": 0, "data": data}
+    except Exception as e:
+        return {"code": 1, "message": f"查询映射失败: {str(e)}"}
+
+
+@router.post("/save-col-map")
+def save_col_map_api(payload: dict):
+    """保存字段映射配置"""
+    task_no = payload.get("taskNo", "").strip()
+    target_table = payload.get("targetTable", "").strip()
+    mappings = payload.get("mappings", [])
+    if not task_no:
+        return {"code": 1, "message": "任务编号不能为空"}
+    if not target_table:
+        return {"code": 1, "message": "目标表名不能为空"}
+    try:
+        save_col_map(task_no, target_table, mappings)
+        return {"code": 0, "message": "保存成功"}
+    except Exception as e:
+        return {"code": 1, "message": f"保存失败: {str(e)}"}

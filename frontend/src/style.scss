@@ -115,14 +115,24 @@ body {
 }
 
 .el-input {
-  .el-input__inner {
-    background: rgba(255, 255, 255, 0.05);
-    border: 1px solid $border-color;
-    color: $text-primary;
-    &:focus {
-      border-color: $primary-color;
-      box-shadow: 0 0 10px rgba(0, 212, 255, 0.2);
+  .el-input__wrapper {
+    background: transparent !important;
+    border: 1px solid var(--el-input-border-color) !important;
+    box-shadow: none !important;
+    border-radius: 4px;
+    padding: 1px 11px;
+    &:hover {
+      border-color: var(--el-input-hover-border-color) !important;
     }
+    &.is-focus {
+      border-color: var(--el-input-focus-border-color) !important;
+    }
+  }
+  .el-input__inner {
+    background: transparent !important;
+    border: none !important;
+    color: $text-primary;
+    box-shadow: none !important;
   }
 }
 
@@ -145,7 +155,7 @@ body {
   --el-radio-input-bg-color: rgba(255, 255, 255, 0.05);
   --el-input-number-bg-color: rgba(255, 255, 255, 0.05);
   --el-input-number-unit-color: rgba(255, 255, 255, 0.5);
-  --el-fill-color-blank: rgba(255, 255, 255, 0.05);
+  --el-fill-color-blank: transparent;
   --el-bg-color: rgba(17, 24, 39, 0.9);
   --el-bg-color-overlay: rgba(17, 24, 39, 0.95);
   --el-text-color-regular: #ffffff;
@@ -162,9 +172,10 @@ body {
 }
 
 .el-textarea__inner {
-  background: rgba(255, 255, 255, 0.05) !important;
+  background: transparent !important;
   color: #ffffff !important;
   border-color: rgba(0, 212, 255, 0.2) !important;
+  box-shadow: none !important;
   &::placeholder { color: rgba(255, 255, 255, 0.35) !important; }
   &:focus { border-color: #00d4ff !important; box-shadow: 0 0 10px rgba(0, 212, 255, 0.2) !important; }
 }

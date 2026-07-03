@@ -3,7 +3,7 @@ import { ref, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import Header from '@/components/Header.vue'
 import Sidebar from '@/components/Sidebar.vue'
-import { getCodeDict, getCollectTaskDet, saveCollectTaskDet, type CodeDictItem } from '@/api/sample'
+import { getCodeDict, getCollectTaskDet, saveCollectTaskDet, queryTableColumns, queryColMap, saveColMap, getCollectTaskExecType, updateCollectTaskExecType, type CodeDictItem, type TableColumnInfo, type ColMapItem } from '@/api/sample'
 import { ElMessage } from 'element-plus'
 
 const route = useRoute()
@@ -13,14 +13,55 @@ const taskNo = ref<string>((route.query.taskNo as string) || '')
 
 const dbTypeOptions = ref<{ value: string; label: string }[]>([])
 const loading = ref(false)
-const saving = ref(false)
+const savingSource = ref(false)
+const savingMapping = ref(false)
 
+// ========== 执行方式配置 ==========
+const execTypeForm = ref({ executeType: '01', cronFormula: '' })
+const savingExecType = ref(false)
+
+async function loadExecType() {
+  try {
+    const data = await getCollectTaskExecType(taskNo.value)
+    if (data) {
+      execTypeForm.value = {
+        executeType: data.executeType || '01',
+        cronFormula: data.cronFormula || ''
+      }
+    }
+  } catch {
+    // 查询失败忽略
+  }
+}
+
+async function handleSaveExecType() {
+  if (execTypeForm.value.executeType === '02' && !execTypeForm.value.cronFormula.trim()) {
+    ElMessage.warning('执行方式为定时时，请输入 cron 表达式')
+    return
+  }
+  savingExecType.value = true
+  try {
+    await updateCollectTaskExecType({
+      taskNo: taskNo.value,
+      executeType: execTypeForm.value.executeType,
+      cronFormula: execTypeForm.value.cronFormula.trim()
+    })
+    ElMessage.success('执行方式保存成功')
+  } catch (e: any) {
+    ElMessage.error(e.message || '保存失败')
+  } finally {
+    savingExecType.value = false
+  }
+}
+
+// ========== 上方：源数据配置 ==========
 const form = ref({
   sourceDbType: '',
   sourceDbHost: '',
   sourceDbPort: '',
   sourceDbUsr: '',
   sourceDbPwd: '',
+  sourceDbName: '',
   targetTable: '',
   collectSql: ''
 })
@@ -56,6 +97,7 @@ async function loadTaskDet() {
         sourceDbPort: det.sourceDbPort || '',
         sourceDbUsr: det.sourceDbUsr || '',
         sourceDbPwd: det.sourceDbPwd || '',
+        sourceDbName: det.sourceDbName || '',
         targetTable: det.targetTable || '',
         collectSql: det.collectSql || ''
       }
@@ -71,7 +113,7 @@ async function loadTaskDet() {
   }
 }
 
-async function handleSave() {
+async function handleSaveSource() {
   if (!form.value.sourceDbType) {
     ElMessage.warning('请选择数据库类型')
     return
@@ -84,16 +126,16 @@ async function handleSave() {
     ElMessage.warning('请输入用户名')
     return
   }
+  if (!form.value.sourceDbName.trim()) {
+    ElMessage.warning('请输入数据库名称')
+    return
+  }
   if (!form.value.collectSql.trim()) {
     ElMessage.warning('请输入采集SQL')
     return
   }
-  if (!form.value.targetTable.trim()) {
-    ElMessage.warning('请输入目标表名')
-    return
-  }
 
-  saving.value = true
+  savingSource.value = true
   try {
     await saveCollectTaskDet({
       taskNo: taskNo.value,
@@ -101,16 +143,82 @@ async function handleSave() {
       sourceDbHost: form.value.sourceDbHost.trim(),
       sourceDbPort: form.value.sourceDbPort.trim(),
       sourceDbUsr: form.value.sourceDbUsr.trim(),
-      sourceDbPwd: form.value.sourceDbPwd,
+      sourceDbPwd: form.value.sourceDbPwd.trim(),
+      sourceDbName: form.value.sourceDbName.trim(),
       targetTable: form.value.targetTable.trim(),
       collectSql: form.value.collectSql.trim()
     })
-    ElMessage.success('保存成功')
-    router.push('/collect-task')
+    ElMessage.success('源数据配置保存成功')
   } catch (e: any) {
     ElMessage.error(e.message || '保存失败')
   } finally {
-    saving.value = false
+    savingSource.value = false
+  }
+}
+
+// ========== 下方：目标字段映射配置 ==========
+const tableColumns = ref<TableColumnInfo[]>([])
+const columnLoading = ref(false)
+const columnsQueried = ref(false)
+
+// 映射列表：每行 { sourceColumn, targetColumn }
+const mappings = ref<ColMapItem[]>([])
+
+async function handleQueryColumns() {
+  if (!form.value.targetTable.trim()) {
+    ElMessage.warning('请先输入目标表名')
+    return
+  }
+  columnLoading.value = true
+  try {
+    tableColumns.value = await queryTableColumns(taskNo.value, form.value.targetTable.trim())
+    columnsQueried.value = true
+    // 初始化映射：为每个目标字段创建一行空映射
+    mappings.value = tableColumns.value.map(col => ({
+      sourceColumn: '',
+      targetColumn: col.columnName
+    }))
+    // 加载已有映射并回填
+    const existingMaps = await queryColMap(taskNo.value)
+    if (existingMaps && existingMaps.length > 0) {
+      // 将已有映射回填到对应的源字段列
+      for (const map of existingMaps) {
+        const idx = mappings.value.findIndex(m => m.targetColumn === map.targetColumn)
+        if (idx !== -1) {
+          mappings.value[idx].sourceColumn = map.sourceColumn
+        }
+      }
+    }
+  } catch (e: any) {
+    ElMessage.error(e.message || '查询表字段失败')
+  } finally {
+    columnLoading.value = false
+  }
+}
+
+async function handleSaveMapping() {
+  if (!form.value.targetTable.trim()) {
+    ElMessage.warning('请先输入目标表名')
+    return
+  }
+  if (mappings.value.length === 0) {
+    ElMessage.warning('请先查询表字段')
+    return
+  }
+  // 过滤掉源字段为空的行
+  const validMappings = mappings.value.filter(m => m.sourceColumn.trim())
+  if (validMappings.length === 0) {
+    ElMessage.warning('至少配置一个源字段映射')
+    return
+  }
+  savingMapping.value = true
+  try {
+    await saveColMap(taskNo.value, form.value.targetTable.trim(), validMappings)
+    ElMessage.success('字段映射保存成功')
+  } catch (e: any) {
+    ElMessage.error(e.message || '保存失败')
+  } finally {
+    savingMapping.value = false
   }
 }
 
@@ -125,7 +233,13 @@ onMounted(() => {
     return
   }
   loadDbTypeDict()
-  loadTaskDet()
+  loadExecType()
+  loadTaskDet().then(() => {
+    // 如果目标表名已有值，自动查询字段
+    if (form.value.targetTable.trim()) {
+      handleQueryColumns()
+    }
+  })
 })
 </script>
 
@@ -150,8 +264,34 @@ onMounted(() => {
           </div>
         </div>
 
-        <div class="form-container">
-          <div v-if="loading" class="loading-mask">
+        <!-- ========== 顶部：执行方式配置 ========== -->
+        <div class="section-card">
+          <div class="section-title">
+            <h3>执行方式配置</h3>
+          </div>
+          <el-form label-width="100px" label-position="right">
+            <el-form-item label="执行方式" required>
+              <el-radio-group v-model="execTypeForm.executeType">
+                <el-radio value="01">手动</el-radio>
+                <el-radio value="02">定时</el-radio>
+              </el-radio-group>
+            </el-form-item>
+            <el-form-item v-if="execTypeForm.executeType === '02'" label="cron表达式" required>
+              <el-input v-model="execTypeForm.cronFormula" placeholder="请输入cron表达式，如：0 0 2 * * ?" maxlength="200" style="max-width: 400px" />
+              <div class="cron-tip">示例：0 0 2 * * ? 表示每天凌晨2点执行；0 */5 * * * ? 表示每5分钟执行一次</div>
+            </el-form-item>
+          </el-form>
+          <div class="section-footer">
+            <el-button type="primary" :loading="savingExecType" @click="handleSaveExecType">保存执行方式</el-button>
+          </div>
+        </div>
+
+        <!-- ========== 上方：源数据配置 ========== -->
+        <div class="section-card">
+          <div class="section-title">
+            <h3>源数据配置</h3>
+          </div>
+          <div v-if="loading" class="loading-mask-inline">
             <span>加载中...</span>
           </div>
           <div v-if="!loading && execInfo.lastExecuteTime" class="exec-info">
@@ -163,7 +303,6 @@ onMounted(() => {
             </span>
           </div>
           <el-form label-width="100px" label-position="right">
-            <!-- 第一排：数据库类型、地址 -->
             <div class="form-row">
               <div class="form-col">
                 <el-form-item label="数据库类型" required>
@@ -178,7 +317,6 @@ onMounted(() => {
                 </el-form-item>
               </div>
             </div>
-            <!-- 第二排：端口、用户名、密码 -->
             <div class="form-row">
               <div class="form-col form-col-small">
                 <el-form-item label="端口">
@@ -195,26 +333,74 @@ onMounted(() => {
                   <el-input v-model="form.sourceDbPwd" type="password" show-password placeholder="请输入密码" maxlength="32" />
                 </el-form-item>
               </div>
+              <div class="form-col">
+                <el-form-item label="数据库" required>
+                  <el-input v-model="form.sourceDbName" placeholder="请输入数据库名称" maxlength="64" />
+                </el-form-item>
+              </div>
             </div>
-            <!-- 第三排：SQL（占满一行） -->
             <div class="form-row form-row-full">
               <el-form-item label="采集SQL" required class="full-width-item">
                 <el-input v-model="form.collectSql" type="textarea" :rows="6" placeholder="请输入采集数据的SQL语句" />
               </el-form-item>
             </div>
-            <!-- 第四排：目标表名 -->
-            <div class="form-row">
-              <div class="form-col">
-                <el-form-item label="目标表名" required>
-                  <el-input v-model="form.targetTable" placeholder="数据写入的目标表名" maxlength="32" />
-                </el-form-item>
-              </div>
-            </div>
           </el-form>
+          <div class="section-footer">
+            <el-button type="primary" :loading="savingSource" @click="handleSaveSource">保存源数据配置</el-button>
+          </div>
+        </div>
 
-          <div class="form-footer">
-            <el-button @click="goBack">取消</el-button>
-            <el-button type="primary" :loading="saving" @click="handleSave">保存</el-button>
+        <!-- ========== 下方：目标字段映射配置 ========== -->
+        <div class="section-card">
+          <div class="section-title">
+            <h3>目标字段映射</h3>
+          </div>
+          <div class="target-table-row">
+            <el-form label-width="100px" label-position="right" inline>
+              <el-form-item label="目标表名" required>
+                <el-input v-model="form.targetTable" placeholder="数据写入的目标表名" maxlength="64" style="width: 260px" />
+              </el-form-item>
+              <el-button type="primary" :loading="columnLoading" @click="handleQueryColumns" style="margin-left: 12px">
+                查询字段
+              </el-button>
+            </el-form>
+          </div>
+
+          <div v-if="columnsQueried && tableColumns.length > 0" class="mapping-area">
+            <div class="mapping-header">
+              <span class="mapping-col mapping-col-source">源字段/别名</span>
+              <span class="mapping-col mapping-col-target">目标字段</span>
+              <span class="mapping-col mapping-col-info">类型</span>
+              <span class="mapping-col mapping-col-info">注释</span>
+            </div>
+            <div class="mapping-row" v-for="(item, idx) in mappings" :key="idx">
+              <span class="mapping-col mapping-col-source">
+                <el-input v-model="item.sourceColumn" placeholder="源字段" maxlength="32" size="small" />
+              </span>
+              <span class="mapping-col mapping-col-target">
+                <span class="field-text">{{ item.targetColumn }}</span>
+              </span>
+              <span class="mapping-col mapping-col-info">
+                <span class="field-text">{{ tableColumns.find(c => c.columnName === item.targetColumn)?.columnType || '-' }}</span>
+              </span>
+              <span class="mapping-col mapping-col-info">
+                <span class="field-text" :title="tableColumns.find(c => c.columnName === item.targetColumn)?.columnComment">
+                  {{ tableColumns.find(c => c.columnName === item.targetColumn)?.columnComment || '-' }}
+                </span>
+              </span>
+            </div>
+          </div>
+
+          <div v-else-if="columnsQueried && tableColumns.length === 0" class="empty-columns">
+            <span>未查询到表字段信息，请确认目标表名是否正确</span>
+          </div>
+
+          <div v-else class="mapping-placeholder">
+            <span>请输入目标表名后点击"查询字段"按钮</span>
+          </div>
+
+          <div class="section-footer">
+            <el-button type="primary" :loading="savingMapping" @click="handleSaveMapping">保存字段映射</el-button>
           </div>
         </div>
       </main>
@@ -243,10 +429,11 @@ onMounted(() => {
   overflow-y: auto;
   display: flex;
   flex-direction: column;
+  gap: 20px;
 }
 
 .page-header {
-  margin-bottom: 20px;
+  margin-bottom: 0;
 }
 
 .page-title-row {
@@ -291,27 +478,41 @@ onMounted(() => {
   border-radius: 6px;
 }
 
-.form-container {
-  flex: 1;
+// 通用卡片样式
+.section-card {
   background: linear-gradient(135deg, rgba(17, 24, 39, 0.9) 0%, rgba(26, 35, 50, 0.8) 100%);
   border: 1px solid rgba(0, 212, 255, 0.2);
   border-radius: 12px;
-  padding: 32px;
+  padding: 24px 28px;
   position: relative;
 }
 
-.loading-mask {
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  background: rgba(17, 24, 39, 0.8);
+.section-title {
+  margin-bottom: 16px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid rgba(0, 212, 255, 0.12);
+
+  h3 {
+    font-size: 16px;
+    font-weight: 600;
+    color: #fff;
+    margin: 0;
+  }
+}
+
+.section-footer {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 20px;
+  padding-top: 16px;
+  border-top: 1px solid rgba(0, 212, 255, 0.12);
+}
+
+.loading-mask-inline {
   display: flex;
   align-items: center;
   justify-content: center;
-  z-index: 10;
-  border-radius: 12px;
+  padding: 40px;
 
   span {
     color: rgba(255, 255, 255, 0.6);
@@ -320,8 +521,8 @@ onMounted(() => {
 }
 
 .exec-info {
-  margin-bottom: 20px;
-  padding: 12px 16px;
+  margin-bottom: 16px;
+  padding: 10px 14px;
   background: rgba(0, 212, 255, 0.08);
   border: 1px solid rgba(0, 212, 255, 0.2);
   border-radius: 6px;
@@ -350,13 +551,13 @@ onMounted(() => {
 
 .form-col {
   flex: 1;
-  min-width: 200px;
-  max-width: 300px;
+  min-width: 180px;
+  max-width: 250px;
 }
 
 .form-col-small {
-  flex: 0 0 150px;
-  max-width: 150px;
+  flex: 0 0 160px;
+  max-width: 160px;
 }
 
 .full-width-item {
@@ -367,13 +568,93 @@ onMounted(() => {
   }
 }
 
-.form-footer {
+// 目标表名行
+.target-table-row {
+  margin-bottom: 16px;
+
+  :deep(.el-form--inline .el-form-item) {
+    margin-bottom: 0;
+  }
+}
+
+// 映射区域
+.mapping-area {
+  border: 1px solid rgba(0, 212, 255, 0.15);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.mapping-header {
   display: flex;
-  justify-content: flex-end;
-  gap: 12px;
-  margin-top: 24px;
-  padding-top: 20px;
-  border-top: 1px solid rgba(0, 212, 255, 0.12);
+  align-items: center;
+  padding: 10px 16px;
+  background: rgba(0, 212, 255, 0.08);
+  border-bottom: 1px solid rgba(0, 212, 255, 0.15);
+  font-size: 13px;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.65);
+}
+
+.mapping-row {
+  display: flex;
+  align-items: center;
+  padding: 8px 16px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  transition: background 0.2s;
+
+  &:hover {
+    background: rgba(0, 212, 255, 0.04);
+  }
+
+  &:last-child {
+    border-bottom: none;
+  }
+}
+
+.mapping-col {
+  padding: 0 6px;
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.8);
+}
+
+.mapping-col-source {
+  flex: 1;
+  min-width: 0;
+}
+
+.mapping-col-target {
+  flex: 1;
+  min-width: 0;
+}
+
+.mapping-col-info {
+  width: 140px;
+  flex-shrink: 0;
+}
+
+.field-text {
+  display: inline-block;
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: rgba(255, 255, 255, 0.6);
+  font-size: 12px;
+}
+
+.empty-columns,
+.mapping-placeholder {
+  padding: 32px 0;
+  text-align: center;
+  color: rgba(255, 255, 255, 0.4);
+  font-size: 14px;
+}
+
+.cron-tip {
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.4);
+  margin-top: 4px;
+  line-height: 1.5;
 }
 </style>
 
@@ -391,32 +672,39 @@ onMounted(() => {
   }
 }
 
-.form-container {
+.section-card {
+  --el-fill-color-blank: transparent;
+  --el-bg-color: transparent;
+
   .el-form-item__label {
     color: rgba(255, 255, 255, 0.7) !important;
   }
 
-  .el-input__wrapper,
-  .el-textarea__inner {
-    background: rgba(255, 255, 255, 0.05) !important;
-    border: 1px solid rgba(0, 212, 255, 0.2) !important;
+  .el-radio__label {
+    color: rgba(255, 255, 255, 0.85) !important;
+  }
+
+  // el-select 组件需要特殊处理
+  .el-select__wrapper {
+    background: transparent !important;
+    border: 1px solid rgba(0, 212, 255, 0.25) !important;
     box-shadow: none !important;
+    color: rgba(255, 255, 255, 0.85) !important;
   }
 
-  .el-input__inner {
-    color: rgba(255, 255, 255, 0.85) !important;
+  .el-select__placeholder {
+    color: rgba(255, 255, 255, 0.3) !important;
+  }
 
-    &::placeholder {
-      color: rgba(255, 255, 255, 0.3) !important;
+  .el-select__selected-item {
+    color: rgba(255, 255, 255, 0.85) !important;
+    span {
+      color: rgba(255, 255, 255, 0.85) !important;
     }
   }
 
-  .el-textarea__inner {
-    color: rgba(255, 255, 255, 0.85) !important;
-
-    &::placeholder {
-      color: rgba(255, 255, 255, 0.3) !important;
-    }
+  .el-select__suffix .el-select__caret {
+    color: rgba(255, 255, 255, 0.5) !important;
   }
 
   .el-button--primary {
@@ -430,6 +718,11 @@ onMounted(() => {
     background: rgba(255, 255, 255, 0.05) !important;
     border: 1px solid rgba(0, 212, 255, 0.2) !important;
     color: rgba(255, 255, 255, 0.7) !important;
+  }
+
+  // 映射区域小号输入框
+  .mapping-area .el-input__wrapper {
+    padding: 0px 8px;
   }
 }
 </style>

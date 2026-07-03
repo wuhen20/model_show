@@ -174,6 +174,9 @@ export interface CollectTask {
   lastExecuteFlagName: string
   taskStatusCode: string
   taskStatusName: string
+  executeTypeCode: string
+  executeTypeName: string
+  cronFormula: string
 }
 
 export async function getCollectTasks(): Promise<CollectTask[]> {
@@ -183,15 +186,37 @@ export async function getCollectTasks(): Promise<CollectTask[]> {
   return json.data
 }
 
-export async function saveCollectTask(taskName: string, remark: string): Promise<string> {
+export async function saveCollectTask(
+  taskName: string,
+  remark: string,
+  executeType: string = '01',
+  cronFormula: string = ''
+): Promise<string> {
   const res = await fetch(`${BASE_URL}/save-collect-task`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ taskName, remark })
+    body: JSON.stringify({ taskName, remark, executeType, cronFormula })
   })
   const json = await res.json()
   if (json.code !== 0) throw new Error(json.message || '保存失败')
   return json.data.taskNo
+}
+
+export interface CollectLog {
+  recordId: number
+  taskNo: string
+  startTime: string
+  endTime: string | null
+  executeStatusCode: number
+  executeStatusName: string
+  executeLog: string
+}
+
+export async function getCollectLogs(taskNo: string): Promise<CollectLog[]> {
+  const res = await fetch(`${BASE_URL}/query-collect-log?taskNo=${encodeURIComponent(taskNo)}`)
+  const json = await res.json()
+  if (json.code !== 0) throw new Error(json.message || '查询执行记录失败')
+  return json.data || []
 }
 
 export interface CollectTaskDetParams {
@@ -201,6 +226,7 @@ export interface CollectTaskDetParams {
   sourceDbPort: string
   sourceDbUsr: string
   sourceDbPwd: string
+  sourceDbName: string
   targetTable: string
   collectSql: string
 }
@@ -212,6 +238,7 @@ export interface CollectTaskDet {
   sourceDbPort: string
   sourceDbUsr: string
   sourceDbPwd: string
+  sourceDbName: string
   targetTable: string
   collectSql: string
   lastExecuteTime: string
@@ -255,4 +282,84 @@ export async function stopCollectTask(taskNo: string): Promise<void> {
   })
   const json = await res.json()
   if (json.code !== 0) throw new Error(json.message || '停止失败')
+}
+
+export async function deleteCollectTask(taskNo: string): Promise<void> {
+  const res = await fetch(`${BASE_URL}/delete-collect-task`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ taskNo })
+  })
+  const json = await res.json()
+  if (json.code !== 0) throw new Error(json.message || '删除失败')
+}
+
+export interface UpdateExecTypeParams {
+  taskNo: string
+  executeType: string
+  cronFormula: string
+}
+
+export async function updateCollectTaskExecType(params: UpdateExecTypeParams): Promise<void> {
+  const res = await fetch(`${BASE_URL}/update-collect-task-exec-type`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(params)
+  })
+  const json = await res.json()
+  if (json.code !== 0) throw new Error(json.message || '保存失败')
+}
+
+export interface TaskExecType {
+  executeType: string
+  executeTypeName: string
+  cronFormula: string
+}
+
+export async function getCollectTaskExecType(taskNo: string): Promise<TaskExecType | null> {
+  const res = await fetch(`${BASE_URL}/query-collect-task-exec-type?taskNo=${encodeURIComponent(taskNo)}`)
+  const json = await res.json()
+  if (json.code !== 0) throw new Error(json.message || '查询失败')
+  return json.data
+}
+
+// ========== 字段映射配置 ==========
+
+export interface TableColumnInfo {
+  columnName: string
+  columnType: string
+  columnComment: string
+}
+
+export async function queryTableColumns(taskNo: string, tableName: string): Promise<TableColumnInfo[]> {
+  const res = await fetch(`${BASE_URL}/query-table-columns`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ taskNo, tableName })
+  })
+  const json = await res.json()
+  if (json.code !== 0) throw new Error(json.message || '查询表字段失败')
+  return json.data || []
+}
+
+export interface ColMapItem {
+  sourceColumn: string
+  targetColumn: string
+}
+
+export async function queryColMap(taskNo: string): Promise<ColMapItem[]> {
+  const res = await fetch(`${BASE_URL}/query-col-map?taskNo=${encodeURIComponent(taskNo)}`)
+  const json = await res.json()
+  if (json.code !== 0) throw new Error(json.message || '查询映射失败')
+  return json.data || []
+}
+
+export async function saveColMap(taskNo: string, targetTable: string, mappings: ColMapItem[]): Promise<void> {
+  const res = await fetch(`${BASE_URL}/save-col-map`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ taskNo, targetTable, mappings })
+  })
+  const json = await res.json()
+  if (json.code !== 0) throw new Error(json.message || '保存失败')
 }

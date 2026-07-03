@@ -3,16 +3,15 @@ import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import Header from '@/components/Header.vue'
 import Sidebar from '@/components/Sidebar.vue'
-import { getCollectTasks, saveCollectTask, executeCollectTask, stopCollectTask, deleteCollectTask, getCollectLogs, type CollectTask, type CollectLog } from '@/api/sample'
+import { getCleanTasks, saveCleanTask, executeCleanTask, deleteCleanTask, getCleanLogs, type CleanTask, type CleanLog } from '@/api/clean'
 import { ElMessage, ElMessageBox } from 'element-plus'
 
 const router = useRouter()
 
-const taskList = ref<CollectTask[]>([])
+const taskList = ref<CleanTask[]>([])
 const loading = ref(false)
 const executingSet = ref<Set<string>>(new Set())
 
-// 筛选
 const filterName = ref('')
 
 const filteredList = computed(() => {
@@ -26,7 +25,7 @@ const filteredList = computed(() => {
 async function loadTasks() {
   loading.value = true
   try {
-    taskList.value = await getCollectTasks()
+    taskList.value = await getCleanTasks()
   } catch (e: any) {
     ElMessage.error(e.message || '查询失败')
   } finally {
@@ -38,13 +37,13 @@ function resetFilters() {
   filterName.value = ''
 }
 
-// ========== 新增任务弹框 ==========
+// 新增任务弹框
 const dialogVisible = ref(false)
 const dialogSaving = ref(false)
-const dialogForm = ref({ taskName: '', remark: '', executeType: '01', cronFormula: '' })
+const dialogForm = ref({ taskName: '', remark: '' })
 
 function openCreateDialog() {
-  dialogForm.value = { taskName: '', remark: '', executeType: '01', cronFormula: '' }
+  dialogForm.value = { taskName: '', remark: '' }
   dialogVisible.value = true
 }
 
@@ -53,22 +52,15 @@ async function handleCreateConfirm() {
     ElMessage.warning('请输入任务名称')
     return
   }
-  if (dialogForm.value.executeType === '02' && !dialogForm.value.cronFormula.trim()) {
-    ElMessage.warning('执行方式为定时时，请输入 cron 表达式')
-    return
-  }
   dialogSaving.value = true
   try {
-    const taskNo = await saveCollectTask(
+    const taskNo = await saveCleanTask(
       dialogForm.value.taskName.trim(),
-      dialogForm.value.remark.trim(),
-      dialogForm.value.executeType,
-      dialogForm.value.cronFormula.trim()
+      dialogForm.value.remark.trim()
     )
     ElMessage.success('新建任务成功')
     dialogVisible.value = false
-    // 跳转到任务明细页面
-    router.push({ path: '/collect-task-detail', query: { taskNo } })
+    router.push({ path: '/clean-task-edit', query: { taskNo } })
   } catch (e: any) {
     ElMessage.error(e.message || '新建失败')
   } finally {
@@ -76,88 +68,44 @@ async function handleCreateConfirm() {
   }
 }
 
-// ========== 执行记录弹框 ==========
-const logDialogVisible = ref(false)
-const logLoading = ref(false)
-const logList = ref<CollectLog[]>([])
-const logDialogTitle = ref('执行记录')
-
-function logStatusColor(statusName: string): string {
-  if (statusName === '成功') return '#00ff88'
-  if (statusName === '失败') return '#ff5555'
-  return '#ffaa00' // 执行中
-}
-
-async function openLogDialog(task: CollectTask) {
-  logDialogTitle.value = `执行记录 - ${task.taskName}`
-  logDialogVisible.value = true
-  logLoading.value = true
-  logList.value = []
-  try {
-    logList.value = await getCollectLogs(task.taskNo)
-  } catch (e: any) {
-    ElMessage.error(e.message || '查询执行记录失败')
-  } finally {
-    logLoading.value = false
-  }
-}
-
-// 执行结果颜色
 function resultColor(flagName: string): string {
   if (flagName === '成功') return '#00ff88'
   if (flagName === '失败') return '#ff5555'
-  return 'rgba(255, 255, 255, 0.5)' // 未执行
+  return 'rgba(255, 255, 255, 0.5)'
 }
 
-// 执行状态颜色
 function statusColor(statusCode: string): string {
-  if (statusCode === '02') return '#ffaa00'   // 执行中
-  if (statusCode === '03') return '#00ff88'   // 已完成
-  if (statusCode === '04') return '#ff5555'   // 已停止
-  return 'rgba(255, 255, 255, 0.5)'           // 未执行
+  if (statusCode === '02') return '#ffaa00'
+  if (statusCode === '03') return '#00ff88'
+  if (statusCode === '04') return '#ff5555'
+  return 'rgba(255, 255, 255, 0.5)'
 }
 
-// 执行任务
-async function handleExecute(taskNo: string) {
+// 执行任务（下载 Excel）
+async function handleExecute(task: CleanTask) {
   try {
-    await ElMessageBox.confirm('确认执行该采集任务？', '提示', { type: 'warning' })
+    await ElMessageBox.confirm('确认执行该清理任务？执行后将下载清洗结果 Excel 文件。', '提示', { type: 'warning' })
   } catch {
     return
   }
-  executingSet.value.add(taskNo)
+  executingSet.value.add(task.taskNo)
   try {
-    const msg = await executeCollectTask(taskNo)
-    ElMessage.success(msg)
+    await executeCleanTask(task.taskNo)
+    ElMessage.success('清洗结果已下载')
     await loadTasks()
   } catch (e: any) {
     ElMessage.error(e.message || '执行失败')
     await loadTasks()
   } finally {
-    executingSet.value.delete(taskNo)
-  }
-}
-
-// 停止任务
-async function handleStop(taskNo: string) {
-  try {
-    await ElMessageBox.confirm('确认停止该采集任务？', '提示', { type: 'warning' })
-  } catch {
-    return
-  }
-  try {
-    await stopCollectTask(taskNo)
-    ElMessage.success('已停止')
-    await loadTasks()
-  } catch (e: any) {
-    ElMessage.error(e.message || '停止失败')
+    executingSet.value.delete(task.taskNo)
   }
 }
 
 // 删除任务
-async function handleDelete(task: CollectTask) {
+async function handleDelete(task: CleanTask) {
   try {
     await ElMessageBox.confirm(
-      `确认删除任务「${task.taskName}」？\n将同时删除任务的明细配置、字段映射和执行记录，且不可恢复。`,
+      `确认删除清理任务「${task.taskName}」？\n将同时删除流程配置，且不可恢复。`,
       '删除确认',
       { type: 'warning', confirmButtonText: '删除', cancelButtonText: '取消' }
     )
@@ -165,7 +113,7 @@ async function handleDelete(task: CollectTask) {
     return
   }
   try {
-    await deleteCollectTask(task.taskNo)
+    await deleteCleanTask(task.taskNo)
     ElMessage.success('删除成功')
     await loadTasks()
   } catch (e: any) {
@@ -173,8 +121,44 @@ async function handleDelete(task: CollectTask) {
   }
 }
 
-function goToDetail(taskNo: string) {
-  router.push({ path: '/collect-task-detail', query: { taskNo } })
+function goToEdit(taskNo: string) {
+  router.push({ path: '/clean-task-edit', query: { taskNo } })
+}
+
+// ========== 执行记录弹窗 ==========
+const logDialogVisible = ref(false)
+const logDialogLoading = ref(false)
+const logList = ref<CleanLog[]>([])
+const currentLogTask = ref<CleanTask | null>(null)
+
+async function openLogDialog(task: CleanTask) {
+  currentLogTask.value = task
+  logDialogVisible.value = true
+  logDialogLoading.value = true
+  logList.value = []
+  try {
+    logList.value = await getCleanLogs(task.taskNo)
+  } catch (e: any) {
+    ElMessage.error(e.message || '查询执行记录失败')
+  } finally {
+    logDialogLoading.value = false
+  }
+}
+
+function logStatusColor(statusCode: string): string {
+  if (statusCode === '03') return '#00ff88'
+  if (statusCode === '04') return '#ff5555'
+  if (statusCode === '02') return '#ffaa00'
+  return 'rgba(255, 255, 255, 0.5)'
+}
+
+// ========== 日志详情弹窗 ==========
+const logDetailDialogVisible = ref(false)
+const currentLogDetail = ref<CleanLog | null>(null)
+
+function openLogDetailDialog(log: CleanLog) {
+  currentLogDetail.value = log
+  logDetailDialogVisible.value = true
 }
 
 onMounted(() => {
@@ -184,13 +168,13 @@ onMounted(() => {
 
 <template>
   <div class="app-layout">
-    <Header title="模型能力展示与体验工作台" subtitle="数据采集任务管理" />
+    <Header title="模型能力展示与体验工作台" subtitle="样本数据清理" />
     <div class="main-content">
       <Sidebar />
       <main class="content-area">
         <div class="page-header">
           <div class="page-title-row">
-            <h2 class="page-title">数据采集任务管理</h2>
+            <h2 class="page-title">样本数据清理任务管理</h2>
             <el-button type="primary" class="add-btn" @click="openCreateDialog">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="margin-right: 4px">
                 <path d="M12 5v14M5 12h14" />
@@ -211,30 +195,29 @@ onMounted(() => {
         </div>
 
         <div class="table-container">
-            <div class="list-header">
-              <span class="col col-no">任务编号</span>
-              <span class="col col-name">任务名称</span>
-              <span class="col col-remark">任务说明</span>
-              <span class="col col-create">创建时间</span>
-              <span class="col col-exec">最近执行时间</span>
-              <span class="col col-result">执行结果</span>
-              <span class="col col-status">执行状态</span>
-              <span class="col col-exec-type">执行方式</span>
-              <span class="col col-action">操作</span>
-            </div>
-            <div v-if="loading" class="loading-state">
-              <span>加载中...</span>
-            </div>
-            <div v-else-if="filteredList.length === 0" class="empty-state">
-              <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="rgba(0,212,255,0.3)" stroke-width="1.5">
-                <path d="M22 19a2 2 0 1-2 2H4a2 2 0 1-2-2V5a2 2 0 1 2-2h5l2 3h9a2 2 0 1 2 2z" />
-              </svg>
-              <p>暂无采集任务</p>
-            </div>
-            <div v-else>
+          <div class="list-header">
+            <span class="col col-no">任务编号</span>
+            <span class="col col-name">任务名称</span>
+            <span class="col col-remark">任务说明</span>
+            <span class="col col-create">创建时间</span>
+            <span class="col col-exec">最近执行时间</span>
+            <span class="col col-result">执行结果</span>
+            <span class="col col-status">状态</span>
+            <span class="col col-action">操作</span>
+          </div>
+          <div v-if="loading" class="loading-state">
+            <span>加载中...</span>
+          </div>
+          <div v-else-if="filteredList.length === 0" class="empty-state">
+            <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="rgba(0,212,255,0.3)" stroke-width="1.5">
+              <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
+            </svg>
+            <p>暂无清理任务</p>
+          </div>
+          <div v-else>
             <div class="list-row" v-for="item in filteredList" :key="item.taskNo">
-              <span class="col col-no link-col" @click="goToDetail(item.taskNo)">{{ item.taskNo }}</span>
-              <span class="col col-name link-col" @click="goToDetail(item.taskNo)">{{ item.taskName }}</span>
+              <span class="col col-no link-col" @click="goToEdit(item.taskNo)">{{ item.taskNo }}</span>
+              <span class="col col-name link-col" @click="goToEdit(item.taskNo)">{{ item.taskName }}</span>
               <span class="col col-remark">{{ item.remark || '-' }}</span>
               <span class="col col-create">{{ item.createTime || '-' }}</span>
               <span class="col col-exec">{{ item.lastExecuteTime || '-' }}</span>
@@ -248,26 +231,19 @@ onMounted(() => {
                   {{ item.taskStatusName || '未执行' }}
                 </span>
               </span>
-              <span class="col col-exec-type">
-                <span class="exec-type-tag">{{ item.executeTypeName || '手动' }}</span>
-                <span v-if="item.executeTypeCode === '02' && item.cronFormula" class="cron-text" :title="item.cronFormula">
-                  {{ item.cronFormula }}
-                </span>
-              </span>
               <span class="col col-action">
                 <el-button
                   type="primary"
                   size="small"
                   :loading="executingSet.has(item.taskNo)"
                   :disabled="item.taskStatusCode === '02'"
-                  @click="handleExecute(item.taskNo)"
+                  @click="handleExecute(item)"
                 >执行</el-button>
                 <el-button
-                  type="danger"
                   size="small"
-                  :disabled="item.taskStatusCode !== '02'"
-                  @click="handleStop(item.taskNo)"
-                >停止</el-button>
+                  class="edit-btn"
+                  @click="goToEdit(item.taskNo)"
+                >编排</el-button>
                 <el-button
                   size="small"
                   class="log-btn"
@@ -288,20 +264,10 @@ onMounted(() => {
     </div>
 
     <!-- 新增任务弹框 -->
-    <el-dialog v-model="dialogVisible" title="新增采集任务" width="620px" :close-on-click-modal="false" class="create-dialog">
-      <el-form label-width="90px" label-position="right">
+    <el-dialog v-model="dialogVisible" title="新增清理任务" width="520px" :close-on-click-modal="false" class="create-dialog">
+      <el-form label-width="80px" label-position="right">
         <el-form-item label="任务名称" required>
           <el-input v-model="dialogForm.taskName" placeholder="请输入任务名称" maxlength="100" />
-        </el-form-item>
-        <el-form-item label="执行方式" required>
-          <el-radio-group v-model="dialogForm.executeType">
-            <el-radio value="01">手动</el-radio>
-            <el-radio value="02">定时</el-radio>
-          </el-radio-group>
-        </el-form-item>
-        <el-form-item v-if="dialogForm.executeType === '02'" label="cron表达式" required>
-          <el-input v-model="dialogForm.cronFormula" placeholder="请输入cron表达式，如：0 0 2 * * ?" maxlength="200" />
-          <div class="cron-tip">示例：0 0 2 * * ? 表示每天凌晨2点执行；0 */5 * * * ? 表示每5分钟执行一次</div>
         </el-form-item>
         <el-form-item label="任务说明">
           <el-input v-model="dialogForm.remark" type="textarea" :rows="3" placeholder="请输入任务说明（选填）" maxlength="500" />
@@ -313,24 +279,67 @@ onMounted(() => {
       </template>
     </el-dialog>
 
-    <!-- 执行记录弹框 -->
-    <el-dialog v-model="logDialogVisible" :title="logDialogTitle" width="780px" :close-on-click-modal="false" class="log-dialog">
-      <div v-if="logLoading" class="log-loading">加载中...</div>
-      <div v-else-if="logList.length === 0" class="log-empty">暂无执行记录</div>
+    <!-- 执行记录弹窗 -->
+    <el-dialog
+      v-model="logDialogVisible"
+      :title="`执行记录 - ${currentLogTask?.taskName || ''}`"
+      width="900px"
+      :close-on-click-modal="false"
+      class="log-dialog"
+    >
+      <div v-if="logDialogLoading" class="log-loading">加载中...</div>
+      <div v-else-if="logList.length === 0" class="log-empty">
+        <p>暂无执行记录</p>
+      </div>
       <div v-else class="log-list">
-        <div class="log-item" v-for="log in logList" :key="log.recordId">
+        <div v-for="log in logList" :key="log.recordId" class="log-item">
           <div class="log-item-header">
-            <span class="log-status" :style="{ color: logStatusColor(log.executeStatusName) }">
-              {{ log.executeStatusName }}
-            </span>
-            <span class="log-time">开始：{{ log.startTime || '-' }}</span>
-            <span class="log-time">结束：{{ log.endTime || '-' }}</span>
+            <div class="log-item-info">
+              <span class="log-status" :style="{ color: logStatusColor(log.executeStatusCode) }">
+                {{ log.executeStatusName }}
+              </span>
+              <span class="log-time">开始：{{ log.startTime || '-' }}</span>
+              <span class="log-time">结束：{{ log.endTime || '-' }}</span>
+            </div>
+            <div class="log-stats">
+              <span class="stat-item">总数：<b>{{ log.totalCount }}</b></span>
+              <span class="stat-item removed">移除：<b>{{ log.removedCount }}</b></span>
+              <span class="stat-item result">结果：<b>{{ log.resultCount }}</b></span>
+            </div>
+            <el-button size="small" class="log-btn" @click="openLogDetailDialog(log)">
+              日志
+            </el-button>
           </div>
-          <pre class="log-content">{{ log.executeLog || '（无日志内容）' }}</pre>
         </div>
       </div>
       <template #footer>
-        <el-button type="primary" @click="logDialogVisible = false">关闭</el-button>
+        <el-button @click="logDialogVisible = false">关闭</el-button>
+      </template>
+    </el-dialog>
+
+    <!-- 日志详情弹窗 -->
+    <el-dialog
+      v-model="logDetailDialogVisible"
+      title="执行日志详情"
+      width="700px"
+      :close-on-click-modal="false"
+      class="log-detail-dialog"
+    >
+      <div v-if="currentLogDetail" class="log-detail-header">
+        <span class="log-status" :style="{ color: logStatusColor(currentLogDetail.executeStatusCode) }">
+          {{ currentLogDetail.executeStatusName }}
+        </span>
+        <span class="log-time">开始：{{ currentLogDetail.startTime || '-' }}</span>
+        <span class="log-time">结束：{{ currentLogDetail.endTime || '-' }}</span>
+      </div>
+      <div v-if="currentLogDetail?.executeLog" class="log-detail-content">
+        <pre>{{ currentLogDetail.executeLog }}</pre>
+      </div>
+      <div v-else class="log-detail-empty">
+        <p>无日志内容</p>
+      </div>
+      <template #footer>
+        <el-button @click="logDetailDialogVisible = false">关闭</el-button>
       </template>
     </el-dialog>
   </div>
@@ -353,15 +362,13 @@ onMounted(() => {
 
 .content-area {
   flex: 1;
-  padding: 24px 16px;
+  padding: 24px 32px;
   overflow-y: auto;
   display: flex;
   flex-direction: column;
 }
 
-.page-header {
-  margin-bottom: 20px;
-}
+.page-header { margin-bottom: 20px; }
 
 .page-title-row {
   display: flex;
@@ -389,9 +396,7 @@ onMounted(() => {
   }
 }
 
-.filter-bar {
-  margin-bottom: 20px;
-}
+.filter-bar { margin-bottom: 20px; }
 
 .filter-row {
   display: flex;
@@ -432,41 +437,20 @@ onMounted(() => {
   background: linear-gradient(135deg, rgba(17, 24, 39, 0.9) 0%, rgba(26, 35, 50, 0.8) 100%);
   border: 1px solid rgba(0, 212, 255, 0.2);
   border-radius: 12px;
-  overflow-x: auto;
-
-  &::-webkit-scrollbar {
-    height: 8px;
-  }
-
-  &::-webkit-scrollbar-track {
-    background: rgba(0, 0, 0, 0.2);
-    border-radius: 4px;
-  }
-
-  &::-webkit-scrollbar-thumb {
-    background: rgba(0, 212, 255, 0.3);
-    border-radius: 4px;
-
-    &:hover {
-      background: rgba(0, 212, 255, 0.5);
-    }
-  }
+  overflow: hidden;
 }
 
 .list-header,
 .list-row {
   display: flex;
   align-items: center;
-  padding: 0 12px;
+  padding: 0 20px;
   min-height: 52px;
-  box-sizing: border-box;
-  width: max-content;
-  min-width: 100%;
 }
 
 .list-header {
-  background: rgba(0, 212, 255, 0.15);
-  border-bottom: 1px solid rgba(0, 212, 255, 0.3);
+  background: rgba(0, 212, 255, 0.08);
+  border-bottom: 1px solid rgba(0, 212, 255, 0.2);
   font-size: 13px;
   font-weight: 600;
   color: rgba(255, 255, 255, 0.7);
@@ -479,7 +463,7 @@ onMounted(() => {
   transition: background 0.2s;
 
   &:hover {
-    background: rgba(0, 212, 255, 0.08);
+    background: rgba(0, 212, 255, 0.05);
   }
 
   &:last-child {
@@ -495,14 +479,13 @@ onMounted(() => {
 }
 
 .col-no { width: 130px; flex-shrink: 0; color: #00d4ff; }
-.col-name { width: 200px; flex-shrink: 0; }
-.col-remark { width: 150px; flex-shrink: 0; color: rgba(255, 255, 255, 0.6); }
+.col-name { flex: 1; min-width: 0; }
+.col-remark { width: 160px; flex-shrink: 0; color: rgba(255, 255, 255, 0.6); }
 .col-create { width: 160px; flex-shrink: 0; color: rgba(255, 255, 255, 0.6); }
 .col-exec { width: 160px; flex-shrink: 0; color: rgba(255, 255, 255, 0.6); }
 .col-result { width: 90px; flex-shrink: 0; text-align: center; }
 .col-status { width: 90px; flex-shrink: 0; text-align: center; }
-.col-exec-type { width: 150px; flex-shrink: 0; display: flex; flex-direction: column; gap: 2px; }
-.col-action { width: 320px; flex-grow: 1; flex-shrink: 0; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.col-action { width: 320px; flex-shrink: 0; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 
 .link-col {
   cursor: pointer;
@@ -514,44 +497,28 @@ onMounted(() => {
   }
 }
 
-.result-tag {
+.result-tag, .status-tag {
   font-weight: 600;
   font-size: 13px;
 }
 
-.status-tag {
-  font-weight: 600;
-  font-size: 13px;
-}
-
-.exec-type-tag {
-  font-size: 13px;
-  color: #00d4ff;
-  font-weight: 600;
-}
-
-.cron-text {
-  font-size: 11px;
-  color: rgba(255, 255, 255, 0.45);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.cron-tip {
-  font-size: 12px;
-  color: rgba(255, 255, 255, 0.4);
-  margin-top: 4px;
-  line-height: 1.5;
-}
-
-.log-btn {
+.edit-btn {
   background: rgba(0, 212, 255, 0.1) !important;
   border: 1px solid rgba(0, 212, 255, 0.3) !important;
   color: #00d4ff !important;
 
   &:hover {
     background: rgba(0, 212, 255, 0.2) !important;
+  }
+}
+
+.log-btn {
+  background: rgba(255, 170, 0, 0.1) !important;
+  border: 1px solid rgba(255, 170, 0, 0.3) !important;
+  color: #ffaa00 !important;
+
+  &:hover {
+    background: rgba(255, 170, 0, 0.2) !important;
   }
 }
 
@@ -587,42 +554,49 @@ onMounted(() => {
   }
 }
 
-.log-loading,
-.log-empty {
+.log-loading, .log-empty {
+  padding: 40px;
   text-align: center;
-  padding: 60px 20px;
   color: rgba(255, 255, 255, 0.4);
   font-size: 14px;
 }
 
 .log-list {
-  max-height: 60vh;
-  overflow-y: auto;
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 12px;
+  max-height: 60vh;
+  overflow-y: auto;
 }
 
 .log-item {
-  background: rgba(0, 212, 255, 0.05);
+  background: rgba(0, 212, 255, 0.04);
   border: 1px solid rgba(0, 212, 255, 0.15);
   border-radius: 8px;
-  padding: 12px 16px;
+  overflow: hidden;
 }
 
 .log-item-header {
   display: flex;
   align-items: center;
-  gap: 20px;
-  margin-bottom: 8px;
-  padding-bottom: 8px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  justify-content: space-between;
+  padding: 10px 14px;
+  background: rgba(0, 212, 255, 0.06);
+  border-bottom: 1px solid rgba(0, 212, 255, 0.1);
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.log-item-info {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
 }
 
 .log-status {
   font-weight: 600;
-  font-size: 14px;
-  min-width: 50px;
+  font-size: 13px;
 }
 
 .log-time {
@@ -630,22 +604,55 @@ onMounted(() => {
   color: rgba(255, 255, 255, 0.5);
 }
 
-.log-content {
-  margin: 0;
-  font-family: 'Consolas', 'Monaco', monospace;
+.log-stats {
+  display: flex;
+  gap: 14px;
+}
+
+.stat-item {
   font-size: 12px;
-  line-height: 1.6;
-  color: rgba(255, 255, 255, 0.8);
-  white-space: pre-wrap;
-  word-break: break-all;
-  max-height: 200px;
-  overflow-y: auto;
+  color: rgba(255, 255, 255, 0.6);
+
+  b {
+    color: #fff;
+    font-weight: 600;
+    margin-left: 2px;
+  }
+
+  &.removed b { color: #ff5555; }
+  &.result b { color: #00ff88; }
+}
+
+.log-content {
+  padding: 10px 14px;
+
+  pre {
+    margin: 0;
+    white-space: pre-wrap;
+    word-break: break-all;
+    font-family: 'Consolas', 'Monaco', monospace;
+    font-size: 12px;
+    line-height: 1.6;
+    color: rgba(255, 255, 255, 0.75);
+  }
+}
+
+.log-btn {
+  background: rgba(0, 212, 255, 0.15) !important;
+  border: 1px solid rgba(0, 212, 255, 0.3) !important;
+  color: #00d4ff !important;
+  font-size: 12px;
+  padding: 4px 12px;
+  margin-left: 10px;
+
+  &:hover {
+    background: rgba(0, 212, 255, 0.25) !important;
+  }
 }
 </style>
 
 <style lang="scss">
-.el-dialog.create-dialog,
-.el-dialog.log-dialog {
+.el-dialog.create-dialog {
   background: linear-gradient(135deg, rgba(17, 24, 39, 0.98) 0%, rgba(26, 35, 50, 0.95) 100%) !important;
   border: 1px solid rgba(0, 212, 255, 0.25) !important;
   border-radius: 12px !important;
@@ -675,15 +682,97 @@ onMounted(() => {
     color: rgba(255, 255, 255, 0.7) !important;
   }
 
-  .el-radio__label {
-    color: rgba(255, 255, 255, 0.85) !important;
-  }
-
   .el-button--primary {
     background: linear-gradient(135deg, #00d4ff, #0099cc) !important;
     border: none !important;
     color: #0d1117 !important;
     font-weight: 600;
+  }
+
+  .el-button:not(.el-button--primary) {
+    background: rgba(255, 255, 255, 0.05) !important;
+    border: 1px solid rgba(0, 212, 255, 0.2) !important;
+    color: rgba(255, 255, 255, 0.7) !important;
+  }
+}
+
+.el-dialog.log-dialog {
+  background: linear-gradient(135deg, rgba(17, 24, 39, 0.98) 0%, rgba(26, 35, 50, 0.95) 100%) !important;
+  border: 1px solid rgba(0, 212, 255, 0.25) !important;
+  border-radius: 12px !important;
+
+  --el-text-color-regular: rgba(255, 255, 255, 0.85);
+  --el-text-color-primary: #fff;
+
+  .el-dialog__header {
+    border-bottom: 1px solid rgba(0, 212, 255, 0.15);
+  }
+
+  .el-dialog__title {
+    color: #fff !important;
+  }
+
+  .el-dialog__body {
+    padding: 20px;
+  }
+
+  .el-button:not(.el-button--primary) {
+    background: rgba(255, 255, 255, 0.05) !important;
+    border: 1px solid rgba(0, 212, 255, 0.2) !important;
+    color: rgba(255, 255, 255, 0.7) !important;
+  }
+}
+
+.el-dialog.log-detail-dialog {
+  background: linear-gradient(135deg, rgba(17, 24, 39, 0.98) 0%, rgba(26, 35, 50, 0.95) 100%) !important;
+  border: 1px solid rgba(0, 212, 255, 0.25) !important;
+  border-radius: 12px !important;
+
+  --el-text-color-regular: rgba(255, 255, 255, 0.85);
+  --el-text-color-primary: #fff;
+
+  .el-dialog__header {
+    border-bottom: 1px solid rgba(0, 212, 255, 0.15);
+  }
+
+  .el-dialog__title {
+    color: #fff !important;
+  }
+
+  .el-dialog__body {
+    padding: 16px 20px;
+    max-height: 500px;
+    overflow-y: auto;
+  }
+
+  .log-detail-header {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    margin-bottom: 16px;
+    padding-bottom: 12px;
+    border-bottom: 1px solid rgba(0, 212, 255, 0.1);
+  }
+
+  .log-detail-content {
+    pre {
+      margin: 0;
+      white-space: pre-wrap;
+      word-break: break-all;
+      font-family: 'Consolas', 'Monaco', monospace;
+      font-size: 13px;
+      line-height: 1.7;
+      color: rgba(255, 255, 255, 0.8);
+      background: rgba(0, 0, 0, 0.2);
+      padding: 12px;
+      border-radius: 6px;
+    }
+  }
+
+  .log-detail-empty {
+    text-align: center;
+    padding: 40px;
+    color: rgba(255, 255, 255, 0.5);
   }
 
   .el-button:not(.el-button--primary) {

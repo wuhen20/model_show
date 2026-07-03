@@ -1,17 +1,220 @@
-import pymysql
+import re
+from datetime import datetime
 from app.core.config import settings
 
 
+# ==================== 数据库类型判断 ====================
+
+_db_type_cache = None
+
+def _is_oracle() -> bool:
+    global _db_type_cache
+    if _db_type_cache is None:
+        _db_type_cache = getattr(settings, "db_type", "mysql").lower()
+    return _db_type_cache == "oracle"
+
+
+def _is_mysql() -> bool:
+    return not _is_oracle()
+
+
+# ==================== 大小写不敏感字典（Oracle 列名兼容） ====================
+
+class _CiDict(dict):
+    """大小写不敏感的字典，用于兼容 Oracle 大写列名和 MySQL 小写列名"""
+
+    def _find_key(self, key):
+        if not isinstance(key, str):
+            return key
+        if super().__contains__(key):
+            return key
+        lower_key = key.lower()
+        for k in self.keys():
+            if isinstance(k, str) and k.lower() == lower_key:
+                return k
+        return key
+
+    def __getitem__(self, key):
+        return super().__getitem__(self._find_key(key))
+
+    def get(self, key, default=None):
+        actual_key = self._find_key(key)
+        return super().get(actual_key, default)
+
+    def __contains__(self, key):
+        return super().__contains__(self._find_key(key))
+
+
+# ==================== 连接管理 ====================
+
 def get_connection():
-    return pymysql.connect(
-        host=settings.db_host,
-        port=settings.db_port,
-        user=settings.db_user,
-        password=settings.db_password,
-        database=settings.db_name,
-        charset="utf8mb4",
-        cursorclass=pymysql.cursors.DictCursor,
-    )
+    if _is_oracle():
+        import oracledb
+        dsn = f"{settings.db_host}:{settings.db_port or 1521}/{settings.db_name}"
+        return oracledb.connect(user=settings.db_user, password=settings.db_password, dsn=dsn)
+    else:
+        import pymysql
+        return pymysql.connect(
+            host=settings.db_host,
+            port=settings.db_port,
+            user=settings.db_user,
+            password=settings.db_password,
+            database=settings.db_name,
+            charset="utf8mb4",
+            cursorclass=pymysql.cursors.DictCursor,
+        )
+
+
+# ==================== SQL 执行包装器 ====================
+
+def _execute(cursor, sql, params=None):
+    """统一执行 SQL，自动处理占位符差异（MySQL %s / Oracle :n）"""
+    if _is_oracle():
+        sql = _convert_sql_for_oracle(sql, params)
+        if params is not None:
+            cursor.execute(sql, params)
+        else:
+            cursor.execute(sql)
+        # 设置 rowfactory 返回大小写不敏感的字典
+        if cursor.description:
+            col_names = [col[0] for col in cursor.description]
+            def _factory(*row):
+                return _CiDict({col_names[i]: row[i] for i in range(len(col_names))})
+            cursor.rowfactory = _factory
+    else:
+        if params is not None:
+            cursor.execute(sql, params)
+        else:
+            cursor.execute(sql)
+
+
+def _executemany(cursor, sql, seq_of_params):
+    """批量执行，兼容两种数据库"""
+    if _is_oracle():
+        sql = _convert_sql_for_oracle(sql, list(seq_of_params)[0] if seq_of_params else {})
+        cursor.executemany(sql, seq_of_params)
+    else:
+        cursor.executemany(sql, seq_of_params)
+
+
+def _convert_sql_for_oracle(sql: str, params=None) -> str:
+    """将 MySQL 风格 SQL 转换为 Oracle 兼容格式"""
+    # 1. 把 %% 替换为临时占位符（MySQL 转义的 %）
+    tmp = sql.replace("%%", "\x00")
+    # 2. 处理参数占位符
+    if isinstance(params, dict):
+        # 命名参数：%(name)s → :name
+        tmp = re.sub(r"%\((\w+)\)s", lambda m: f":{m.group(1)}", tmp)
+    else:
+        # 位置参数：%s → :1, :2, ...
+        idx = [0]
+        def _replace_s(m):
+            idx[0] += 1
+            return f":{idx[0]}"
+        tmp = re.sub(r"%s", _replace_s, tmp)
+    # 3. 恢复 %%
+    tmp = tmp.replace("\x00", "%")
+    # 4. 去掉反引号（Oracle 不支持）
+    tmp = tmp.replace("`", "")
+    return tmp
+
+
+# ==================== SQL 片段辅助函数 ====================
+
+def _date_format(expr: str, fmt: str = "%Y-%m-%d %H:%M:%S") -> str:
+    """日期格式化 SQL 片段"""
+    if _is_oracle():
+        oracle_fmt = (fmt
+            .replace("%Y", "YYYY").replace("%m", "MM").replace("%d", "DD")
+            .replace("%H", "HH24").replace("%i", "MI").replace("%S", "SS"))
+        return f"TO_CHAR({expr}, '{oracle_fmt}')"
+    else:
+        mysql_fmt = fmt.replace("%", "%%")
+        return f"date_format({expr}, '{mysql_fmt}')"
+
+
+def _date_format_month(expr: str) -> str:
+    """日期格式化为年月：YYYY-MM / %Y-%m"""
+    if _is_oracle():
+        return f"TO_CHAR({expr}, 'YYYY-MM')"
+    else:
+        return f"DATE_FORMAT({expr}, '%%Y-%%m')"
+
+
+def _now() -> str:
+    return "SYSDATE" if _is_oracle() else "NOW()"
+
+
+def _curdate() -> str:
+    return "TRUNC(SYSDATE)" if _is_oracle() else "CURDATE()"
+
+
+def _date_sub_month(months: int) -> str:
+    if _is_oracle():
+        return f"ADD_MONTHS(SYSDATE, -{months})"
+    else:
+        return f"DATE_SUB(CURDATE(), INTERVAL {months} MONTH)"
+
+
+def _limit_sql(sql: str, n: int = 1) -> str:
+    """在 SQL 末尾添加 LIMIT n 语义"""
+    if _is_oracle():
+        return f"SELECT * FROM ({sql}) WHERE ROWNUM <= {n}"
+    else:
+        return f"{sql} LIMIT {n}"
+
+
+def _quote_ident(name: str) -> str:
+    """标识符引用：MySQL 用反引号，Oracle 不加引号"""
+    if _is_oracle():
+        return name
+    else:
+        return f"`{name}`"
+
+
+def _show_tables_sql() -> str:
+    if _is_oracle():
+        return "SELECT table_name FROM user_tables ORDER BY table_name"
+    else:
+        return "SHOW TABLES"
+
+
+def _show_columns_sql(table_name: str) -> str:
+    if _is_oracle():
+        return (
+            f"SELECT column_name AS field, data_type AS type, "
+            f"'' AS key_col, '' AS extra, '' AS comment "
+            f"FROM all_tab_columns WHERE table_name = '{table_name.upper()}' "
+            f"AND owner = USER ORDER BY column_id"
+        )
+    else:
+        return f"SHOW COLUMNS FROM `{table_name}`"
+
+
+def _field_order_expr(field: str, *values) -> str:
+    """FIELD() 函数的兼容写法"""
+    if _is_oracle():
+        cases = " ".join(f"WHEN {field} = '{v}' THEN {i}" for i, v in enumerate(values, 1))
+        return f"CASE {cases} ELSE {len(values) + 1} END"
+    else:
+        vals = ", ".join(f"'{v}'" for v in values)
+        return f"FIELD({field}, {vals})"
+
+
+def _cast_text_as_char(expr: str) -> str:
+    """将 TEXT/CLOB 字段转为字符串"""
+    if _is_oracle():
+        return f"DBMS_LOB.SUBSTR({expr}, 4000, 1)"
+    else:
+        return f"CAST({expr} AS CHAR)"
+
+
+def _select_all_from(table_name: str) -> str:
+    """SELECT * FROM table 的兼容写法"""
+    if _is_oracle():
+        return f"SELECT * FROM {table_name}"
+    else:
+        return f"SELECT * FROM `{table_name}`"
 
 
 def query_code_dict(sort_no_list: list[str]):
@@ -25,7 +228,7 @@ def query_code_dict(sort_no_list: list[str]):
                 f"WHERE SORT_NO IN ({placeholders}) "
                 f"ORDER BY SORT_NO, ORDER_INDEX, RECORD_ID"
             )
-            cursor.execute(sql, sort_no_list)
+            _execute(cursor, sql, sort_no_list)
             return cursor.fetchall()
     finally:
         conn.close()
@@ -35,7 +238,7 @@ def query_sample_set():
     conn = get_connection()
     try:
         with conn.cursor() as cursor:
-            sql = """
+            sql = f"""
                 select
                     set_no,
                     set_name,
@@ -59,8 +262,8 @@ def query_sample_set():
                         scd.code_value = s.quality_level
                         and scd.sort_no = 'QUALITY_LEVEL') as qualityLevelName,
                     s.business_system,
-                    date_format(s.update_time, '%%Y-%%m-%%d %%H:%%i:%%s') as updateTime,
-                    date_format(s.create_time, '%%Y-%%m-%%d %%H:%%i:%%s') as createTime,
+                    {_date_format('s.update_time')} as updateTime,
+                    {_date_format('s.create_time')} as createTime,
                     s.version,
                     s.sample_field as sampleFieldCode,
                     (
@@ -76,7 +279,7 @@ def query_sample_set():
                     s_sample_set s
                 order by update_time desc, create_time desc
             """
-            cursor.execute(sql, ())
+            _execute(cursor, sql, ())
             return cursor.fetchall()
     finally:
         conn.close()
@@ -86,7 +289,7 @@ def query_sample_info(set_no: str):
     conn = get_connection()
     try:
         with conn.cursor() as cursor:
-            sql = """
+            sql = f"""
                 select
                     sample_no,
                     sample_name,
@@ -102,8 +305,8 @@ def query_sample_info(set_no: str):
                         and scd.sort_no = 'SAMPLE_TYPE') as typeName,
                     s.file_path,
                     s.file_size,
-                    date_format(s.update_time, '%%Y-%%m-%%d %%H:%%i:%%s') as updateTime,
-                    date_format(s.create_time, '%%Y-%%m-%%d %%H:%%i:%%s') as createTime,
+                    {_date_format('s.update_time')} as updateTime,
+                    {_date_format('s.create_time')} as createTime,
                     s.label_flag as labelFlagCode,
 	                case s.label_flag when 1 then '已标注' else '未标注' end as labelFlag,
                     s.sample_score,
@@ -114,7 +317,7 @@ def query_sample_info(set_no: str):
                     set_no = %s
                 order by update_time desc, create_time desc
             """
-            cursor.execute(sql, (set_no,))
+            _execute(cursor, sql, (set_no,))
             return cursor.fetchall()
     finally:
         conn.close()
@@ -128,7 +331,7 @@ def save_sample_set(data: dict):
                 INSERT INTO s_sample_set (set_no, set_name, set_description, business_system, type_code, sample_field)
                 VALUES (%(setCode)s, %(setName)s, %(description)s, %(businessSystem)s, %(sampleTypeCode)s, %(sampleFieldCode)s)
             """
-            cursor.execute(sql, data)
+            _execute(cursor, sql, data)
         conn.commit()
         return cursor.rowcount
     finally:
@@ -143,31 +346,31 @@ def sample_statistic():
             result = {}
 
             # 样本集数量
-            cursor.execute("SELECT COUNT(*) AS setCount FROM s_sample_set")
+            _execute(cursor, "SELECT COUNT(*) AS setCount FROM s_sample_set")
             result["setCount"] = cursor.fetchone()["setCount"]
 
             # 样本总量
-            cursor.execute("SELECT COUNT(*) AS sampleCount FROM s_sample_info")
+            _execute(cursor, "SELECT COUNT(*) AS sampleCount FROM s_sample_info")
             result["sampleCount"] = cursor.fetchone()["sampleCount"]
 
             # 已标注样本数量（label_flag = 1 表示已标注）
-            cursor.execute("SELECT COUNT(*) AS labeledCount FROM s_sample_info WHERE label_flag = 1")
+            _execute(cursor, "SELECT COUNT(*) AS labeledCount FROM s_sample_info WHERE label_flag = 1")
             result["labeledCount"] = cursor.fetchone()["labeledCount"]
 
             # 高质量样本数量（sample_score = '01' 表示优质）
-            cursor.execute("SELECT COUNT(*) AS highQualityCount FROM s_sample_info WHERE sample_score = '01'")
+            _execute(cursor, "SELECT COUNT(*) AS highQualityCount FROM s_sample_info WHERE sample_score = '01'")
             result["highQualityCount"] = cursor.fetchone()["highQualityCount"]
 
             # 本月新增样本
-            cursor.execute("SELECT COUNT(*) AS monthNewCount FROM s_sample_info WHERE DATE_FORMAT(create_time, '%%Y-%%m') = DATE_FORMAT(CURDATE(), '%%Y-%%m')", ())
+            _execute(cursor, f"SELECT COUNT(*) AS monthNewCount FROM s_sample_info WHERE {_date_format_month('create_time')} = {_date_format_month(_curdate())}", ())
             result["monthNewCount"] = cursor.fetchone()["monthNewCount"]
 
             # 本月高质量样本
-            cursor.execute("SELECT COUNT(*) AS monthQualityCount FROM s_sample_info WHERE DATE_FORMAT(create_time, '%%Y-%%m') = DATE_FORMAT(CURDATE(), '%%Y-%%m') AND sample_score = '01'", ())
+            _execute(cursor, f"SELECT COUNT(*) AS monthQualityCount FROM s_sample_info WHERE {_date_format_month('create_time')} = {_date_format_month(_curdate())} AND sample_score = '01'", ())
             result["monthQualityCount"] = cursor.fetchone()["monthQualityCount"]
 
             # 平均样本质量（数值映射法：01→100, 02→85, 03→70, 04→50）
-            cursor.execute("""
+            _execute(cursor, """
                 SELECT AVG(CASE sample_score
                     WHEN '01' THEN 100
                     WHEN '02' THEN 85
@@ -195,12 +398,12 @@ def sample_statistic():
                 result["avgQualityName"] = "未评分"
 
             # 样本覆盖领域（sample_field 去重计数）
-            cursor.execute("SELECT COUNT(DISTINCT sample_field) AS domainCount FROM s_sample_set WHERE sample_field IS NOT NULL AND sample_field != ''")
+            _execute(cursor, "SELECT COUNT(DISTINCT sample_field) AS domainCount FROM s_sample_set WHERE sample_field IS NOT NULL AND sample_field != ''")
             result["domainCount"] = cursor.fetchone()["domainCount"]
 
             # 领域分布
-            cursor.execute("""
-                SELECT 
+            _execute(cursor, """
+                SELECT
                     (
                     select
                         scd.code_name
@@ -220,24 +423,26 @@ def sample_statistic():
             result["domainDistribution"] = cursor.fetchall()
 
             # 质量等级分布（sample_score 为编码：01-优质/02-良好/03-一般/04-较差）
-            cursor.execute("""
+            quality_case = (
+                "CASE sample_score "
+                "WHEN '01' THEN '优质' "
+                "WHEN '02' THEN '良好' "
+                "WHEN '03' THEN '一般' "
+                "WHEN '04' THEN '较差' "
+                "ELSE '未评分' END"
+            )
+            _execute(cursor, f"""
                 SELECT
-                    CASE sample_score
-                        WHEN '01' THEN '优质'
-                        WHEN '02' THEN '良好'
-                        WHEN '03' THEN '一般'
-                        WHEN '04' THEN '较差'
-                        ELSE '未评分'
-                    END AS qualityName,
+                    {quality_case} AS qualityName,
                     COUNT(*) AS count
                 FROM s_sample_info
-                GROUP BY qualityName
-                ORDER BY FIELD(qualityName, '优质', '良好', '一般', '较差', '未评分')
+                GROUP BY {quality_case}
+                ORDER BY {_field_order_expr("qualityName", '优质', '良好', '一般', '较差', '未评分')}
             """)
             result["qualityDistribution"] = cursor.fetchall()
 
             # 样本类型分布（按s_sample_set的type_code关联s_sample_info统计）
-            cursor.execute("""
+            _execute(cursor, """
                 SELECT
                     (SELECT scd.code_name FROM sys_code_dict scd
                      WHERE scd.code_value = s.type_code AND scd.sort_no = 'SAMPLE_TYPE') AS typeName,
@@ -260,13 +465,14 @@ def sample_trend():
     conn = get_connection()
     try:
         with conn.cursor() as cursor:
-            cursor.execute("""
+            month_expr = _date_format_month('create_time')
+            _execute(cursor, f"""
                 SELECT
-                    DATE_FORMAT(create_time, '%%Y-%%m') AS month,
+                    {month_expr} AS month,
                     COUNT(*) AS count
                 FROM s_sample_info
-                WHERE create_time >= DATE_SUB(CURDATE(), INTERVAL 5 MONTH)
-                GROUP BY month
+                WHERE create_time >= {_date_sub_month(5)}
+                GROUP BY {month_expr}
                 ORDER BY month ASC
             """, ())
             rows = cursor.fetchall()
@@ -280,13 +486,12 @@ def query_audio_text(sample_no: str, sample_name: str):
     conn = get_connection()
     try:
         with conn.cursor() as cursor:
-            sql = """
+            sql = _limit_sql("""
                 SELECT audio_text
                 FROM s_audio_text
                 WHERE sample_no = %s AND sample_name = %s
-                LIMIT 1
-            """
-            cursor.execute(sql, (sample_no, sample_name))
+            """, 1)
+            _execute(cursor, sql, (sample_no, sample_name))
             row = cursor.fetchone()
             return row["audio_text"] if row else None
     finally:
@@ -302,7 +507,7 @@ def insert_sample_info(set_no: str, sample_name: str, suffix: str, type_code: st
                 INSERT INTO s_sample_info (set_no, sample_name, suffix, type_code, file_path, file_size, label_flag)
                 VALUES (%s, %s, %s, %s, %s, %s, 0)
             """
-            cursor.execute(sql, (set_no, sample_name, suffix, type_code, file_path, file_size))
+            _execute(cursor, sql, (set_no, sample_name, suffix, type_code, file_path, file_size))
         conn.commit()
         return cursor.rowcount
     finally:
@@ -319,7 +524,7 @@ def update_sample_score(sample_no: str, sample_name: str, score_code: str):
                 SET sample_score = %s
                 WHERE sample_no = %s AND sample_name = %s
             """
-            cursor.execute(sql, (score_code, sample_no, sample_name))
+            _execute(cursor, sql, (score_code, sample_no, sample_name))
         conn.commit()
         return cursor.rowcount
     finally:
@@ -336,7 +541,7 @@ def update_label_think(sample_no: str, sample_name: str, label_think: str):
                 SET label_think = %s
                 WHERE sample_no = %s AND sample_name = %s
             """
-            cursor.execute(sql, (label_think, sample_no, sample_name))
+            _execute(cursor, sql, (label_think, sample_no, sample_name))
         conn.commit()
         return cursor.rowcount
     finally:
@@ -350,14 +555,13 @@ def generate_task_no():
     conn = get_connection()
     try:
         with conn.cursor() as cursor:
-            sql = """
+            sql = _limit_sql("""
                 SELECT task_no
                 FROM s_data_collect_task
                 WHERE task_no LIKE %s
                 ORDER BY task_no DESC
-                LIMIT 1
-            """
-            cursor.execute(sql, (today + '%',))
+            """, 1)
+            _execute(cursor, sql, (today + '%',))
             row = cursor.fetchone()
             if row:
                 seq_part = row['task_no'][len(today):]
@@ -375,13 +579,13 @@ def query_data_collect_task():
     conn = get_connection()
     try:
         with conn.cursor() as cursor:
-            sql = """
+            sql = f"""
                 SELECT
                     s.task_no,
                     s.task_name,
                     s.remark,
-                    date_format(s.create_time, '%%Y-%%m-%%d %%H:%%i:%%s') as createTime,
-                    date_format(s.last_execute_time, '%%Y-%%m-%%d %%H:%%i:%%s') as lastExecuteTime,
+                    {_date_format('s.create_time')} as createTime,
+                    {_date_format('s.last_execute_time')} as lastExecuteTime,
                     s.last_execute_flag as lastExecuteFlagCode,
                     CASE
                         WHEN s.last_execute_flag = 0 THEN '未执行'
@@ -397,26 +601,33 @@ def query_data_collect_task():
                         sys_code_dict scd
                     where
                         scd.code_value = s.task_status
-                        and scd.sort_no = 'DATA_COLLECT_TASK_STATUS') as taskStatusName
+                        and scd.sort_no = 'DATA_COLLECT_TASK_STATUS') as taskStatusName,
+                    s.execute_type as executeTypeCode,
+                    CASE
+                        WHEN s.execute_type = '01' THEN '手动'
+                        WHEN s.execute_type = '02' THEN '定时'
+                        ELSE '手动'
+                    END as executeTypeName,
+                    s.cron_formula as cronFormula
                 FROM s_data_collect_task s
                 ORDER BY s.create_time DESC
             """
-            cursor.execute(sql, ())
+            _execute(cursor, sql, ())
             return cursor.fetchall()
     finally:
         conn.close()
 
 
-def save_data_collect_task(task_no: str, task_name: str, remark: str):
-    """新增数据采集任务"""
+def save_data_collect_task(task_no: str, task_name: str, remark: str, execute_type: str = "01", cron_formula: str = ""):
+    """新增数据采集任务。execute_type: 01-手动 02-定时"""
     conn = get_connection()
     try:
         with conn.cursor() as cursor:
             sql = """
-                INSERT INTO s_data_collect_task (task_no, task_name, remark)
-                VALUES (%s, %s, %s)
+                INSERT INTO s_data_collect_task (task_no, task_name, remark, execute_type, cron_formula)
+                VALUES (%s, %s, %s, %s, %s)
             """
-            cursor.execute(sql, (task_no, task_name, remark))
+            _execute(cursor, sql, (task_no, task_name, remark, execute_type, cron_formula))
         conn.commit()
         return cursor.rowcount
     finally:
@@ -430,11 +641,11 @@ def save_data_collect_task_det(data: dict):
         with conn.cursor() as cursor:
             sql = """
                 INSERT INTO s_data_collect_task_det
-                    (task_no, source_db_type, source_db_host, source_db_port, source_db_usr, source_db_pwd, target_table, collect_sql)
+                    (task_no, source_db_type, source_db_host, source_db_port, source_db_usr, source_db_pwd, source_db_name, target_table, collect_sql)
                 VALUES
-                    (%(taskNo)s, %(sourceDbType)s, %(sourceDbHost)s, %(sourceDbPort)s, %(sourceDbUsr)s, %(sourceDbPwd)s, %(targetTable)s, %(collectSql)s)
+                    (%(taskNo)s, %(sourceDbType)s, %(sourceDbHost)s, %(sourceDbPort)s, %(sourceDbUsr)s, %(sourceDbPwd)s, %(sourceDbName)s, %(targetTable)s, %(collectSql)s)
             """
-            cursor.execute(sql, data)
+            _execute(cursor, sql, data)
         conn.commit()
         return cursor.rowcount
     finally:
@@ -442,34 +653,37 @@ def save_data_collect_task_det(data: dict):
 
 
 def query_data_collect_task_det(task_no: str):
-    """查询任务明细"""
+    """查询任务明细（含主表的执行方式信息）"""
     conn = get_connection()
     try:
         with conn.cursor() as cursor:
-            sql = """
+            sql = _limit_sql(f"""
                 SELECT
-                    task_no,
-                    source_db_type,
-                    source_db_host,
-                    source_db_port,
-                    source_db_usr,
-                    source_db_pwd,
-                    target_table,
-                    collect_sql,
-                    date_format(last_execute_time, '%%Y-%%m-%%d %%H:%%i:%%s') as lastExecuteTime,
-                    last_execute_flag as lastExecuteFlagCode,
+                    d.task_no,
+                    d.source_db_type,
+                    d.source_db_host,
+                    d.source_db_port,
+                    d.source_db_usr,
+                    d.source_db_pwd,
+                    d.source_db_name,
+                    d.target_table,
+                    d.collect_sql,
+                    {_date_format('d.last_execute_time')} as lastExecuteTime,
+                    d.last_execute_flag as lastExecuteFlagCode,
                     CASE
-                        WHEN last_execute_flag = 0 THEN '未执行'
-                        WHEN last_execute_flag = 1 THEN '成功'
-                        WHEN last_execute_flag = 2 THEN '失败'
+                        WHEN d.last_execute_flag = 0 THEN '未执行'
+                        WHEN d.last_execute_flag = 1 THEN '成功'
+                        WHEN d.last_execute_flag = 2 THEN '失败'
                         ELSE '未执行'
-                    END as lastExecuteFlagName
-                FROM s_data_collect_task_det
-                WHERE task_no = %s
-                ORDER BY record_id DESC
-                LIMIT 1
-            """
-            cursor.execute(sql, (task_no,))
+                    END as lastExecuteFlagName,
+                    t.execute_type as executeType,
+                    t.cron_formula as cronFormula
+                FROM s_data_collect_task_det d
+                LEFT JOIN s_data_collect_task t ON t.task_no = d.task_no
+                WHERE d.task_no = %s
+                ORDER BY d.record_id DESC
+            """, 1)
+            _execute(cursor, sql, (task_no,))
             return cursor.fetchone()
     finally:
         conn.close()
@@ -487,11 +701,12 @@ def update_data_collect_task_det(data: dict):
                     source_db_port = %(sourceDbPort)s,
                     source_db_usr = %(sourceDbUsr)s,
                     source_db_pwd = %(sourceDbPwd)s,
+                    source_db_name = %(sourceDbName)s,
                     target_table = %(targetTable)s,
                     collect_sql = %(collectSql)s
                 WHERE task_no = %(taskNo)s
             """
-            cursor.execute(sql, data)
+            _execute(cursor, sql, data)
         conn.commit()
         return cursor.rowcount
     finally:
@@ -505,16 +720,15 @@ def get_task_det_raw(task_no: str):
     conn = get_connection()
     try:
         with conn.cursor() as cursor:
-            sql = """
+            sql = _limit_sql("""
                 SELECT
                     task_no, source_db_type, source_db_host, source_db_port,
-                    source_db_usr, source_db_pwd, target_table, collect_sql
+                    source_db_usr, source_db_pwd, source_db_name, target_table, collect_sql
                 FROM s_data_collect_task_det
                 WHERE task_no = %s
                 ORDER BY record_id DESC
-                LIMIT 1
-            """
-            cursor.execute(sql, (task_no,))
+            """, 1)
+            _execute(cursor, sql, (task_no,))
             row = cursor.fetchone()
             if row and row.get("collect_sql") and isinstance(row["collect_sql"], bytes):
                 row["collect_sql"] = row["collect_sql"].decode("utf-8")
@@ -529,67 +743,217 @@ def update_task_status(task_no: str, status: str, last_execute_flag: int = None)
     try:
         with conn.cursor() as cursor:
             if last_execute_flag is not None:
-                sql = """
+                sql = f"""
                     UPDATE s_data_collect_task
-                    SET task_status = %s, last_execute_time = NOW(), last_execute_flag = %s
+                    SET task_status = %s, last_execute_time = {_now()}, last_execute_flag = %s
                     WHERE task_no = %s
                 """
-                cursor.execute(sql, (status, last_execute_flag, task_no))
+                _execute(cursor, sql, (status, last_execute_flag, task_no))
             else:
-                sql = """
+                sql = f"""
                     UPDATE s_data_collect_task
-                    SET task_status = %s, last_execute_time = NOW()
+                    SET task_status = %s, last_execute_time = {_now()}
                     WHERE task_no = %s
                 """
-                cursor.execute(sql, (status, task_no))
+                _execute(cursor, sql, (status, task_no))
         conn.commit()
         return cursor.rowcount
     finally:
         conn.close()
 
 
-def insert_collect_log(task_no: str):
-    """插入执行日志，返回 log_id"""
+def insert_collect_log(task_no: str, log_content: str = None):
+    """插入执行日志，返回 log_id。可同时写入初始日志内容"""
+    conn = get_connection()
+    try:
+        with conn.cursor() as cursor:
+            if _is_oracle():
+                sql = f"""
+                    INSERT INTO s_data_collect_log (task_no, start_time, execute_status, execute_log)
+                    VALUES (:1, {_now()}, 0, :2)
+                    RETURNING log_id INTO :3
+                """
+                bind_var = cursor.var(int)
+                cursor.execute(sql, [task_no, log_content, bind_var])
+                new_id = bind_var.getvalue()[0]
+            else:
+                sql = f"""
+                    INSERT INTO s_data_collect_log (task_no, start_time, execute_status, execute_log)
+                    VALUES (%s, {_now()}, 0, %s)
+                """
+                _execute(cursor, sql, (task_no, log_content))
+                new_id = cursor.lastrowid
+        conn.commit()
+        return new_id
+    finally:
+        conn.close()
+
+
+def append_collect_log(log_id: int, log_content: str):
+    """追加执行日志内容，在已有 execute_log 后追加新行"""
+    from datetime import datetime
+    timestamp = datetime.now().strftime('%Y-%m-%d %H%M%S')
+    new_line = f"[{timestamp}] {log_content}"
     conn = get_connection()
     try:
         with conn.cursor() as cursor:
             sql = """
-                INSERT INTO s_data_collect_log (task_no, start_time, execute_status)
-                VALUES (%s, NOW(), 0)
+                SELECT execute_log FROM s_data_collect_log WHERE record_id = %s
             """
-            cursor.execute(sql, (task_no,))
+            _execute(cursor, sql, (log_id,))
+            row = cursor.fetchone()
+            existing = row["execute_log"] if row and row["execute_log"] else ""
+            if existing:
+                updated = existing + "\n" + new_line
+            else:
+                updated = new_line
+            sql = """
+                UPDATE s_data_collect_log SET execute_log = %s WHERE record_id = %s
+            """
+            _execute(cursor, sql, (updated, log_id))
         conn.commit()
-        return cursor.lastrowid
     finally:
         conn.close()
 
 
-def finish_collect_log(log_id: int, success: bool, fail_info: str = None):
-    """更新执行日志：结束时间、执行结果、错误信息"""
+def finish_collect_log(log_id: int, success: bool, log_content: str = None):
+    """更新执行日志：结束时间、执行结果、追加日志"""
     conn = get_connection()
     try:
         with conn.cursor() as cursor:
-            if fail_info:
+            # 先追加日志内容
+            if log_content:
+                from datetime import datetime
+                timestamp = datetime.now().strftime('%Y-%m-%d %H%M%S')
+                new_line = f"[{timestamp}] {log_content}"
                 sql = """
+                    SELECT execute_log FROM s_data_collect_log WHERE record_id = %s
+                """
+                _execute(cursor, sql, (log_id,))
+                row = cursor.fetchone()
+                existing = row["execute_log"] if row and row["execute_log"] else ""
+                if existing:
+                    updated = existing + "\n" + new_line
+                else:
+                    updated = new_line
+                sql = f"""
                     UPDATE s_data_collect_log
-                    SET end_time = NOW(), execute_status = %s, fail_info = %s
+                    SET end_time = {_now()}, execute_status = %s, execute_log = %s
                     WHERE record_id = %s
                 """
-                cursor.execute(sql, (1 if success else 0, fail_info, log_id))
+                _execute(cursor, sql, (1 if success else 0, updated, log_id))
             else:
-                sql = """
+                sql = f"""
                     UPDATE s_data_collect_log
-                    SET end_time = NOW(), execute_status = %s
+                    SET end_time = {_now()}, execute_status = %s
                     WHERE record_id = %s
                 """
-                cursor.execute(sql, (1 if success else 0, log_id))
+                _execute(cursor, sql, (1 if success else 0, log_id))
         conn.commit()
         return cursor.rowcount
     finally:
         conn.close()
 
 
-def execute_source_sql(db_type: str, host: str, port: str, user: str, pwd: str, sql: str):
+def query_collect_log(task_no: str):
+    """查询任务执行记录列表"""
+    conn = get_connection()
+    try:
+        with conn.cursor() as cursor:
+            sql = f"""
+                SELECT
+                    record_id,
+                    task_no,
+                    {_date_format('start_time')} as startTime,
+                    {_date_format('end_time')} as endTime,
+                    execute_status as executeStatusCode,
+                    CASE
+                        WHEN execute_status = 1 THEN '成功'
+                        WHEN end_time IS NULL THEN '执行中'
+                        ELSE '失败'
+                    END as executeStatusName,
+                    execute_log
+                FROM s_data_collect_log
+                WHERE task_no = %s
+                ORDER BY start_time DESC
+            """
+            _execute(cursor, sql, (task_no,))
+            rows = cursor.fetchall()
+            for row in rows:
+                if row.get("execute_log") and isinstance(row["execute_log"], bytes):
+                    row["execute_log"] = row["execute_log"].decode("utf-8")
+            return rows
+    finally:
+        conn.close()
+
+
+def query_all_scheduled_tasks():
+    """查询所有定时执行方式（execute_type='02'）的采集任务，用于调度器加载"""
+    conn = get_connection()
+    try:
+        with conn.cursor() as cursor:
+            sql = """
+                SELECT task_no, task_name, cron_formula
+                FROM s_data_collect_task
+                WHERE execute_type = '02'
+                  AND cron_formula IS NOT NULL
+                  AND cron_formula <> ''
+            """
+            _execute(cursor, sql, ())
+            return cursor.fetchall()
+    finally:
+        conn.close()
+
+
+def get_task_execute_type(task_no: str):
+    """查询任务当前的执行方式和 cron 表达式"""
+    conn = get_connection()
+    try:
+        with conn.cursor() as cursor:
+            sql = """
+                SELECT execute_type, cron_formula
+                FROM s_data_collect_task
+                WHERE task_no = %s
+            """
+            _execute(cursor, sql, (task_no,))
+            return cursor.fetchone()
+    finally:
+        conn.close()
+
+
+def update_task_execute_type(task_no: str, execute_type: str, cron_formula: str = ""):
+    """更新任务的执行方式和 cron 表达式。execute_type: 01-手动 02-定时"""
+    conn = get_connection()
+    try:
+        with conn.cursor() as cursor:
+            sql = """
+                UPDATE s_data_collect_task
+                SET execute_type = %s, cron_formula = %s
+                WHERE task_no = %s
+            """
+            _execute(cursor, sql, (execute_type, cron_formula, task_no))
+        conn.commit()
+        return cursor.rowcount
+    finally:
+        conn.close()
+
+
+def delete_data_collect_task(task_no: str):
+    """删除数据采集任务及其全部关联数据（明细、字段映射、执行日志）"""
+    conn = get_connection()
+    try:
+        with conn.cursor() as cursor:
+            _execute(cursor, "DELETE FROM s_data_collect_col_map WHERE task_no = %s", (task_no,))
+            _execute(cursor, "DELETE FROM s_data_collect_log WHERE task_no = %s", (task_no,))
+            _execute(cursor, "DELETE FROM s_data_collect_task_det WHERE task_no = %s", (task_no,))
+            _execute(cursor, "DELETE FROM s_data_collect_task WHERE task_no = %s", (task_no,))
+        conn.commit()
+        return cursor.rowcount
+    finally:
+        conn.close()
+
+
+def execute_source_sql(db_type: str, host: str, port: str, user: str, pwd: str, database: str, sql: str):
     """连接源数据库执行SQL，返回 (columns, rows)"""
     if db_type == "01":
         # MySQL
@@ -599,6 +963,7 @@ def execute_source_sql(db_type: str, host: str, port: str, user: str, pwd: str, 
             port=int(port) if port else 3306,
             user=user,
             password=pwd,
+            database=database,
             charset="utf8mb4",
             cursorclass=pymysql.cursors.DictCursor,
             connect_timeout=10,
@@ -611,6 +976,7 @@ def execute_source_sql(db_type: str, host: str, port: str, user: str, pwd: str, 
             port=int(port) if port else 5432,
             user=user,
             password=pwd,
+            database=database,
             connect_timeout=10,
         )
     elif db_type == "03":
@@ -639,13 +1005,65 @@ def execute_source_sql(db_type: str, host: str, port: str, user: str, pwd: str, 
         conn.close()
 
 
+def write_to_target_table(target_table: str, col_map: list[dict], columns: list, rows: list):
+    """根据字段映射将数据写入本地数据库的目标表。
+    col_map: [{source_column, target_colum}, ...]
+    columns: 源SQL查询结果的列名列表
+    rows: 源SQL查询结果的数据行（每行为tuple）
+    返回成功写入的行数
+    """
+    if not col_map:
+        raise ValueError("字段映射配置为空，请先配置字段映射")
+
+    # 构建源列名的小写映射：lowercase列名 -> 原始索引（用于大小写不敏感匹配）
+    columns_lower_map = {col.lower(): i for i, col in enumerate(columns)}
+
+    # 构建映射关系：源列索引 -> 目标列名
+    col_index_map = {}
+    for m in col_map:
+        src_col = m["source_column"]
+        tgt_col = m["target_colum"]
+        src_col_lower = src_col.lower()
+        if src_col_lower in columns_lower_map:
+            col_index_map[columns_lower_map[src_col_lower]] = tgt_col
+
+    if not col_index_map:
+        matched_info = f"映射配置的源列: {[m['source_column'] for m in col_map]}, SQL查询结果的列: {columns}"
+        raise ValueError(f"字段映射中没有匹配到源SQL查询结果的列。{matched_info}")
+
+    # 排序保证顺序一致
+    sorted_indices = sorted(col_index_map.keys())
+    target_columns = [col_index_map[i] for i in sorted_indices]
+
+    # 构建INSERT语句
+    col_names = ", ".join(_quote_ident(c) for c in target_columns)
+    placeholders = ", ".join(["%s"] * len(target_columns))
+    insert_sql = f"INSERT INTO {_quote_ident(target_table)} ({col_names}) VALUES ({placeholders})"
+
+    conn = get_connection()
+    try:
+        with conn.cursor() as cursor:
+            # 先清空目标表旧数据
+            _execute(cursor, f"DELETE FROM {_quote_ident(target_table)}")
+            # 批量插入数据
+            batch_values = []
+            for row in rows:
+                values = tuple(row[i] if i < len(row) else None for i in sorted_indices)
+                batch_values.append(values)
+            _executemany(cursor, insert_sql, batch_values)
+        conn.commit()
+        return cursor.rowcount
+    finally:
+        conn.close()
+
+
 def save_query_result_to_desktop(columns: list, rows: list):
     """将查询结果保存到桌面，文件名格式：测试查询_时分秒"""
     import csv
     import os
     from datetime import datetime
 
-    desktop = r"C:\Users\Administrator\Desktop"
+    desktop = r"C:\Users\Joey\Desktop"
     if not os.path.exists(desktop):
         os.makedirs(desktop, exist_ok=True)
 
@@ -659,3 +1077,427 @@ def save_query_result_to_desktop(columns: list, rows: list):
         writer.writerows(rows)
 
     return filepath
+
+
+def query_target_table_columns(db_type: str, host: str, port: str, user: str, pwd: str, database: str, table_name: str):
+    """查询目标表的字段信息，返回 [{column_name, column_type, column_comment}]"""
+    if db_type == "01":
+        # MySQL
+        import pymysql
+        conn = pymysql.connect(
+            host=host,
+            port=int(port) if port else 3306,
+            user=user,
+            password=pwd,
+            database=database,
+            charset="utf8mb4",
+            cursorclass=pymysql.cursors.DictCursor,
+            connect_timeout=10,
+        )
+        try:
+            with conn.cursor() as cursor:
+                sql = """
+                    SELECT COLUMN_NAME as column_name, COLUMN_TYPE as column_type, COLUMN_COMMENT as column_comment
+                    FROM INFORMATION_SCHEMA.COLUMNS
+                    WHERE TABLE_SCHEMA = %s AND TABLE_NAME = %s
+                    ORDER BY ORDINAL_POSITION
+                """
+                cursor.execute(sql, (database, table_name))
+                return cursor.fetchall()
+        finally:
+            conn.close()
+    elif db_type == "02":
+        # PostgreSQL
+        import psycopg2
+        conn = psycopg2.connect(
+            host=host,
+            port=int(port) if port else 5432,
+            user=user,
+            password=pwd,
+            database=database,
+            connect_timeout=10,
+        )
+        try:
+            with conn.cursor() as cursor:
+                sql = """
+                    SELECT column_name, data_type as column_type, '' as column_comment
+                    FROM information_schema.columns
+                    WHERE table_schema = 'public' AND table_name = %s
+                    ORDER BY ordinal_position
+                """
+                cursor.execute(sql, (table_name,))
+                rows = cursor.fetchall()
+                return [{"column_name": r[0], "column_type": r[1], "column_comment": r[2]} for r in rows]
+        finally:
+            conn.close()
+    elif db_type == "03":
+        # Oracle
+        import oracledb
+        conn = oracledb.connect(user=user, password=pwd, dsn=f"{host}:{port or 1521}")
+        try:
+            with conn.cursor() as cursor:
+                sql = """
+                    SELECT COLUMN_NAME, DATA_TYPE, '' as COMMENTS
+                    FROM ALL_TAB_COLUMNS
+                    WHERE TABLE_NAME = :1 AND OWNER = USER
+                    ORDER BY COLUMN_ID
+                """
+                cursor.execute(sql, (table_name.upper(),))
+                rows = cursor.fetchall()
+                return [{"column_name": r[0], "column_type": r[1], "column_comment": r[2]} for r in rows]
+        finally:
+            conn.close()
+    else:
+        raise ValueError(f"不支持的数据库类型: {db_type}")
+
+
+def query_col_map(task_no: str):
+    """查询任务字段映射配置"""
+    conn = get_connection()
+    try:
+        with conn.cursor() as cursor:
+            sql = """
+                SELECT source_column, target_colum
+                FROM s_data_collect_col_map
+                WHERE task_no = %s
+                ORDER BY record_id
+            """
+            _execute(cursor, sql, (task_no,))
+            return cursor.fetchall()
+    finally:
+        conn.close()
+
+
+def save_col_map(task_no: str, target_table: str, mappings: list[dict]):
+    """保存任务字段映射配置（先删后插），同时更新目标表名"""
+    conn = get_connection()
+    try:
+        with conn.cursor() as cursor:
+            # 更新目标表名
+            _execute(cursor, "UPDATE s_data_collect_task_det SET target_table = %s WHERE task_no = %s", (target_table, task_no))
+            # 删除旧的映射配置
+            _execute(cursor, "DELETE FROM s_data_collect_col_map WHERE task_no = %s", (task_no,))
+            # 插入新的映射配置
+            for m in mappings:
+                sql = """
+                    INSERT INTO s_data_collect_col_map (task_no, source_column, target_colum)
+                    VALUES (%s, %s, %s)
+                """
+                _execute(cursor, sql, (task_no, m.get("sourceColumn", ""), m.get("targetColumn", "")))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+# ==================== 样本数据清理 ====================
+
+def generate_clean_task_no():
+    """生成清理任务编号：YYYYMMDD + 3位序号"""
+    today = datetime.now().strftime('%Y%m%d')
+    conn = get_connection()
+    try:
+        with conn.cursor() as cursor:
+            sql = _limit_sql("SELECT task_no FROM s_data_clean_task WHERE task_no LIKE %s ORDER BY task_no DESC", 1)
+            _execute(cursor, sql, (today + '%',))
+            row = cursor.fetchone()
+            if row:
+                seq = int(row["task_no"][-3:]) + 1
+            else:
+                seq = 1
+            return f"{today}{seq:03d}"
+    finally:
+        conn.close()
+
+
+def query_data_clean_tasks():
+    """查询所有清理任务列表"""
+    conn = get_connection()
+    try:
+        with conn.cursor() as cursor:
+            sql = f"""
+                SELECT
+                    task_no,
+                    task_name,
+                    remark,
+                    task_status,
+                    {_date_format('create_time')} as create_time,
+                    {_date_format('last_execute_time')} as last_execute_time,
+                    last_execute_flag
+                FROM s_data_clean_task
+                ORDER BY create_time DESC
+            """
+            _execute(cursor, sql, ())
+            return cursor.fetchall()
+    finally:
+        conn.close()
+
+
+def save_data_clean_task(task_no: str, task_name: str, remark: str):
+    """新增清理任务"""
+    conn = get_connection()
+    try:
+        with conn.cursor() as cursor:
+            sql = """
+                INSERT INTO s_data_clean_task (task_no, task_name, remark)
+                VALUES (%s, %s, %s)
+            """
+            _execute(cursor, sql, (task_no, task_name, remark))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def save_data_clean_task_nodes(task_no: str, nodes: list[dict]):
+    """保存清理任务流程节点（先删后插）"""
+    conn = get_connection()
+    try:
+        with conn.cursor() as cursor:
+            _execute(cursor, "DELETE FROM s_data_clean_task_node WHERE task_no = %s", (task_no,))
+            for node in nodes:
+                sql = """
+                    INSERT INTO s_data_clean_task_node
+                        (task_no, node_id, node_type, node_name, node_config, pos_x, pos_y, prev_node_id)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                """
+                _execute(cursor, sql, (
+                    task_no,
+                    node.get("nodeId", ""),
+                    node.get("nodeType", ""),
+                    node.get("nodeName", ""),
+                    node.get("nodeConfig", ""),
+                    node.get("posX", 0),
+                    node.get("posY", 0),
+                    node.get("prevNodeId", None),
+                ))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def query_data_clean_task_detail(task_no: str):
+    """查询清理任务详情（含节点列表）"""
+    conn = get_connection()
+    try:
+        with conn.cursor() as cursor:
+            # 查主表
+            _execute(cursor, f"""
+                SELECT
+                    task_no,
+                    task_name,
+                    remark,
+                    task_status,
+                    {_date_format('create_time')} as create_time,
+                    {_date_format('last_execute_time')} as last_execute_time,
+                    last_execute_flag
+                FROM s_data_clean_task
+                WHERE task_no = %s
+            """, (task_no,))
+            task = cursor.fetchone()
+            if not task:
+                return None
+            # 查节点
+            _execute(cursor, """
+                SELECT node_id, node_type, node_name, node_config, pos_x, pos_y, prev_node_id
+                FROM s_data_clean_task_node
+                WHERE task_no = %s
+                ORDER BY record_id
+            """, (task_no,))
+            nodes = cursor.fetchall()
+            task["nodes"] = nodes
+            return task
+    finally:
+        conn.close()
+
+
+def delete_data_clean_task(task_no: str):
+    """删除清理任务及其节点"""
+    conn = get_connection()
+    try:
+        with conn.cursor() as cursor:
+            _execute(cursor, "DELETE FROM s_data_clean_task_node WHERE task_no = %s", (task_no,))
+            _execute(cursor, "DELETE FROM s_data_clean_task WHERE task_no = %s", (task_no,))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def query_database_tables():
+    """查询当前数据库所有表名"""
+    conn = get_connection()
+    try:
+        with conn.cursor() as cursor:
+            _execute(cursor, _show_tables_sql())
+            rows = cursor.fetchall()
+            # DictCursor 返回 {"Tables_in_xxx": "表名"}，取第一个 value
+            return [list(r.values())[0] for r in rows]
+    finally:
+        conn.close()
+
+
+def query_clean_table_columns(table_name: str):
+    """查询指定表的字段列表"""
+    conn = get_connection()
+    try:
+        with conn.cursor() as cursor:
+            _execute(cursor, _show_columns_sql(table_name))
+            return cursor.fetchall()
+    finally:
+        conn.close()
+
+
+def get_clean_task_raw(task_no: str):
+    """查询清理任务原始数据+节点（执行用，不做日期格式化）"""
+    conn = get_connection()
+    try:
+        with conn.cursor() as cursor:
+            _execute(cursor, "SELECT task_no, task_name FROM s_data_clean_task WHERE task_no = %s", (task_no,))
+            task = cursor.fetchone()
+            if not task:
+                return None
+            _execute(cursor, """
+                SELECT node_id, node_type, node_name, node_config, prev_node_id
+                FROM s_data_clean_task_node
+                WHERE task_no = %s
+                ORDER BY record_id
+            """, (task_no,))
+            task["nodes"] = cursor.fetchall()
+            return task
+    finally:
+        conn.close()
+
+
+def update_clean_task_status(task_no: str, task_status: str, last_execute_flag: int = None):
+    """更新清理任务状态"""
+    conn = get_connection()
+    try:
+        with conn.cursor() as cursor:
+            if task_status == "03":
+                _execute(cursor, f"""
+                    UPDATE s_data_clean_task
+                    SET task_status = %s, last_execute_time = {_now()}, last_execute_flag = %s
+                    WHERE task_no = %s
+                """, (task_status, last_execute_flag, task_no))
+            else:
+                _execute(cursor, """
+                    UPDATE s_data_clean_task SET task_status = %s WHERE task_no = %s
+                """, (task_status, task_no))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+# ==================== 样本数据清理执行记录 ====================
+
+def insert_clean_log(task_no: str, log_content: str = None):
+    """新增清理任务执行记录，返回 record_id。可同时写入初始日志内容"""
+    conn = get_connection()
+    try:
+        with conn.cursor() as cursor:
+            if _is_oracle():
+                sql = f"""
+                    INSERT INTO s_data_clean_log (task_no, start_time, execute_status, execute_log)
+                    VALUES (:1, {_now()}, '02', :2)
+                    RETURNING record_id INTO :3
+                """
+                bind_var = cursor.var(int)
+                cursor.execute(sql, [task_no, log_content, bind_var])
+                new_id = bind_var.getvalue()[0]
+            else:
+                sql = f"""
+                    INSERT INTO s_data_clean_log (task_no, start_time, execute_status, execute_log)
+                    VALUES (%s, {_now()}, '02', %s)
+                """
+                _execute(cursor, sql, (task_no, log_content))
+                new_id = cursor.lastrowid
+        conn.commit()
+        return new_id
+    finally:
+        conn.close()
+
+
+def append_clean_log(record_id: int, log_content: str):
+    """追加执行日志内容，在已有 execute_log 后追加新行（带时间戳）"""
+    timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    new_line = f"[{timestamp}] {log_content}"
+    conn = get_connection()
+    try:
+        with conn.cursor() as cursor:
+            sql = "SELECT execute_log FROM s_data_clean_log WHERE record_id = %s"
+            _execute(cursor, sql, (record_id,))
+            row = cursor.fetchone()
+            existing = row["execute_log"] if row and row["execute_log"] else ""
+            updated = (existing + "\n" + new_line) if existing else new_line
+            sql = "UPDATE s_data_clean_log SET execute_log = %s WHERE record_id = %s"
+            _execute(cursor, sql, (updated, record_id))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def finish_clean_log(record_id: int, execute_status: str, total_count: int,
+                     removed_count: int, result_count: int, log_content: str = ""):
+    """完成执行记录：更新状态、结束时间、统计数量，并追加最终日志"""
+    conn = get_connection()
+    try:
+        with conn.cursor() as cursor:
+            # 先追加日志内容
+            if log_content:
+                timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                new_line = f"[{timestamp}] {log_content}"
+                sql = "SELECT execute_log FROM s_data_clean_log WHERE record_id = %s"
+                _execute(cursor, sql, (record_id,))
+                row = cursor.fetchone()
+                existing = row["execute_log"] if row and row["execute_log"] else ""
+                updated = (existing + "\n" + new_line) if existing else new_line
+                sql = f"""
+                    UPDATE s_data_clean_log
+                    SET end_time = {_now()},
+                        execute_status = %s,
+                        total_count = %s,
+                        removed_count = %s,
+                        result_count = %s,
+                        execute_log = %s
+                    WHERE record_id = %s
+                """
+                _execute(cursor, sql, (execute_status, total_count, removed_count, result_count, updated, record_id))
+            else:
+                sql = f"""
+                    UPDATE s_data_clean_log
+                    SET end_time = {_now()},
+                        execute_status = %s,
+                        total_count = %s,
+                        removed_count = %s,
+                        result_count = %s
+                    WHERE record_id = %s
+                """
+                _execute(cursor, sql, (execute_status, total_count, removed_count, result_count, record_id))
+        conn.commit()
+        return cursor.rowcount
+    finally:
+        conn.close()
+
+
+def query_clean_log(task_no: str):
+    """查询清理任务的执行记录列表"""
+    conn = get_connection()
+    try:
+        with conn.cursor() as cursor:
+            sql = f"""
+                SELECT
+                    record_id,
+                    task_no,
+                    {_date_format('start_time')} as start_time,
+                    {_date_format('end_time')} as end_time,
+                    execute_status,
+                    total_count,
+                    removed_count,
+                    result_count,
+                    {_cast_text_as_char('execute_log')} as execute_log
+                FROM s_data_clean_log
+                WHERE task_no = %s
+                ORDER BY start_time DESC
+            """
+            _execute(cursor, sql, (task_no,))
+            return cursor.fetchall()
+    finally:
+        conn.close()
