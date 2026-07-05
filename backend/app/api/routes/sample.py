@@ -4,7 +4,11 @@ from pydantic import BaseModel
 from app.core.database import query_code_dict, query_sample_set, query_sample_info, save_sample_set, sample_statistic, sample_trend, query_audio_text, update_sample_score, insert_sample_info, update_label_think, generate_task_no, query_data_collect_task, save_data_collect_task, save_data_collect_task_det, query_data_collect_task_det, update_data_collect_task_det, get_task_det_raw, update_task_status, insert_collect_log, append_collect_log, finish_collect_log, query_collect_log, query_all_scheduled_tasks, get_task_execute_type, update_task_execute_type, delete_data_collect_task, execute_source_sql, save_query_result_to_desktop, query_target_table_columns, query_col_map, save_col_map, write_to_target_table
 import os
 import io
+import logging
 import zipfile
+import traceback
+
+logger = logging.getLogger("app.sample")
 
 router = APIRouter()
 
@@ -43,6 +47,7 @@ def query_sample_set_api():
             data.append(item)
         return {"code": 0, "data": data}
     except Exception as e:
+        logger.exception("接口异常")
         return {"code": 1, "message": f"查询失败: {str(e)}"}
 
 
@@ -53,6 +58,7 @@ def sample_statistic_api():
         data = sample_statistic()
         return {"code": 0, "data": data}
     except Exception as e:
+        logger.exception("接口异常")
         return {"code": 1, "message": f"统计失败: {str(e)}"}
 
 
@@ -65,6 +71,7 @@ def sample_trend_api():
         counts = [row["count"] for row in rows]
         return {"code": 0, "data": {"months": months, "counts": counts}}
     except Exception as e:
+        logger.exception("接口异常")
         return {"code": 1, "message": f"获取趋势数据失败: {str(e)}"}
 
 
@@ -84,6 +91,7 @@ def get_samples_api(setNo: str = Query(..., description="样本集编号")):
             data.append(item)
         return {"code": 0, "data": data}
     except Exception as e:
+        logger.exception("接口异常")
         return {"code": 1, "message": f"查询失败: {str(e)}"}
 
 
@@ -110,6 +118,7 @@ def save_sample_set_api(req: SaveSampleSetRequest):
         rowcount = save_sample_set(req.model_dump())
         return {"code": 0, "message": "保存成功", "data": {"rowcount": rowcount}}
     except Exception as e:
+        logger.exception("接口异常")
         return {"code": 1, "message": f"保存失败: {str(e)}"}
 
 
@@ -125,6 +134,7 @@ def update_sample_score_api(req: UpdateSampleScoreRequest):
             return {"code": 1, "message": "未找到对应样本"}
         return {"code": 0, "message": "评分成功"}
     except Exception as e:
+        logger.exception("接口异常")
         return {"code": 1, "message": f"评分失败: {str(e)}"}
 
 
@@ -222,6 +232,7 @@ def get_audio_text(sampleNo: str = Query(..., description="样本编号"), sampl
         audio_text = query_audio_text(sampleNo, sampleName)
         return {"code": 0, "data": {"audioText": audio_text}}
     except Exception as e:
+        logger.exception("接口异常")
         return {"code": 1, "message": f"查询转写文字失败: {str(e)}"}
 
 
@@ -233,6 +244,7 @@ def download_sample_set(setNo: str = Query(..., description="样本集编号"), 
     try:
         samples = query_sample_info(setNo)
     except Exception as e:
+        logger.exception("接口异常")
         return {"code": 1, "message": f"查询样本失败: {str(e)}"}
 
     if not samples:
@@ -350,6 +362,7 @@ async def update_label_think_api(payload: dict):
         update_label_think(sample_no, sample_name, label_think)
         return {"code": 0, "message": "保存成功"}
     except Exception as e:
+        logger.exception("接口异常")
         return {"code": 1, "message": f"保存失败: {str(e)}"}
 
 
@@ -370,6 +383,7 @@ def query_collect_task_api():
             data.append(item)
         return {"code": 0, "data": data}
     except Exception as e:
+        logger.exception("接口异常")
         return {"code": 1, "message": f"查询失败: {str(e)}"}
 
 
@@ -399,6 +413,7 @@ def save_collect_task_api(payload: dict):
 
         return {"code": 0, "message": "保存成功", "data": {"taskNo": task_no}}
     except Exception as e:
+        logger.exception("接口异常")
         return {"code": 1, "message": f"保存失败: {str(e)}"}
 
 
@@ -422,6 +437,7 @@ def query_collect_task_det_api(taskNo: str = Query(..., description="任务编�
             item[camel] = v
         return {"code": 0, "data": item}
     except Exception as e:
+        logger.exception("接口异常")
         return {"code": 1, "message": f"查询失败: {str(e)}"}
 
 
@@ -437,11 +453,12 @@ def save_collect_task_det_api(payload: dict):
     source_db_name = payload.get("sourceDbName", "").strip()
     target_table = payload.get("targetTable", "").strip()
     collect_sql = payload.get("collectSql", "").strip()
+    source_db_auth = payload.get("sourceDbAuth", "").strip()
 
     if not task_no:
         return {"code": 1, "message": "任务编号不能为空"}
-    if not source_db_type or not source_db_host or not source_db_usr or not collect_sql or not target_table:
-        return {"code": 1, "message": "数据库类型、地址、用户名、SQL、目标表不能为空"}
+    if not source_db_type or not source_db_host or not source_db_usr or not collect_sql:
+        return {"code": 1, "message": "数据库类型、地址、用户名、SQL不能为空"}
 
     data = {
         "taskNo": task_no,
@@ -453,6 +470,7 @@ def save_collect_task_det_api(payload: dict):
         "sourceDbName": source_db_name,
         "targetTable": target_table,
         "collectSql": collect_sql,
+        "sourceDbAuth": source_db_auth,
     }
 
     try:
@@ -467,6 +485,7 @@ def save_collect_task_det_api(payload: dict):
             save_data_collect_task_det(data)
             return {"code": 0, "message": "保存成功"}
     except Exception as e:
+        logger.exception("接口异常")
         return {"code": 1, "message": f"保存失败: {str(e)}"}
 
 
@@ -535,6 +554,7 @@ def execute_collect_task_internal(task_no: str, trigger_source: str = "manual") 
             pwd=det.get("source_db_pwd") or "",
             database=det.get("source_db_name") or "",
             sql=collect_sql,
+            auth=det.get("source_db_auth") or "",
         )
 
         # 追加日志：数据获取成功
@@ -590,6 +610,7 @@ def stop_collect_task_api(req: ExecuteCollectTaskRequest):
         update_task_status(task_no, "04")
         return {"code": 0, "message": "已停止"}
     except Exception as e:
+        logger.exception("接口异常")
         return {"code": 1, "message": f"停止失败: {str(e)}"}
 
 
@@ -609,6 +630,7 @@ def delete_collect_task_api(req: ExecuteCollectTaskRequest):
     try:
         delete_data_collect_task(task_no)
     except Exception as e:
+        logger.exception("接口异常")
         return {"code": 1, "message": f"删除失败: {str(e)}"}
 
     # 同步移除定时调度（无论原执行方式，统一调用 remove 静默处理不存在的情况）
@@ -653,6 +675,7 @@ def update_collect_task_exec_type_api(req: UpdateExecTypeRequest):
     try:
         update_task_execute_type(task_no, execute_type, cron_formula)
     except Exception as e:
+        logger.exception("接口异常")
         return {"code": 1, "message": f"保存失败: {str(e)}"}
 
     # 同步调度器
@@ -690,6 +713,7 @@ def query_collect_task_exec_type_api(taskNo: str = Query(..., description="任�
             },
         }
     except Exception as e:
+        logger.exception("接口异常")
         return {"code": 1, "message": f"查询失败: {str(e)}"}
 
 
@@ -710,6 +734,7 @@ def query_collect_log_api(taskNo: str = Query(..., description="任务编号")):
             data.append(item)
         return {"code": 0, "data": data}
     except Exception as e:
+        logger.exception("接口异常")
         return {"code": 1, "message": f"查询失败: {str(e)}"}
 
 
@@ -720,35 +745,30 @@ class QueryTableColumnsRequest(BaseModel):
 
 @router.post("/query-table-columns")
 def query_table_columns_api(req: QueryTableColumnsRequest):
-    """查询目标表的字段信息"""
-    task_no = req.taskNo.strip()
+    """查询目标表的字段信息（从项目自身数据库查询）"""
     table_name = req.tableName.strip()
-    if not task_no or not table_name:
-        return {"code": 1, "message": "任务编号和表名不能为空"}
-
-    det = get_task_det_raw(task_no)
-    if not det:
-        return {"code": 1, "message": "未找到任务明细"}
+    if not table_name:
+        return {"code": 1, "message": "表名不能为空"}
 
     try:
-        columns = query_target_table_columns(
-            db_type=det["source_db_type"],
-            host=det["source_db_host"],
-            port=str(det.get("source_db_port") or ""),
-            user=det["source_db_usr"],
-            pwd=det.get("source_db_pwd") or "",
-            database=det.get("source_db_name") or "",
-            table_name=table_name,
-        )
-        data = []
-        for col in columns:
-            data.append({
-                "columnName": col["column_name"],
-                "columnType": col["column_type"],
-                "columnComment": col.get("column_comment", ""),
-            })
-        return {"code": 0, "data": data}
+        from app.core.database import _is_oracle, _show_columns_sql, _execute, get_connection
+        conn = get_connection()
+        try:
+            with conn.cursor() as cursor:
+                _execute(cursor, _show_columns_sql(table_name))
+                rows = cursor.fetchall()
+                data = []
+                for col in rows:
+                    data.append({
+                        "columnName": col.get("field", col.get("Field", "")),
+                        "columnType": col.get("col_type", col.get("Type", "")),
+                        "columnComment": col.get("col_comment", col.get("Comment", "")),
+                    })
+                return {"code": 0, "data": data}
+        finally:
+            conn.close()
     except Exception as e:
+        logger.exception("接口异常")
         return {"code": 1, "message": f"查询表字段失败: {str(e)}"}
 
 
@@ -765,6 +785,7 @@ def query_col_map_api(taskNo: str = Query(..., description="任务编号")):
             })
         return {"code": 0, "data": data}
     except Exception as e:
+        logger.exception("接口异常")
         return {"code": 1, "message": f"查询映射失败: {str(e)}"}
 
 
@@ -782,4 +803,5 @@ def save_col_map_api(payload: dict):
         save_col_map(task_no, target_table, mappings)
         return {"code": 0, "message": "保存成功"}
     except Exception as e:
+        logger.exception("接口异常")
         return {"code": 1, "message": f"保存失败: {str(e)}"}

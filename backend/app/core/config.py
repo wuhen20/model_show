@@ -1,4 +1,26 @@
-from pydantic_settings import BaseSettings
+from pathlib import Path
+
+from pydantic_settings import BaseSettings, DotEnvSettingsSource
+
+
+class _MultiEncodingDotEnvSource(DotEnvSettingsSource):
+    """先尝试 UTF-8，失败后回退 GBK/ANSI，兼容 Windows 记事本保存的 .env 文件。"""
+
+    def _read_env_file(self, file_path: Path | None) -> dict[str, str | None]:
+        if file_path is None or not file_path.is_file():
+            return {}
+        # 先 UTF-8
+        try:
+            return super()._read_env_file(file_path)
+        except UnicodeDecodeError:
+            pass
+        # 回退 GBK
+        saved = self.env_file_encoding
+        self.env_file_encoding = "gbk"
+        try:
+            return super()._read_env_file(file_path)
+        finally:
+            self.env_file_encoding = saved
 
 
 class Settings(BaseSettings):
@@ -27,6 +49,8 @@ class Settings(BaseSettings):
     db_user: str = "root"
     db_password: str = "Faker@T169"
     db_name: str = "sample_platform"  # Oracle 模式下为 SID/服务名
+    db_schema: str = ""               # Oracle 模式下设置默认 schema（如 PDBADMIN），为空则不切换
+    db_mode: str = ""  # Oracle 连接模式：sysdba / sysoper / 空（普通用户不需要填）
     sample_upload_dir: str = "E:\人工智能\现场作业专家系统"
 
     # ---- 知识管理 · LightRAG ----
@@ -117,6 +141,21 @@ class Settings(BaseSettings):
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"
+        extra = "ignore"  # .env 中有未声明的变量时忽略而非报错
+
+    @classmethod
+    def settings_customise_sources(cls, settings_cls, init_settings, env_settings, dotenv_settings, file_secret_settings):
+        # 用多编码回退的 DotEnv source 替换默认的
+        return (
+            init_settings,
+            env_settings,
+            _MultiEncodingDotEnvSource(
+                settings_cls,
+                env_file=cls.Config.env_file,
+                env_file_encoding=cls.Config.env_file_encoding,
+            ),
+            file_secret_settings,
+        )
 
 
 settings = Settings()

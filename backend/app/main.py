@@ -1,10 +1,18 @@
 import os
 import sys
+import logging
 from pathlib import Path
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+
+# 配置日志：输出到终端，便于排查接口异常
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+)
+logger = logging.getLogger("app")
 
 # ---------------------------------------------------------------------------
 # 确保后端根目录在 sys.path 中，以便导入集成进来的时序功能包

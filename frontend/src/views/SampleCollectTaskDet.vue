@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import Header from '@/components/Header.vue'
 import Sidebar from '@/components/Sidebar.vue'
@@ -63,7 +63,23 @@ const form = ref({
   sourceDbPwd: '',
   sourceDbName: '',
   targetTable: '',
-  collectSql: ''
+  collectSql: '',
+  sourceDbAuth: 'NONE'
+})
+
+// Hive 认证方式选项
+const hiveAuthOptions = [
+  { value: 'NONE', label: 'NONE（无认证）' },
+  { value: 'LDAP', label: 'LDAP' },
+  { value: 'PLAIN', label: 'PLAIN' },
+  { value: 'KERBEROS', label: 'KERBEROS' },
+  { value: 'CUSTOM', label: 'CUSTOM' }
+]
+
+// 是否为 Hive 数据源（根据字典 label 名称判断，兼容不同编码值）
+const isHiveSource = computed(() => {
+  const opt = dbTypeOptions.value.find(o => o.value === form.value.sourceDbType)
+  return opt ? opt.label.toUpperCase() === 'HIVE' : false
 })
 
 // 执行结果信息
@@ -99,7 +115,8 @@ async function loadTaskDet() {
         sourceDbPwd: det.sourceDbPwd || '',
         sourceDbName: det.sourceDbName || '',
         targetTable: det.targetTable || '',
-        collectSql: det.collectSql || ''
+        collectSql: det.collectSql || '',
+        sourceDbAuth: det.sourceDbAuth || 'NONE'
       }
       execInfo.value = {
         lastExecuteTime: det.lastExecuteTime || '',
@@ -134,6 +151,10 @@ async function handleSaveSource() {
     ElMessage.warning('请输入采集SQL')
     return
   }
+  if (form.value.sourceDbType === '03' && !form.value.sourceDbAuth) {
+    ElMessage.warning('Hive 数据源请选择认证方式')
+    return
+  }
 
   savingSource.value = true
   try {
@@ -146,7 +167,8 @@ async function handleSaveSource() {
       sourceDbPwd: form.value.sourceDbPwd.trim(),
       sourceDbName: form.value.sourceDbName.trim(),
       targetTable: form.value.targetTable.trim(),
-      collectSql: form.value.collectSql.trim()
+      collectSql: form.value.collectSql.trim(),
+      sourceDbAuth: form.value.sourceDbAuth
     })
     ElMessage.success('源数据配置保存成功')
   } catch (e: any) {
@@ -164,6 +186,35 @@ const columnsQueried = ref(false)
 // 映射列表：每行 { sourceColumn, targetColumn }
 const mappings = ref<ColMapItem[]>([])
 
+/** 从 SELECT ... FROM 形式的 SQL 中提取列别名（忽略大小写） */
+function extractSelectAliases(sql: string): string[] {
+  const fromMatch = sql.match(/\bFROM\b/i)
+  if (!fromMatch || fromMatch.index === undefined) return []
+  const selectPart = sql.substring(sql.search(/\bSELECT\b/i) + 6, fromMatch.index)
+  // 按顶层逗号分割列
+  const cols: string[] = []
+  let depth = 0
+  let start = 0
+  for (let i = 0; i < selectPart.length; i++) {
+    const ch = selectPart[i]
+    if (ch === '(') depth++
+    else if (ch === ')') depth--
+    else if (ch === ',' && depth === 0) {
+      cols.push(selectPart.substring(start, i).trim())
+      start = i + 1
+    }
+  }
+  cols.push(selectPart.substring(start).trim())
+  // 提取每列的别名：优先取 AS 后的部分，否则取列名本身
+  return cols.map(c => {
+    const asMatch = c.match(/\bAS\s+(\w+)\s*$/i)
+    if (asMatch) return asMatch[1]
+    // 无 AS 时取最后一个 . 后的部分或整体（去掉表别名前缀）
+    const lastWord = c.split('.').pop() || c
+    return lastWord.trim()
+  }).filter(s => s.length > 0)
+}
+
 async function handleQueryColumns() {
   if (!form.value.targetTable.trim()) {
     ElMessage.warning('请先输入目标表名')
@@ -173,17 +224,25 @@ async function handleQueryColumns() {
   try {
     tableColumns.value = await queryTableColumns(taskNo.value, form.value.targetTable.trim())
     columnsQueried.value = true
-    // 初始化映射：为每个目标字段创建一行空映射
-    mappings.value = tableColumns.value.map(col => ({
-      sourceColumn: '',
-      targetColumn: col.columnName
-    }))
-    // 加载已有映射并回填
+    // 从采集SQL中提取源列别名，用于自动匹配
+    const sourceAliases = form.value.collectSql ? extractSelectAliases(form.value.collectSql) : []
+    const sourceLowerMap = new Map<string, string>()
+    sourceAliases.forEach(a => sourceLowerMap.set(a.toLowerCase(), a))
+    // 初始化映射：为每个目标字段创建一行，自动匹配源字段（忽略大小写）
+    mappings.value = tableColumns.value.map(col => {
+      const matched = sourceLowerMap.get(col.columnName.toLowerCase())
+      return {
+        sourceColumn: matched || '',
+        targetColumn: col.columnName
+      }
+    })
+    // 加载已有映射并回填（忽略大小写）
     const existingMaps = await queryColMap(taskNo.value)
     if (existingMaps && existingMaps.length > 0) {
-      // 将已有映射回填到对应的源字段列
       for (const map of existingMaps) {
-        const idx = mappings.value.findIndex(m => m.targetColumn === map.targetColumn)
+        const idx = mappings.value.findIndex(
+          m => m.targetColumn.toLowerCase() === (map.targetColumn || '').toLowerCase()
+        )
         if (idx !== -1) {
           mappings.value[idx].sourceColumn = map.sourceColumn
         }
@@ -336,6 +395,15 @@ onMounted(() => {
               <div class="form-col">
                 <el-form-item label="数据库" required>
                   <el-input v-model="form.sourceDbName" placeholder="请输入数据库名称" maxlength="64" />
+                </el-form-item>
+              </div>
+            </div>
+            <div v-if="form.sourceDbType === '03'" class="form-row">
+              <div class="form-col form-col-small">
+                <el-form-item label="认证方式" required>
+                  <el-select v-model="form.sourceDbAuth" placeholder="请选择Hive认证方式" popper-class="detail-popper">
+                    <el-option v-for="opt in hiveAuthOptions" :key="opt.value" :label="opt.label" :value="opt.value" />
+                  </el-select>
                 </el-form-item>
               </div>
             </div>

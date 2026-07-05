@@ -47,11 +47,34 @@ class _CiDict(dict):
 
 # ==================== 连接管理 ====================
 
+def _oracle_mode():
+    """根据配置的 db_mode 返回 oracledb 权限模式常量，未配置则返回 None"""
+    mode = getattr(settings, "db_mode", "").lower().strip()
+    if not mode:
+        return None
+    import oracledb
+    if mode == "sysdba":
+        return oracledb.SYSDBA
+    if mode == "sysoper":
+        return oracledb.SYSOPER
+    return None
+
+
 def get_connection():
     if _is_oracle():
         import oracledb
         dsn = f"{settings.db_host}:{settings.db_port or 1521}/{settings.db_name}"
-        return oracledb.connect(user=settings.db_user, password=settings.db_password, dsn=dsn)
+        kwargs = dict(user=settings.db_user, password=settings.db_password, dsn=dsn)
+        mode = _oracle_mode()
+        if mode is not None:
+            kwargs["mode"] = mode
+        conn = oracledb.connect(**kwargs)
+        # 切换默认 schema，使无 schema 前缀的表名指向 db_schema 对应的 schema
+        schema = getattr(settings, "db_schema", "").strip().upper()
+        if schema:
+            with conn.cursor() as cur:
+                cur.execute(f"ALTER SESSION SET CURRENT_SCHEMA = {schema}")
+        return conn
     else:
         import pymysql
         return pymysql.connect(
@@ -67,19 +90,46 @@ def get_connection():
 
 # ==================== SQL 执行包装器 ====================
 
+def _oracle_sanitize_params(params):
+    """Oracle 参数预处理：空字符串 → None（Oracle 将 '' 视为 NULL，显式传 None 更安全）
+    CLOB / VARCHAR2 列直接使用 str；BLOB 列需要 bytes，调用方需在传参前自行 .encode()。
+    """
+    if params is None:
+        return None
+    if isinstance(params, dict):
+        return {k: (None if isinstance(v, str) and v == "" else v) for k, v in params.items()}
+    if isinstance(params, (list, tuple)):
+        return [None if isinstance(v, str) and v == "" else v for v in params]
+    return params
+
+
 def _execute(cursor, sql, params=None):
     """统一执行 SQL，自动处理占位符差异（MySQL %s / Oracle :n）"""
     if _is_oracle():
         sql = _convert_sql_for_oracle(sql, params)
+        params = _oracle_sanitize_params(params)
         if params is not None:
             cursor.execute(sql, params)
         else:
             cursor.execute(sql)
         # 设置 rowfactory 返回大小写不敏感的字典
+        # Oracle 默认列名全大写，这里统一转成小写，使后续下划线转驼峰逻辑与 MySQL 一致
         if cursor.description:
-            col_names = [col[0] for col in cursor.description]
+            col_names = [col[0].lower() for col in cursor.description]
             def _factory(*row):
-                return _CiDict({col_names[i]: row[i] for i in range(len(col_names))})
+                d = {}
+                for i in range(len(col_names)):
+                    v = row[i]
+                    # BLOB 列读出 bytes/oracledb.LOB，转回字符串
+                    if isinstance(v, bytes):
+                        v = v.decode("utf-8", errors="replace")
+                    elif hasattr(v, "read"):
+                        # oracledb.LOB 对象
+                        v = v.read()
+                        if isinstance(v, bytes):
+                            v = v.decode("utf-8", errors="replace")
+                    d[col_names[i]] = v
+                return _CiDict(d)
             cursor.rowfactory = _factory
     else:
         if params is not None:
@@ -92,6 +142,7 @@ def _executemany(cursor, sql, seq_of_params):
     """批量执行，兼容两种数据库"""
     if _is_oracle():
         sql = _convert_sql_for_oracle(sql, list(seq_of_params)[0] if seq_of_params else {})
+        seq_of_params = [_oracle_sanitize_params(p) for p in seq_of_params]
         cursor.executemany(sql, seq_of_params)
     else:
         cursor.executemany(sql, seq_of_params)
@@ -124,9 +175,11 @@ def _convert_sql_for_oracle(sql: str, params=None) -> str:
 def _date_format(expr: str, fmt: str = "%Y-%m-%d %H:%M:%S") -> str:
     """日期格式化 SQL 片段"""
     if _is_oracle():
+        # 注意：必须先替换 %M (分钟) 再替换 %m (月份)，否则 %m 会被先替换成 MM，
+        # 之后 %M 里的 M 也会被当成 %m 已替换后的残留而漏掉
         oracle_fmt = (fmt
             .replace("%Y", "YYYY").replace("%m", "MM").replace("%d", "DD")
-            .replace("%H", "HH24").replace("%i", "MI").replace("%S", "SS"))
+            .replace("%H", "HH24").replace("%M", "MI").replace("%S", "SS"))
         return f"TO_CHAR({expr}, '{oracle_fmt}')"
     else:
         mysql_fmt = fmt.replace("%", "%%")
@@ -174,7 +227,7 @@ def _quote_ident(name: str) -> str:
 
 def _show_tables_sql() -> str:
     if _is_oracle():
-        return "SELECT table_name FROM user_tables ORDER BY table_name"
+        return "SELECT table_name FROM all_tables WHERE owner = SYS_CONTEXT('USERENV', 'CURRENT_SCHEMA') ORDER BY table_name"
     else:
         return "SHOW TABLES"
 
@@ -182,10 +235,10 @@ def _show_tables_sql() -> str:
 def _show_columns_sql(table_name: str) -> str:
     if _is_oracle():
         return (
-            f"SELECT column_name AS field, data_type AS type, "
-            f"'' AS key_col, '' AS extra, '' AS comment "
+            f"SELECT column_name AS field, data_type AS col_type, "
+            f"NULL AS key_col, NULL AS extra, NULL AS col_comment "
             f"FROM all_tab_columns WHERE table_name = '{table_name.upper()}' "
-            f"AND owner = USER ORDER BY column_id"
+            f"AND owner = SYS_CONTEXT('USERENV', 'CURRENT_SCHEMA') ORDER BY column_id"
         )
     else:
         return f"SHOW COLUMNS FROM `{table_name}`"
@@ -641,9 +694,9 @@ def save_data_collect_task_det(data: dict):
         with conn.cursor() as cursor:
             sql = """
                 INSERT INTO s_data_collect_task_det
-                    (task_no, source_db_type, source_db_host, source_db_port, source_db_usr, source_db_pwd, source_db_name, target_table, collect_sql)
+                    (task_no, source_db_type, source_db_host, source_db_port, source_db_usr, source_db_pwd, source_db_name, target_table, collect_sql, source_db_auth)
                 VALUES
-                    (%(taskNo)s, %(sourceDbType)s, %(sourceDbHost)s, %(sourceDbPort)s, %(sourceDbUsr)s, %(sourceDbPwd)s, %(sourceDbName)s, %(targetTable)s, %(collectSql)s)
+                    (%(taskNo)s, %(sourceDbType)s, %(sourceDbHost)s, %(sourceDbPort)s, %(sourceDbUsr)s, %(sourceDbPwd)s, %(sourceDbName)s, %(targetTable)s, %(collectSql)s, %(sourceDbAuth)s)
             """
             _execute(cursor, sql, data)
         conn.commit()
@@ -668,6 +721,7 @@ def query_data_collect_task_det(task_no: str):
                     d.source_db_name,
                     d.target_table,
                     d.collect_sql,
+                    d.source_db_auth,
                     {_date_format('d.last_execute_time')} as lastExecuteTime,
                     d.last_execute_flag as lastExecuteFlagCode,
                     CASE
@@ -703,7 +757,8 @@ def update_data_collect_task_det(data: dict):
                     source_db_pwd = %(sourceDbPwd)s,
                     source_db_name = %(sourceDbName)s,
                     target_table = %(targetTable)s,
-                    collect_sql = %(collectSql)s
+                    collect_sql = %(collectSql)s,
+                    source_db_auth = %(sourceDbAuth)s
                 WHERE task_no = %(taskNo)s
             """
             _execute(cursor, sql, data)
@@ -723,7 +778,7 @@ def get_task_det_raw(task_no: str):
             sql = _limit_sql("""
                 SELECT
                     task_no, source_db_type, source_db_host, source_db_port,
-                    source_db_usr, source_db_pwd, source_db_name, target_table, collect_sql
+                    source_db_usr, source_db_pwd, source_db_name, target_table, collect_sql, source_db_auth
                 FROM s_data_collect_task_det
                 WHERE task_no = %s
                 ORDER BY record_id DESC
@@ -771,7 +826,7 @@ def insert_collect_log(task_no: str, log_content: str = None):
                 sql = f"""
                     INSERT INTO s_data_collect_log (task_no, start_time, execute_status, execute_log)
                     VALUES (:1, {_now()}, 0, :2)
-                    RETURNING log_id INTO :3
+                    RETURNING record_id INTO :3
                 """
                 bind_var = cursor.var(int)
                 cursor.execute(sql, [task_no, log_content, bind_var])
@@ -953,8 +1008,8 @@ def delete_data_collect_task(task_no: str):
         conn.close()
 
 
-def execute_source_sql(db_type: str, host: str, port: str, user: str, pwd: str, database: str, sql: str):
-    """连接源数据库执行SQL，返回 (columns, rows)"""
+def execute_source_sql(db_type: str, host: str, port: str, user: str, pwd: str, database: str, sql: str, auth: str = ""):
+    """连接源数据库执行SQL，返回 (columns, rows)。auth 仅 Hive 使用，可选 NONE/LDAP/PLAIN/KERBEROS/CUSTOM"""
     if db_type == "01":
         # MySQL
         import pymysql
@@ -969,36 +1024,48 @@ def execute_source_sql(db_type: str, host: str, port: str, user: str, pwd: str, 
             connect_timeout=10,
         )
     elif db_type == "02":
-        # PostgreSQL
-        import psycopg2
-        conn = psycopg2.connect(
-            host=host,
-            port=int(port) if port else 5432,
-            user=user,
-            password=pwd,
-            database=database,
-            connect_timeout=10,
-        )
-    elif db_type == "03":
         # Oracle
         import oracledb
-        conn = oracledb.connect(user=user, password=pwd, dsn=f"{host}:{port or 1521}")
+        kwargs = dict(user=user, password=pwd, dsn=f"{host}:{port or 1521}")
+        # SYS 用户必须以 SYSDBA/SYSOPER 模式连接，默认 SYSDBA
+        if user and user.upper() == "SYS":
+            kwargs["mode"] = oracledb.SYSDBA
+        conn = oracledb.connect(**kwargs)
+    elif db_type == "03":
+        # Hive
+        from pyhive import hive
+        _auth = auth or "NONE"
+        _hive_kwargs = dict(
+            host=host,
+            port=int(port) if port else 10000,
+            username=user,
+            database=database or "default",
+            auth=_auth,
+        )
+        # NONE 模式不允许传 password，LDAP/CUSTOM 模式才需要
+        if _auth not in ("NONE", "NOSASL") and pwd:
+            _hive_kwargs["password"] = pwd
+        conn = hive.Connection(**_hive_kwargs)
     else:
         raise ValueError(f"不支持的数据库类型: {db_type}")
 
     try:
         with conn.cursor() as cursor:
+            # 去掉末尾分号，Hive/pyhive 不支持分号结尾
+            sql = sql.rstrip().rstrip(';').rstrip()
             cursor.execute(sql)
             rows = cursor.fetchall()
             if db_type == "01":
                 # pymysql DictCursor
                 columns = [desc[0] for desc in cursor.description] if cursor.description else []
                 row_list = [tuple(row.values()) for row in rows]
-            elif db_type == "02":
-                columns = [desc[0] for desc in cursor.description] if cursor.description else []
-                row_list = list(rows)
+            elif db_type == "03":
+                # Hive 返回列名可能带表别名前缀如 a.col_name，去掉前缀
+                columns = [desc[0].lower().split('.')[-1] for desc in cursor.description] if cursor.description else []
+                row_list = [tuple(row) for row in rows]
             else:
-                columns = [desc[0] for desc in cursor.description] if cursor.description else []
+                # Oracle 等返回 tuple 列表，列名统一转小写
+                columns = [desc[0].lower() for desc in cursor.description] if cursor.description else []
                 row_list = [tuple(row) for row in rows]
             return columns, row_list
     finally:
@@ -1052,7 +1119,7 @@ def write_to_target_table(target_table: str, col_map: list[dict], columns: list,
                 batch_values.append(values)
             _executemany(cursor, insert_sql, batch_values)
         conn.commit()
-        return cursor.rowcount
+        return len(batch_values)
     finally:
         conn.close()
 
@@ -1079,8 +1146,8 @@ def save_query_result_to_desktop(columns: list, rows: list):
     return filepath
 
 
-def query_target_table_columns(db_type: str, host: str, port: str, user: str, pwd: str, database: str, table_name: str):
-    """查询目标表的字段信息，返回 [{column_name, column_type, column_comment}]"""
+def query_target_table_columns(db_type: str, host: str, port: str, user: str, pwd: str, database: str, table_name: str, auth: str = ""):
+    """查询目标表的字段信息，返回 [{column_name, column_type, column_comment}]。auth 仅 Hive 使用"""
     if db_type == "01":
         # MySQL
         import pymysql
@@ -1107,33 +1174,12 @@ def query_target_table_columns(db_type: str, host: str, port: str, user: str, pw
         finally:
             conn.close()
     elif db_type == "02":
-        # PostgreSQL
-        import psycopg2
-        conn = psycopg2.connect(
-            host=host,
-            port=int(port) if port else 5432,
-            user=user,
-            password=pwd,
-            database=database,
-            connect_timeout=10,
-        )
-        try:
-            with conn.cursor() as cursor:
-                sql = """
-                    SELECT column_name, data_type as column_type, '' as column_comment
-                    FROM information_schema.columns
-                    WHERE table_schema = 'public' AND table_name = %s
-                    ORDER BY ordinal_position
-                """
-                cursor.execute(sql, (table_name,))
-                rows = cursor.fetchall()
-                return [{"column_name": r[0], "column_type": r[1], "column_comment": r[2]} for r in rows]
-        finally:
-            conn.close()
-    elif db_type == "03":
         # Oracle
         import oracledb
-        conn = oracledb.connect(user=user, password=pwd, dsn=f"{host}:{port or 1521}")
+        kwargs = dict(user=user, password=pwd, dsn=f"{host}:{port or 1521}")
+        if user and user.upper() == "SYS":
+            kwargs["mode"] = oracledb.SYSDBA
+        conn = oracledb.connect(**kwargs)
         try:
             with conn.cursor() as cursor:
                 sql = """
@@ -1145,6 +1191,38 @@ def query_target_table_columns(db_type: str, host: str, port: str, user: str, pw
                 cursor.execute(sql, (table_name.upper(),))
                 rows = cursor.fetchall()
                 return [{"column_name": r[0], "column_type": r[1], "column_comment": r[2]} for r in rows]
+        finally:
+            conn.close()
+    elif db_type == "03":
+        # Hive
+        from pyhive import hive
+        _auth = auth or "NONE"
+        _hive_kwargs = dict(
+            host=host,
+            port=int(port) if port else 10000,
+            username=user,
+            database=database or "default",
+            auth=_auth,
+        )
+        # NONE 模式不允许传 password，LDAP/CUSTOM 模式才需要
+        if _auth not in ("NONE", "NOSASL") and pwd:
+            _hive_kwargs["password"] = pwd
+        conn = hive.Connection(**_hive_kwargs)
+        try:
+            with conn.cursor() as cursor:
+                cursor.execute(f"DESCRIBE {database or 'default'}.{table_name}")
+                rows = cursor.fetchall()
+                result = []
+                for r in rows:
+                    # Hive DESCRIBE 返回: (col_name, data_type, comment)
+                    if not r or not r[0] or r[0].startswith("#"):
+                        continue
+                    result.append({
+                        "column_name": r[0],
+                        "column_type": r[1] if len(r) > 1 else "",
+                        "column_comment": r[2] if len(r) > 2 else "",
+                    })
+                return result
         finally:
             conn.close()
     else:

@@ -229,6 +229,7 @@ export interface CollectTaskDetParams {
   sourceDbName: string
   targetTable: string
   collectSql: string
+  sourceDbAuth: string
 }
 
 export interface CollectTaskDet {
@@ -241,6 +242,7 @@ export interface CollectTaskDet {
   sourceDbName: string
   targetTable: string
   collectSql: string
+  sourceDbAuth: string
   lastExecuteTime: string
   lastExecuteFlagCode: number
   lastExecuteFlagName: string

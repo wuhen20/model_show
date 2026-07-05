@@ -184,10 +184,10 @@ def query_clean_table_columns_api(tableName: str = Query(..., description="表�
         result = []
         for col in columns:
             result.append({
-                "fieldName": col.get("Field", ""),
-                "fieldType": col.get("Type", ""),
-                "fieldKey": col.get("Key", ""),
-                "fieldNull": col.get("Null", ""),
+                "fieldName": col.get("field", col.get("Field", "")),
+                "fieldType": col.get("col_type", col.get("Type", "")),
+                "fieldKey": col.get("key_col", col.get("Key", "")),
+                "fieldNull": "",
             })
         return {"code": 0, "data": result}
     except Exception as e:
@@ -252,7 +252,12 @@ def execute_clean_task_api(req: ExecuteCleanTaskRequest):
         try:
             with conn.cursor() as cursor:
                 _execute(cursor, _select_all_from(table_name))
-                columns = [desc[0] for desc in cursor.description]
+                # Oracle rowfactory 将列名统一转小写，columns 也需对应
+                from app.core.database import _is_oracle
+                if _is_oracle():
+                    columns = [desc[0].lower() for desc in cursor.description]
+                else:
+                    columns = [desc[0] for desc in cursor.description]
                 rows = cursor.fetchall()
         finally:
             conn.close()
@@ -285,11 +290,16 @@ def execute_clean_task_api(req: ExecuteCleanTaskRequest):
         # 生成 DataFrame（空值处理需要在 DataFrame 上进行）
         append_clean_log(log_id, "正在构建数据帧...")
         import pandas as pd
-        df = pd.DataFrame(rows, columns=columns)
+        # rows 是 _CiDict 列表，转成普通 dict 列表避免大小写匹配问题
+        df = pd.DataFrame([dict(r) for r in rows], columns=columns)
+        # 构建列名大小写映射：小写 → 原始列名，用于将配置中的字段名映射到 DataFrame 的实际列名
+        col_lower_map = {c.lower(): c for c in df.columns}
 
         # 执行空值处理
         if nullfill_node:
-            nullfill_fields = nullfill_node["_config"].get("fields", [])
+            nullfill_fields_raw = nullfill_node["_config"].get("fields", [])
+            # 将配置字段名映射到 DataFrame 实际列名（忽略大小写）
+            nullfill_fields = [col_lower_map[f.lower()] for f in nullfill_fields_raw if f.lower() in col_lower_map]
             strategy = nullfill_node["_config"].get("strategy", "drop")
             fill_value = nullfill_node["_config"].get("fillValue", "")
             strategy_names = {
@@ -345,13 +355,11 @@ def execute_clean_task_api(req: ExecuteCleanTaskRequest):
                     else:
                         append_clean_log(log_id, f"空值处理完成，填充 {filled_count} 处空值")
                 elif strategy == "hfill_forward":
-                    # 横向向前填充：用同一行中前一个字段（按表结构列顺序）的值填充
-                    for f in nullfill_fields:
-                        if f not in columns:
-                            continue
-                        idx = columns.index(f)
-                        if idx > 0:
-                            prev_col = columns[idx - 1]
+                    # 横向向前填充：在选定的空值处理字段范围内，用同一行中前一个字段的值填充
+                    nullfill_ordered = [f for f in nullfill_fields if f in columns]
+                    for pos, f in enumerate(nullfill_ordered):
+                        if pos > 0:
+                            prev_col = nullfill_ordered[pos - 1]
                             mask = df[f].isnull() & df[prev_col].notnull()
                             df.loc[mask, f] = df.loc[mask, prev_col]
                     remaining_null = int(df[nullfill_fields].isnull().sum().sum())
@@ -364,13 +372,11 @@ def execute_clean_task_api(req: ExecuteCleanTaskRequest):
                     else:
                         append_clean_log(log_id, f"空值处理完成，填充 {filled_count} 处空值")
                 elif strategy == "hfill_backward":
-                    # 横向向后填充：用同一行中后一个字段（按表结构列顺序）的值填充
-                    for f in nullfill_fields:
-                        if f not in columns:
-                            continue
-                        idx = columns.index(f)
-                        if idx < len(columns) - 1:
-                            next_col = columns[idx + 1]
+                    # 横向向后填充：在选定的空值处理字段范围内，用同一行中后一个字段的值填充
+                    nullfill_ordered = [f for f in nullfill_fields if f in columns]
+                    for pos, f in enumerate(nullfill_ordered):
+                        if pos < len(nullfill_ordered) - 1:
+                            next_col = nullfill_ordered[pos + 1]
                             mask = df[f].isnull() & df[next_col].notnull()
                             df.loc[mask, f] = df.loc[mask, next_col]
                     remaining_null = int(df[nullfill_fields].isnull().sum().sum())
@@ -383,40 +389,44 @@ def execute_clean_task_api(req: ExecuteCleanTaskRequest):
                     else:
                         append_clean_log(log_id, f"空值处理完成，填充 {filled_count} 处空值")
                 elif strategy == "hinterpolate":
-                    # 横向插值：用同一行中前后字段的值做线性插值（按列位置）
+                    # 横向插值：在选定的空值处理字段范围内，用同一行中前后字段的值做线性插值
                     for f in nullfill_fields:
                         if f not in columns:
                             continue
-                        idx = columns.index(f)
                         df[f] = pd.to_numeric(df[f], errors="coerce")
-                        for i in df.index:
-                            if pd.isna(df.at[i, f]):
-                                # 向前找最近的有效数值
-                                prev_val = None
-                                prev_pos = None
-                                for j in range(idx - 1, -1, -1):
-                                    val = pd.to_numeric(df.at[i, columns[j]], errors="coerce")
-                                    if pd.notna(val):
-                                        prev_val = val
-                                        prev_pos = j
-                                        break
-                                # 向后找最近的有效数值
-                                next_val = None
-                                next_pos = None
-                                for j in range(idx + 1, len(columns)):
-                                    val = pd.to_numeric(df.at[i, columns[j]], errors="coerce")
-                                    if pd.notna(val):
-                                        next_val = val
-                                        next_pos = j
-                                        break
-                                # 按列位置做线性插值
-                                if prev_val is not None and next_val is not None:
-                                    interpolated = prev_val + (next_val - prev_val) * (idx - prev_pos) / (next_pos - prev_pos)
-                                    df.at[i, f] = round(interpolated, 6)
-                                elif prev_val is not None:
-                                    df.at[i, f] = prev_val
-                                elif next_val is not None:
-                                    df.at[i, f] = next_val
+                    # 建立空值处理字段在 columns 中的位置映射，用于确定插值方向
+                    nullfill_indices = [(columns.index(f), f) for f in nullfill_fields if f in columns]
+                    nullfill_indices.sort(key=lambda x: x[0])
+                    for i in df.index:
+                        for pos, (col_pos, col_name) in enumerate(nullfill_indices):
+                            if pd.notna(df.at[i, col_name]):
+                                continue
+                            # 在 nullfill_fields 范围内向前找最近的有效数值
+                            prev_val = None
+                            prev_pos = None
+                            for k in range(pos - 1, -1, -1):
+                                val = df.at[i, nullfill_indices[k][1]]
+                                if pd.notna(val):
+                                    prev_val = float(val)
+                                    prev_pos = nullfill_indices[k][0]
+                                    break
+                            # 在 nullfill_fields 范围内向后找最近的有效数值
+                            next_val = None
+                            next_pos = None
+                            for k in range(pos + 1, len(nullfill_indices)):
+                                val = df.at[i, nullfill_indices[k][1]]
+                                if pd.notna(val):
+                                    next_val = float(val)
+                                    next_pos = nullfill_indices[k][0]
+                                    break
+                            # 按列位置做线性插值
+                            if prev_val is not None and next_val is not None:
+                                interpolated = prev_val + (next_val - prev_val) * (col_pos - prev_pos) / (next_pos - prev_pos)
+                                df.at[i, col_name] = round(interpolated, 6)
+                            elif prev_val is not None:
+                                df.at[i, col_name] = prev_val
+                            elif next_val is not None:
+                                df.at[i, col_name] = next_val
                     remaining_null = int(df[nullfill_fields].isnull().sum().sum())
                     filled_count = null_count_before - remaining_null
                     if remaining_null > 0:
@@ -470,7 +480,7 @@ def execute_clean_task_api(req: ExecuteCleanTaskRequest):
             df.to_excel(writer, index=False, sheet_name="清洗结果")
         output.seek(0)
 
-        result_count = len(rows)
+        result_count = len(df)
 
         # 完成执行记录
         finish_clean_log(
