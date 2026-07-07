@@ -849,3 +849,175 @@ export function createMeterInstallApi() {
 }
 
 export type MeterInstallApi = ReturnType<typeof createMeterInstallApi>
+
+// ============ 电采暖高价低接研判 API ============
+
+export interface HeatingFraudModelInfo {
+  model_type: string
+  n_features: number
+  threshold: number
+  has_trained_model: boolean
+  default_model_available: boolean
+  label_map: Record<string, number>
+  risk_thresholds: { high: number; low: number }
+  config: {
+    cv_folds: number
+    optuna_objective: string
+    use_prior_align: boolean
+    threshold_opt_beta: number
+  }
+}
+
+export interface HeatingFraudTrainMetrics {
+  threshold: number
+  oof_auc: number
+  oof_ap: number
+  oof_f1: number
+  oof_precision: number
+  oof_recall: number
+  oof_accuracy: number
+  cv_avg_metrics: Record<string, number>
+  fold_metrics: { fold: number; auc: number; f1: number; precision: number; recall: number; accuracy: number }[]
+  n_features_used: number
+  risk_distribution: Record<string, number>
+  optuna_best_value: number
+  optuna_best_params: Record<string, any>
+  charts: Record<string, string>
+  feature_importance: { feature: string; importance: number }[]
+}
+
+export interface HeatingFraudTrainStatus {
+  running: boolean
+  progress: number
+  message: string
+  result?: {
+    status: string
+    model_path: string
+    threshold: number
+    metrics: HeatingFraudTrainMetrics
+    feature_importance: { feature: string; importance: number }[]
+    risk_distribution: Record<string, number>
+    n_features_used: number
+    optuna_best_value: number
+    optuna_best_params: Record<string, any>
+    charts: Record<string, string>
+  }
+  error?: string
+}
+
+export interface HeatingFraudPrediction {
+  meter_id: string
+  pred_label: string
+  fraud_prob: number
+  risk_level: string
+  rule_score: number
+  rule_hits: string
+  top_evidence_1?: string
+  top_evidence_2?: string
+  top_evidence_3?: string
+}
+
+export interface HeatingFraudPredictResult {
+  status: string
+  n_samples: number
+  predictions: HeatingFraudPrediction[]
+  risk_distribution: Record<string, number>
+  charts: Record<string, string>
+  result_csv_path?: string
+}
+
+export interface HeatingFraudRuleSpecItem {
+  dimension: string
+  threshold: string
+  direction: string
+  weight: number
+  category: string
+  meaning: string
+}
+
+/** 创建电采暖高价低接研判 API 客户端 */
+export function createHeatingFraudApi() {
+  const base = '/api/demo/heating-fraud'
+
+  return {
+    async ping(): Promise<{ status: string; message: string }> {
+      const resp = await fetch(`${BASE_URL}${base}/ping`)
+      if (!resp.ok) throw new Error(`服务连接失败: ${resp.status}`)
+      return resp.json()
+    },
+
+    async modelInfo(): Promise<HeatingFraudModelInfo> {
+      const resp = await fetch(`${BASE_URL}${base}/model_info`)
+      if (!resp.ok) throw new Error(`获取模型信息失败: ${resp.status}`)
+      return resp.json()
+    },
+
+    getDemoCsvUrl(): string {
+      return `${BASE_URL}${base}/demo_csv`
+    },
+
+    getPredictCsvUrl(): string {
+      return `${BASE_URL}${base}/predict_csv`
+    },
+
+    async uploadTrain(file: File): Promise<{ status: string; rows: number; features: number; has_label: boolean; label_distribution: { name: string; value: number }[]; message: string }> {
+      const form = new FormData()
+      form.append('file', file)
+      const resp = await fetch(`${BASE_URL}${base}/upload_train`, { method: 'POST', body: form })
+      if (!resp.ok) throw new Error(`上传训练数据失败: ${resp.status}`)
+      return resp.json()
+    },
+
+    async train(nTrials: number): Promise<{ status: string; message: string }> {
+      const form = new FormData()
+      form.append('n_trials', String(nTrials))
+      const resp = await fetch(`${BASE_URL}${base}/train`, { method: 'POST', body: form })
+      if (!resp.ok) throw new Error(`启动训练失败: ${resp.status}`)
+      return resp.json()
+    },
+
+    async trainStatus(): Promise<HeatingFraudTrainStatus> {
+      const resp = await fetch(`${BASE_URL}${base}/train_status`)
+      if (!resp.ok) throw new Error(`获取训练状态失败: ${resp.status}`)
+      return resp.json()
+    },
+
+    async uploadPredict(file: File): Promise<{ status: string; rows: number; features: number; has_meter_id: boolean; message: string }> {
+      const form = new FormData()
+      form.append('file', file)
+      const resp = await fetch(`${BASE_URL}${base}/upload_predict`, { method: 'POST', body: form })
+      if (!resp.ok) throw new Error(`上传预测数据失败: ${resp.status}`)
+      return resp.json()
+    },
+
+    async predict(): Promise<HeatingFraudPredictResult> {
+      const resp = await fetch(`${BASE_URL}${base}/predict`, { method: 'POST' })
+      if (!resp.ok) throw new Error(`预测请求失败: ${resp.status}`)
+      return resp.json()
+    },
+
+    async featureImportance(): Promise<{ status: string; data: { feature: string; importance: number }[] }> {
+      const resp = await fetch(`${BASE_URL}${base}/feature_importance`)
+      if (!resp.ok) throw new Error(`获取特征重要性失败: ${resp.status}`)
+      return resp.json()
+    },
+
+    async evaluate(): Promise<any> {
+      const resp = await fetch(`${BASE_URL}${base}/evaluate`)
+      if (!resp.ok) throw new Error(`获取评估指标失败: ${resp.status}`)
+      return resp.json()
+    },
+
+    async ruleSpec(): Promise<{ status: string; data: HeatingFraudRuleSpecItem[] }> {
+      const resp = await fetch(`${BASE_URL}${base}/rule_spec`)
+      if (!resp.ok) throw new Error(`获取规则体系失败: ${resp.status}`)
+      return resp.json()
+    },
+
+    getDownloadUrl(): string {
+      return `${BASE_URL}${base}/download_result`
+    },
+  }
+}
+
+export type HeatingFraudApi = ReturnType<typeof createHeatingFraudApi>

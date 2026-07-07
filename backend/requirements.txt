@@ -15,6 +15,10 @@ xgboost>=2.0.0
 torch>=2.0.0
 scikit-optimize>=0.9
 matplotlib>=3.7
+# 电采暖高价低接研判依赖（YD-03）
+lightgbm>=4.0.0
+optuna>=3.0.0
+shap>=0.44.0
 # 现场作业场景依赖（XC-01/02 电能表拆装检测）
 ultralytics>=8.1.0
 opencv-python-headless>=4.8.0

@@ -11,6 +11,7 @@ import StrategyDemo from '@/views/StrategyDemo.vue'
 import StationHealthDemo from '@/views/StationHealthDemo.vue'
 import MeterRemovalDemo from '@/views/MeterRemovalDemo.vue'
 import MeterInstallDemo from '@/views/MeterInstallDemo.vue'
+import HeatingFraudDemo from '@/views/HeatingFraudDemo.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -134,6 +135,11 @@ onMounted(load)
       <!-- XC-02 安装新表作业识别 -->
       <template v-else-if="detail.code === 'XC-02'">
         <MeterInstallDemo />
+      </template>
+
+      <!-- YD-03 电采暖高价低接研判 -->
+      <template v-else-if="detail.code === 'YD-03'">
+        <HeatingFraudDemo />
       </template>
 
       <!-- 非 ZJ-05 模型：保持原有布局 -->

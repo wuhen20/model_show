@@ -26,6 +26,7 @@ from app.api.routes.demo_strategy import router as demo_strategy_router
 from app.api.routes.demo_station_health import router as demo_station_health_router
 from app.api.routes.demo_meter_removal import router as demo_meter_removal_router
 from app.api.routes.demo_meter_install import router as demo_meter_install_router
+from app.api.routes.demo_heating_fraud import router as demo_heating_fraud_router
 from app.db.database import init_db
 from app.registry.model_registry import sync_registry
 
@@ -80,6 +81,7 @@ app.include_router(demo_strategy_router, prefix="/api/demo/strategy", tags=["采
 app.include_router(demo_station_health_router, prefix="/api/demo/station-health", tags=["主站异常演示"])
 app.include_router(demo_meter_removal_router, prefix="/api/demo/meter-removal", tags=["拆表作业演示"])
 app.include_router(demo_meter_install_router, prefix="/api/demo/meter-install", tags=["装表作业演示"])
+app.include_router(demo_heating_fraud_router, prefix="/api/demo/heating-fraud", tags=["电采暖高价低接演示"])
 
 
 @app.get("/api/health")

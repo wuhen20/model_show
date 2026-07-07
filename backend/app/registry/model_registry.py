@@ -207,10 +207,15 @@ MODEL_REGISTRY: dict[str, ModelEntry] = {
         "scene": "YD",
         "io_type": "timeseries",
         "backend_type": "local",
-        "description": "基于功率曲线识别电采暖高价低接欺诈用户",
-        "weight_path": "models_pool/YD-03/v1/heating_fraud.joblib",
+        "description": "基于LightGBM+SHAP+规则化评分，识别电采暖高价低接欺诈用户。支持Optuna超参搜索、先验对齐样本权重、F0.5-beta阈值优化、16维规则评分体系。",
+        "weight_path": "models_pool/YD/heating_fraud/fraud_detection_model.pkl",
         "loader": "joblib",
-        "status": "planned",
+        "input_spec": [{"field": "features", "type": "csv", "required": True}],
+        "output_spec": [
+            {"field": "predictions", "description": "预测结果（含欺诈概率、风险等级、规则评分）"},
+            {"field": "charts", "description": "ROC/PR曲线、风险分布、SHAP图等"},
+        ],
+        "status": "running",
     },
     "YD-04": {
         "name": "计量失准",
