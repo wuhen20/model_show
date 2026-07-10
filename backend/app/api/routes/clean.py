@@ -1,7 +1,9 @@
-"""样本数据清理任务接口"""
+"""样本数据清洗任务接口"""
 import json
 import logging
 import os
+import sys
+import shutil
 from datetime import datetime
 from fastapi import APIRouter, Query, UploadFile, File
 from pydantic import BaseModel
@@ -30,6 +32,10 @@ from app.core.database import (
     get_connection,
     _execute,
     _select_all_from,
+    query_pic_clean_type_dict,
+    insert_clean_pic_record,
+    query_original_sample_file_paths,
+    query_original_sample_set_by_type,
 )
 
 router = APIRouter()
@@ -39,6 +45,8 @@ class SaveCleanTaskRequest(BaseModel):
     taskName: str
     remark: str = ""
     sampleType: str = ""
+    originalSampleSetNo: str = ""
+    cleanTypes: str = ""
 
 
 class SaveCleanTaskNodesRequest(BaseModel):
@@ -66,7 +74,7 @@ def _to_camel_dict(d: dict) -> dict:
 
 @router.get("/query-clean-tasks")
 def query_clean_tasks_api():
-    """查询清理任务列表"""
+    """查询清洗任务列表"""
     try:
         rows = query_data_clean_tasks()
         tasks = []
@@ -88,13 +96,40 @@ def query_clean_tasks_api():
 
 @router.post("/save-clean-task")
 def save_clean_task_api(req: SaveCleanTaskRequest):
-    """新增清理任务"""
+    """新增清洗任务"""
     task_name = req.taskName.strip()
     if not task_name:
         return {"code": 1, "message": "任务名称不能为空"}
     try:
         task_no = generate_clean_task_no()
         save_data_clean_task(task_no, task_name, req.remark, req.sampleType)
+
+        # 图片类型：同时保存节点配置到 s_data_clean_task_node
+        if req.sampleType == "05" and req.originalSampleSetNo:
+            # 查询原始样本集名称
+            set_name = ""
+            conn = get_connection()
+            try:
+                with conn.cursor() as cursor:
+                    _execute(cursor, "SELECT set_name FROM s_original_sample_set WHERE set_no = %s", (req.originalSampleSetNo,))
+                    row = cursor.fetchone()
+                    if row:
+                        set_name = row.get("set_name") if isinstance(row, dict) else row[0]
+            finally:
+                conn.close()
+
+            # 保存节点：node_id=原始样本集编号, node_name=原始样本集名称, node_config=清洗类型编码
+            nodes_to_save = [{
+                "nodeId": req.originalSampleSetNo,
+                "nodeType": "image_clean",
+                "nodeName": set_name or req.originalSampleSetNo,
+                "nodeConfig": req.cleanTypes,
+                "posX": 0,
+                "posY": 0,
+                "prevNodeId": None,
+            }]
+            save_data_clean_task_nodes(task_no, nodes_to_save)
+
         return {"code": 0, "message": "保存成功", "data": {"taskNo": task_no}}
     except Exception as e:
         return {"code": 1, "message": f"保存失败: {str(e)}"}
@@ -102,7 +137,7 @@ def save_clean_task_api(req: SaveCleanTaskRequest):
 
 @router.get("/query-clean-task-detail")
 def query_clean_task_detail_api(taskNo: str = Query(..., description="任务编号")):
-    """查询清理任务详情（含节点）"""
+    """查询清洗任务详情（含节点）"""
     try:
         task = query_data_clean_task_detail(taskNo)
         if not task:
@@ -119,10 +154,14 @@ def query_clean_task_detail_api(taskNo: str = Query(..., description="任务编�
         for node in task.get("nodes", []):
             n = _to_camel_dict(node)
             config_str = node.get("node_config") or ""
-            try:
-                n["nodeConfig"] = json.loads(config_str) if config_str else {}
-            except (json.JSONDecodeError, TypeError):
-                n["nodeConfig"] = {}
+            # image_clean 节点的 node_config 是逗号分隔的编码字符串，不是 JSON
+            if node.get("node_type") == "image_clean":
+                n["nodeConfig"] = config_str
+            else:
+                try:
+                    n["nodeConfig"] = json.loads(config_str) if config_str else {}
+                except (json.JSONDecodeError, TypeError):
+                    n["nodeConfig"] = {}
             nodes.append(n)
         result["nodes"] = nodes
         return {"code": 0, "data": result}
@@ -201,9 +240,211 @@ def query_clean_table_columns_api(tableName: str = Query(..., description="表�
         return {"code": 1, "message": f"查询失败: {str(e)}"}
 
 
+def _execute_image_clean_task(task: dict, task_no: str):
+    """执行图像样本清洗任务：使用 cleanvision 检测问题图片，移动到隔离目录"""
+    nodes = task.get("nodes", [])
+    if not nodes:
+        return {"code": 1, "message": "任务未配置清洗节点"}
+
+    # 1. 从节点获取原始样本集编号和清洗类型编码
+    image_node = None
+    for node in nodes:
+        if node.get("node_type") == "image_clean":
+            image_node = node
+            break
+    if not image_node:
+        return {"code": 1, "message": "未找到图像清洗节点"}
+
+    set_no = image_node.get("node_id", "")
+    clean_types_str = image_node.get("node_config") or ""
+    if not set_no:
+        return {"code": 1, "message": "清洗节点未关联原始样本集"}
+    if not clean_types_str:
+        return {"code": 1, "message": "未配置清洗类型"}
+
+    clean_type_codes = [c.strip() for c in clean_types_str.split(",") if c.strip()]
+    if not clean_type_codes:
+        return {"code": 1, "message": "未配置清洗类型"}
+
+    update_clean_task_status(task_no, "02")
+    log_id = None
+    total_count = 0
+    removed_count = 0
+
+    try:
+        init_log = f"开始执行图像清洗任务：{task.get('task_name', task_no)}"
+        log_id = insert_clean_log(task_no, init_log)
+
+        # 2. 查询清洗类型字典，将编码映射到 cleanvision issue 类型
+        append_clean_log(log_id, "正在加载清洗类型配置...")
+        dict_rows = query_pic_clean_type_dict()
+        code_to_issue = {}  # {清洗类型编码: {spare1, code_name}}
+        for row in dict_rows:
+            code_val = row.get("CODE_VALUE", "")
+            spare1 = row.get("SPARE1", "")
+            code_name = row.get("CODE_NAME", "")
+            if code_val in clean_type_codes and spare1:
+                code_to_issue[code_val] = {"spare1": spare1, "code_name": code_name}
+
+        if not code_to_issue:
+            raise ValueError("配置的清洗类型在字典中未找到对应记录")
+
+        configured_issues = {info["spare1"] for info in code_to_issue.values()}
+        append_clean_log(log_id, f"配置的检测类型：{', '.join(info['code_name'] for info in code_to_issue.values())}")
+
+        # 3. 查询原始样本文件路径
+        append_clean_log(log_id, "正在查询样本文件路径...")
+        file_rows = query_original_sample_file_paths(set_no)
+        file_paths = []
+        for row in file_rows:
+            fp = row.get("file_path") if isinstance(row, dict) else row[0]
+            if fp:
+                file_paths.append(fp)
+
+        if not file_paths:
+            raise ValueError("原始样本集下未找到样本文件")
+
+        total_count = len(file_paths)
+        append_clean_log(log_id, f"共 {total_count} 个样本文件")
+
+        # 4. 提取公共目录作为 data_path
+        abs_paths = [os.path.abspath(fp) for fp in file_paths]
+        try:
+            data_path = os.path.commonpath(abs_paths)
+        except ValueError:
+            raise ValueError("样本文件路径跨盘符，无法确定公共目录")
+
+        if not os.path.isdir(data_path):
+            raise ValueError(f"计算得到的图片目录不存在：{data_path}")
+
+        append_clean_log(log_id, f"图片目录：{data_path}")
+
+        # 5. 使用 cleanvision 检测问题图片
+        append_clean_log(log_id, "正在检测图片质量问题，请稍候...")
+        from cleanvision import Imagelab
+
+        imagelab = Imagelab(data_path=data_path)
+
+        # 禁用 tqdm 输出
+        os.environ['TQDM_DISABLE'] = '1'
+        original_stderr = sys.stderr
+        try:
+            sys.stderr = open(os.devnull, 'w')
+            # 尝试只检测配置的类型
+            issue_types = {spare1: {} for spare1 in configured_issues}
+            try:
+                imagelab.find_issues(issue_types=issue_types, verbose=False, n_jobs=2)
+            except Exception as e_issue:
+                # 某些类型不兼容单独指定，降级为全量检测后过滤
+                append_clean_log(log_id, f"指定类型检测失败({e_issue})，降级为全量检测...")
+                imagelab = Imagelab(data_path=data_path)
+                imagelab.find_issues(verbose=False, n_jobs=2)
+        finally:
+            if sys.stderr:
+                sys.stderr.close()
+            sys.stderr = original_stderr
+            if 'TQDM_DISABLE' in os.environ:
+                del os.environ['TQDM_DISABLE']
+
+        append_clean_log(log_id, "检测完成，正在整理结果...")
+
+        # 6. 从 issues DataFrame 提取问题图片
+        issues_df = imagelab.issues
+        # 收集 {image_name: [清洗类型编码列表]}
+        problem_images = {}
+
+        for image_name, row in issues_df.iterrows():
+            issues_for_image = []
+            for code_val, info in code_to_issue.items():
+                issue_col = f"is_{info['spare1']}_issue"
+                if issue_col in issues_df.columns and row[issue_col]:
+                    issues_for_image.append(code_val)
+
+            if issues_for_image:
+                problem_images[image_name] = issues_for_image
+
+        removed_count = len(problem_images)
+        result_count = total_count - removed_count
+        append_clean_log(log_id, f"发现 {removed_count} 张问题图片，剩余 {result_count} 张正常图片")
+
+        # 7. 创建目标目录并移动问题图片
+        from app.core.config import settings
+        base_dir = getattr(settings, "sample_upload_dir", "")
+        if not base_dir:
+            base_dir = os.path.abspath("uploads")
+        target_dir = os.path.join(base_dir, "clean_result", task_no)
+        os.makedirs(target_dir, exist_ok=True)
+
+        append_clean_log(log_id, f"正在移动问题图片到：{target_dir}")
+
+        moved_count = 0
+        for image_name, issue_codes in problem_images.items():
+            # image_name 是相对于 data_path 的路径
+            src_path = os.path.join(data_path, image_name)
+            if not os.path.exists(src_path):
+                # 尝试用绝对路径
+                src_path = image_name
+
+            if not os.path.exists(src_path):
+                append_clean_log(log_id, f"警告：文件不存在，跳过：{image_name}")
+                continue
+
+            dst_path = os.path.join(target_dir, os.path.basename(image_name))
+
+            # 处理同名文件冲突
+            if os.path.exists(dst_path):
+                name, ext = os.path.splitext(os.path.basename(image_name))
+                dst_path = os.path.join(target_dir, f"{name}_{moved_count}{ext}")
+
+            try:
+                shutil.move(src_path, dst_path)
+                moved_count += 1
+                # 对每种问题类型插入一条记录
+                for code_val in issue_codes:
+                    insert_clean_pic_record(task_no, code_val, os.path.basename(image_name), dst_path)
+            except Exception as e_move:
+                append_clean_log(log_id, f"警告：移动文件失败：{image_name}，{e_move}")
+
+        append_clean_log(log_id, f"成功移动 {moved_count} 张问题图片")
+
+        # 8. 完成执行记录
+        finish_clean_log(
+            log_id,
+            execute_status="03",
+            total_count=total_count,
+            removed_count=removed_count,
+            result_count=result_count,
+            log_content="图像清洗执行完成，问题图片已移至隔离目录",
+        )
+        update_clean_task_status(task_no, "03", last_execute_flag=1)
+
+        return {
+            "code": 0,
+            "message": f"执行成功，共检测 {total_count} 张图片，移动 {removed_count} 张问题图片",
+            "data": {"fileName": "", "filePath": target_dir, "resultCount": result_count},
+        }
+
+    except Exception as e:
+        if log_id:
+            try:
+                finish_clean_log(
+                    log_id,
+                    execute_status="04",
+                    total_count=total_count,
+                    removed_count=removed_count,
+                    result_count=total_count - removed_count,
+                    log_content=f"执行失败：{str(e)}",
+                )
+            except Exception:
+                pass
+        update_clean_task_status(task_no, "04", last_execute_flag=2)
+        logger.exception("图像清洗任务执行异常")
+        return {"code": 1, "message": f"执行失败: {str(e)}"}
+
+
 @router.post("/execute-clean-task")
 def execute_clean_task_api(req: ExecuteCleanTaskRequest):
-    """执行清理任务：按流程编排读取数据→去重→导出 Excel 下载"""
+    """执行清洗任务：按流程编排读取数据→去重→导出 Excel 下载"""
     task_no = req.taskNo.strip()
     if not task_no:
         return {"code": 1, "message": "任务编号不能为空"}
@@ -211,6 +452,11 @@ def execute_clean_task_api(req: ExecuteCleanTaskRequest):
     task = get_clean_task_raw(task_no)
     if not task:
         return {"code": 1, "message": "未找到任务"}
+
+    # 图片类型清洗任务走专用流程
+    sample_type = str(task.get("sample_type") or "")
+    if sample_type == "05":
+        return _execute_image_clean_task(task, task_no)
 
     nodes = task.get("nodes", [])
     if not nodes:
@@ -568,7 +814,7 @@ def execute_clean_task_api(req: ExecuteCleanTaskRequest):
 
 @router.get("/query-clean-log")
 def query_clean_log_api(taskNo: str = Query(..., description="任务编号")):
-    """查询清理任务的执行记录列表"""
+    """查询清洗任务的执行记录列表"""
     try:
         rows = query_clean_log(taskNo)
         logs = []
@@ -751,6 +997,41 @@ def sample_set_options_api(typeCode: str = Query("", description="样本类型�
         return {"code": 0, "data": options}
     except Exception as e:
         logger.exception("查询样本集选项异常")
+        return {"code": 1, "message": f"查询失败: {str(e)}"}
+
+
+@router.get("/query-pic-clean-types")
+def query_pic_clean_types_api():
+    """查询图像清洗类型字典（含 cleanvision 编码 spare1）"""
+    try:
+        rows = query_pic_clean_type_dict()
+        result = []
+        for row in rows:
+            result.append({
+                "codeValue": row.get("CODE_VALUE", ""),
+                "codeName": row.get("CODE_NAME", ""),
+                "spare1": row.get("SPARE1", ""),
+            })
+        return {"code": 0, "data": result}
+    except Exception as e:
+        logger.exception("查询图像清洗类型字典异常")
+        return {"code": 1, "message": f"查询失败: {str(e)}"}
+
+
+@router.get("/original-sample-set-options")
+def original_sample_set_options_api(typeCode: str = Query("", description="样本类型编码，为空则返回全部")):
+    """获取原始样本集下拉选项，可按类型过滤"""
+    try:
+        rows = query_original_sample_set_by_type(typeCode)
+        options = []
+        for row in rows:
+            options.append({
+                "setNo": row.get("set_no", ""),
+                "setName": row.get("set_name", ""),
+            })
+        return {"code": 0, "data": options}
+    except Exception as e:
+        logger.exception("查询原始样本集选项异常")
         return {"code": 1, "message": f"查询失败: {str(e)}"}
 
 

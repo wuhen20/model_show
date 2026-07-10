@@ -6,6 +6,7 @@ export interface CleanTask {
   remark: string
   taskStatusCode: string
   taskStatusName: string
+  sampleType: string
   createTime: string
   lastExecuteTime: string
   lastExecuteFlagCode: number
@@ -54,11 +55,17 @@ export async function getCleanTasks(): Promise<CleanTask[]> {
   return json.data || []
 }
 
-export async function saveCleanTask(taskName: string, remark: string, sampleType: string = ''): Promise<string> {
+export async function saveCleanTask(
+  taskName: string,
+  remark: string,
+  sampleType: string = '',
+  originalSampleSetNo: string = '',
+  cleanTypes: string = ''
+): Promise<string> {
   const res = await fetch(`${BASE_URL}/save-clean-task`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ taskName, remark, sampleType })
+    body: JSON.stringify({ taskName, remark, sampleType, originalSampleSetNo, cleanTypes })
   })
   const json = await res.json()
   if (json.code !== 0) throw new Error(json.message || '保存失败')
@@ -219,4 +226,32 @@ export async function importToSample(recordId: number, setNo: string, sampleName
   const json = await res.json()
   if (json.code !== 0) throw new Error(json.message || '入库失败')
   return json.data.count
+}
+
+// ========== 图像样本清洗 ==========
+
+export interface PicCleanType {
+  codeValue: string
+  codeName: string
+  spare1: string
+}
+
+export async function queryPicCleanTypes(): Promise<PicCleanType[]> {
+  const res = await fetch(`${BASE_URL}/query-pic-clean-types`)
+  const json = await res.json()
+  if (json.code !== 0) throw new Error(json.message || '查询清洗类型失败')
+  return json.data || []
+}
+
+export interface OriginalSampleSetOption {
+  setNo: string
+  setName: string
+}
+
+export async function queryOriginalSampleSetOptions(typeCode: string = ''): Promise<OriginalSampleSetOption[]> {
+  const params = typeCode ? `?typeCode=${encodeURIComponent(typeCode)}` : ''
+  const res = await fetch(`${BASE_URL}/original-sample-set-options${params}`)
+  const json = await res.json()
+  if (json.code !== 0) throw new Error(json.message || '查询原始样本集失败')
+  return json.data || []
 }

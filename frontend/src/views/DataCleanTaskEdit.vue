@@ -495,7 +495,7 @@ onMounted(() => {
 
 <template>
   <div class="app-layout">
-    <Header title="模型能力展示与体验工作台" subtitle="清理任务编排" />
+    <Header title="模型能力展示与体验工作台" subtitle="清洗任务编排" />
     <div class="main-content">
       <Sidebar />
       <main class="content-area">

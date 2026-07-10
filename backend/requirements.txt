@@ -49,3 +49,6 @@ chronos-forecasting>=2.2.2
 #   · 其它显卡请在 https://pytorch.org/get-started/locally/ 选择对应 CUDA 版本
 torch>=2.7.0
 torchvision>=0.22.0
+
+# ===== 图像样本清洗 =====
+cleanvision>=0.3.7

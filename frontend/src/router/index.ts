@@ -21,8 +21,8 @@ const routes = [
   { path: '/original-sample-detail', name: 'OriginalSampleDetail', component: () => import('@/views/OriginalSampleDetail.vue'), meta: { title: '原始样本详情' } },
   { path: '/collect-task', name: 'SampleCollectTask', component: () => import('@/views/SampleCollectTask.vue'), meta: { title: '数据采集任务管理' } },
   { path: '/collect-task-detail', name: 'SampleCollectTaskDet', component: () => import('@/views/SampleCollectTaskDet.vue'), meta: { title: '采集任务明细' } },
-  { path: '/clean-task', name: 'DataCleanTask', component: () => import('@/views/DataCleanTask.vue'), meta: { title: '样本数据清理' } },
-  { path: '/clean-task-edit', name: 'DataCleanTaskEdit', component: () => import('@/views/DataCleanTaskEdit.vue'), meta: { title: '清理任务编排' } },
+  { path: '/clean-task', name: 'DataCleanTask', component: () => import('@/views/DataCleanTask.vue'), meta: { title: '样本数据清洗' } },
+  { path: '/clean-task-edit', name: 'DataCleanTaskEdit', component: () => import('@/views/DataCleanTaskEdit.vue'), meta: { title: '清洗任务编排' } },
   { path: '/clean-result', name: 'DataCleanResult', component: () => import('@/views/DataCleanResult.vue'), meta: { title: '数据清洗结果' } },
 
   // ===== 知识管理（liuqi-knowledgebase）=====

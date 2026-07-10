@@ -3,7 +3,7 @@ import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import Header from '@/components/Header.vue'
 import Sidebar from '@/components/Sidebar.vue'
-import { getCleanTasks, saveCleanTask, executeCleanTask, deleteCleanTask, getCleanLogs, type CleanTask, type CleanLog } from '@/api/clean'
+import { getCleanTasks, saveCleanTask, executeCleanTask, deleteCleanTask, getCleanLogs, getCleanTaskDetail, saveCleanTaskNodes, queryPicCleanTypes, queryOriginalSampleSetOptions, type CleanTask, type CleanLog, type PicCleanType, type OriginalSampleSetOption } from '@/api/clean'
 import { getCodeDict } from '@/api/sample'
 import { ElMessage, ElMessageBox } from 'element-plus'
 
@@ -15,6 +15,10 @@ const executingSet = ref<Set<string>>(new Set())
 
 // 数据类型选项
 const sampleTypeOptions = ref<{ value: string; label: string }[]>([])
+
+// 图片清洗相关
+const picCleanTypes = ref<PicCleanType[]>([])
+const originalSampleSetOptions = ref<OriginalSampleSetOption[]>([])
 
 const filterName = ref('')
 
@@ -41,14 +45,43 @@ function resetFilters() {
   filterName.value = ''
 }
 
-// 新增任务弹框
+// 新增/编辑任务弹框
 const dialogVisible = ref(false)
 const dialogSaving = ref(false)
-const dialogForm = ref({ taskName: '', remark: '', sampleType: '' })
+const dialogForm = ref({ taskName: '', remark: '', sampleType: '', originalSampleSetNo: '', cleanTypes: [] as string[] })
+const isEditMode = ref(false)
+const editingTaskNo = ref('')
 
 function openCreateDialog() {
-  dialogForm.value = { taskName: '', remark: '', sampleType: '' }
+  isEditMode.value = false
+  editingTaskNo.value = ''
+  dialogForm.value = { taskName: '', remark: '', sampleType: '', originalSampleSetNo: '', cleanTypes: [] }
   dialogVisible.value = true
+}
+
+async function openEditConfigDialog(task: CleanTask) {
+  isEditMode.value = true
+  editingTaskNo.value = task.taskNo
+  dialogForm.value = { taskName: task.taskName, remark: task.remark || '', sampleType: task.sampleType || '', originalSampleSetNo: '', cleanTypes: [] }
+  dialogVisible.value = true
+
+  // 加载已有配置
+  try {
+    const detail = await getCleanTaskDetail(task.taskNo)
+    if (detail.nodes && detail.nodes.length > 0) {
+      const node = detail.nodes[0]
+      dialogForm.value.originalSampleSetNo = node.nodeId || ''
+      // nodeConfig 可能是逗号分隔字符串(image_clean)或对象(时序节点)
+      const config = node.nodeConfig as any
+      if (typeof config === 'string') {
+        dialogForm.value.cleanTypes = config.split(',').map((s: string) => s.trim()).filter(Boolean)
+      } else if (Array.isArray(config)) {
+        dialogForm.value.cleanTypes = config
+      }
+    }
+  } catch (e: any) {
+    ElMessage.error('加载配置失败：' + (e.message || ''))
+  }
 }
 
 async function handleCreateConfirm() {
@@ -56,18 +89,64 @@ async function handleCreateConfirm() {
     ElMessage.warning('请输入任务名称')
     return
   }
+
+  // 图片类型校验
+  if (dialogForm.value.sampleType === '05') {
+    if (!dialogForm.value.originalSampleSetNo) {
+      ElMessage.warning('请选择原始样本集')
+      return
+    }
+    if (dialogForm.value.cleanTypes.length === 0) {
+      ElMessage.warning('请选择清洗类型')
+      return
+    }
+  }
+
   dialogSaving.value = true
   try {
-    const taskNo = await saveCleanTask(
-      dialogForm.value.taskName.trim(),
-      dialogForm.value.remark.trim(),
-      dialogForm.value.sampleType
-    )
-    ElMessage.success('新建任务成功')
-    dialogVisible.value = false
-    router.push({ path: '/clean-task-edit', query: { taskNo } })
+    if (isEditMode.value) {
+      // 编辑模式：更新图片清洗配置
+      const cleanTypesStr = dialogForm.value.cleanTypes.join(',')
+      // 查找原始样本集名称
+      const setName = originalSampleSetOptions.value.find(o => o.setNo === dialogForm.value.originalSampleSetNo)?.setName || dialogForm.value.originalSampleSetNo
+      await saveCleanTaskNodes(editingTaskNo.value, [{
+        nodeId: dialogForm.value.originalSampleSetNo,
+        nodeType: 'image_clean',
+        nodeName: setName,
+        nodeConfig: cleanTypesStr,
+        posX: 0,
+        posY: 0,
+        prevNodeId: null,
+      }])
+      ElMessage.success('配置保存成功')
+      dialogVisible.value = false
+      await loadTasks()
+    } else if (dialogForm.value.sampleType === '05') {
+      // 新建图片类型任务
+      const cleanTypesStr = dialogForm.value.cleanTypes.join(',')
+      await saveCleanTask(
+        dialogForm.value.taskName.trim(),
+        dialogForm.value.remark.trim(),
+        '05',
+        dialogForm.value.originalSampleSetNo,
+        cleanTypesStr
+      )
+      ElMessage.success('新建任务成功')
+      dialogVisible.value = false
+      await loadTasks()
+    } else {
+      // 新建时序类型任务
+      const taskNo = await saveCleanTask(
+        dialogForm.value.taskName.trim(),
+        dialogForm.value.remark.trim(),
+        dialogForm.value.sampleType
+      )
+      ElMessage.success('新建任务成功')
+      dialogVisible.value = false
+      router.push({ path: '/clean-task-edit', query: { taskNo } })
+    }
   } catch (e: any) {
-    ElMessage.error(e.message || '新建失败')
+    ElMessage.error(e.message || '保存失败')
   } finally {
     dialogSaving.value = false
   }
@@ -86,17 +165,25 @@ function statusColor(statusCode: string): string {
   return 'rgba(255, 255, 255, 0.5)'
 }
 
-// 执行任务（下载 Excel）
+// 执行任务
 async function handleExecute(task: CleanTask) {
+  const isImage = task.sampleType === '05'
+  const confirmMsg = isImage
+    ? '确认执行该清洗任务？执行后将检测问题图片并移动到隔离目录。'
+    : '确认执行该清洗任务？执行后清洗结果将以 JSON 文件保存到服务器。'
   try {
-    await ElMessageBox.confirm('确认执行该清理任务？执行后清洗结果将以 JSON 文件保存到服务器。', '提示', { type: 'warning' })
+    await ElMessageBox.confirm(confirmMsg, '提示', { type: 'warning' })
   } catch {
     return
   }
   executingSet.value.add(task.taskNo)
   try {
     const result = await executeCleanTask(task.taskNo)
-    ElMessage.success(`执行成功，清洗结果已保存（共 ${result.resultCount} 条），文件：${result.fileName}`)
+    if (isImage) {
+      ElMessage.success(`执行成功，共检测 ${result.resultCount} 张正常图片，问题图片已隔离`)
+    } else {
+      ElMessage.success(`执行成功，清洗结果已保存（共 ${result.resultCount} 条），文件：${result.fileName}`)
+    }
     await loadTasks()
   } catch (e: any) {
     ElMessage.error(e.message || '执行失败')
@@ -110,7 +197,7 @@ async function handleExecute(task: CleanTask) {
 async function handleDelete(task: CleanTask) {
   try {
     await ElMessageBox.confirm(
-      `确认删除清理任务「${task.taskName}」？\n将同时删除流程配置，且不可恢复。`,
+      `确认删除清洗任务「${task.taskName}」？\n将同时删除流程配置，且不可恢复。`,
       '删除确认',
       { type: 'warning', confirmButtonText: '删除', cancelButtonText: '取消' }
     )
@@ -128,6 +215,14 @@ async function handleDelete(task: CleanTask) {
 
 function goToEdit(taskNo: string) {
   router.push({ path: '/clean-task-edit', query: { taskNo } })
+}
+
+function handleTaskClick(task: CleanTask) {
+  if (task.sampleType === '05') {
+    openEditConfigDialog(task)
+  } else {
+    goToEdit(task.taskNo)
+  }
 }
 
 // ========== 执行记录弹窗 ==========
@@ -169,6 +264,8 @@ function openLogDetailDialog(log: CleanLog) {
 onMounted(() => {
   loadTasks()
   loadCodeDict()
+  loadPicCleanTypes()
+  loadOriginalSampleSetOptions()
 })
 
 async function loadCodeDict() {
@@ -184,11 +281,27 @@ async function loadCodeDict() {
     console.error('获取数据类型字典失败:', e)
   }
 }
+
+async function loadPicCleanTypes() {
+  try {
+    picCleanTypes.value = await queryPicCleanTypes()
+  } catch (e) {
+    console.error('获取图像清洗类型失败:', e)
+  }
+}
+
+async function loadOriginalSampleSetOptions() {
+  try {
+    originalSampleSetOptions.value = await queryOriginalSampleSetOptions('05')
+  } catch (e) {
+    console.error('获取原始样本集选项失败:', e)
+  }
+}
 </script>
 
 <template>
   <div class="app-layout">
-    <Header title="模型能力展示与体验工作台" subtitle="样本数据清理" />
+    <Header title="模型能力展示与体验工作台" subtitle="样本数据清洗" />
     <div class="main-content">
       <Sidebar />
       <main class="content-area">
@@ -232,12 +345,12 @@ async function loadCodeDict() {
             <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="rgba(0,212,255,0.3)" stroke-width="1.5">
               <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
             </svg>
-            <p>暂无清理任务</p>
+            <p>暂无清洗任务</p>
           </div>
           <div v-else>
             <div class="list-row" v-for="item in filteredList" :key="item.taskNo">
-              <span class="col col-no link-col" @click="goToEdit(item.taskNo)">{{ item.taskNo }}</span>
-              <span class="col col-name link-col" @click="goToEdit(item.taskNo)">{{ item.taskName }}</span>
+              <span class="col col-no link-col" @click="handleTaskClick(item)">{{ item.taskNo }}</span>
+              <span class="col col-name link-col" @click="handleTaskClick(item)">{{ item.taskName }}</span>
               <span class="col col-remark">{{ item.remark || '-' }}</span>
               <span class="col col-create">{{ item.createTime || '-' }}</span>
               <span class="col col-exec">{{ item.lastExecuteTime || '-' }}</span>
@@ -260,6 +373,13 @@ async function loadCodeDict() {
                   @click="handleExecute(item)"
                 >执行</el-button>
                 <el-button
+                  v-if="item.sampleType === '05'"
+                  size="small"
+                  class="edit-btn"
+                  @click="openEditConfigDialog(item)"
+                >配置</el-button>
+                <el-button
+                  v-else
                   size="small"
                   class="edit-btn"
                   @click="goToEdit(item.taskNo)"
@@ -283,17 +403,30 @@ async function loadCodeDict() {
       </main>
     </div>
 
-    <!-- 新增任务弹框 -->
-    <el-dialog v-model="dialogVisible" title="新增清理任务" width="520px" :close-on-click-modal="false" class="create-dialog">
-      <el-form label-width="80px" label-position="right">
+    <!-- 新增/编辑任务弹框 -->
+    <el-dialog v-model="dialogVisible" :title="isEditMode ? '编辑清洗配置' : '新增清洗任务'" width="520px" :close-on-click-modal="false" class="create-dialog">
+      <el-form label-width="100px" label-position="right">
         <el-form-item label="任务名称" required>
-          <el-input v-model="dialogForm.taskName" placeholder="请输入任务名称" maxlength="100" />
+          <el-input v-model="dialogForm.taskName" placeholder="请输入任务名称" maxlength="100" :disabled="isEditMode" />
         </el-form-item>
         <el-form-item label="数据类型">
-          <el-select v-model="dialogForm.sampleType" placeholder="请选择数据类型" clearable style="width: 100%">
+          <el-select v-model="dialogForm.sampleType" placeholder="请选择数据类型" clearable style="width: 100%" :disabled="isEditMode">
             <el-option v-for="opt in sampleTypeOptions" :key="opt.value" :label="opt.label" :value="opt.value" />
           </el-select>
         </el-form-item>
+        <!-- 图片类型：显示原始样本集和清洗类型 -->
+        <template v-if="dialogForm.sampleType === '05'">
+          <el-form-item label="原始样本集" required>
+            <el-select v-model="dialogForm.originalSampleSetNo" placeholder="请选择原始样本集" filterable style="width: 100%">
+              <el-option v-for="opt in originalSampleSetOptions" :key="opt.setNo" :label="opt.setName" :value="opt.setNo" />
+            </el-select>
+          </el-form-item>
+          <el-form-item label="清洗类型" required>
+            <el-select v-model="dialogForm.cleanTypes" placeholder="请选择清洗类型" multiple collapse-tags collapse-tags-tooltip style="width: 100%">
+              <el-option v-for="ct in picCleanTypes" :key="ct.codeValue" :label="ct.codeName" :value="ct.codeValue" />
+            </el-select>
+          </el-form-item>
+        </template>
         <el-form-item label="任务说明">
           <el-input v-model="dialogForm.remark" type="textarea" :rows="3" placeholder="请输入任务说明（选填）" maxlength="500" />
         </el-form-item>

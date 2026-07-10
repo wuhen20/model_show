@@ -1736,7 +1736,7 @@ def generate_clean_task_no():
 
 
 def query_data_clean_tasks():
-    """查询所有清理任务列表"""
+    """查询所有清洗任务列表"""
     conn = get_connection()
     try:
         with conn.cursor() as cursor:
@@ -1746,6 +1746,7 @@ def query_data_clean_tasks():
                     task_name,
                     remark,
                     task_status,
+                    sample_type,
                     {_date_format('create_time')} as create_time,
                     {_date_format('last_execute_time')} as last_execute_time,
                     last_execute_flag
@@ -1876,7 +1877,7 @@ def get_clean_task_raw(task_no: str):
     conn = get_connection()
     try:
         with conn.cursor() as cursor:
-            _execute(cursor, "SELECT task_no, task_name FROM s_data_clean_task WHERE task_no = %s", (task_no,))
+            _execute(cursor, "SELECT task_no, task_name, sample_type FROM s_data_clean_task WHERE task_no = %s", (task_no,))
             task = cursor.fetchone()
             if not task:
                 return None
@@ -2014,7 +2015,7 @@ def finish_clean_log(record_id: int, execute_status: str, total_count: int,
 
 
 def query_clean_log(task_no: str):
-    """查询清理任务的执行记录列表"""
+    """查询清洗任务的执行记录列表"""
     conn = get_connection()
     try:
         with conn.cursor() as cursor:
@@ -2034,6 +2035,53 @@ def query_clean_log(task_no: str):
                 ORDER BY start_time DESC
             """
             _execute(cursor, sql, (task_no,))
+            return cursor.fetchall()
+    finally:
+        conn.close()
+
+
+def query_pic_clean_type_dict():
+    """查询图像清洗类型字典(PIC_CLEAN_TYPE)，返回含 SPARE1(cleanvision 编码)"""
+    conn = get_connection()
+    try:
+        with conn.cursor() as cursor:
+            sql = """
+                SELECT CODE_VALUE, CODE_NAME, SPARE1
+                FROM sys_code_dict
+                WHERE SORT_NO = 'PIC_CLEAN_TYPE' AND ACTIVE_FLAG = 1
+                ORDER BY ORDER_INDEX, RECORD_ID
+            """
+            _execute(cursor, sql, ())
+            return cursor.fetchall()
+    finally:
+        conn.close()
+
+
+def insert_clean_pic_record(task_no: str, clean_type: str, file_name: str, file_path: str):
+    """插入图像清洗记录到 s_data_clean_pic"""
+    conn = get_connection()
+    try:
+        with conn.cursor() as cursor:
+            sql = """
+                INSERT INTO s_data_clean_pic (task_no, clean_type, file_name, file_path)
+                VALUES (%s, %s, %s, %s)
+            """
+            _execute(cursor, sql, (task_no, clean_type, file_name, file_path))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def query_original_sample_file_paths(set_no: str):
+    """查询原始样本集下所有样本的 file_path(用于获取图片目录)"""
+    conn = get_connection()
+    try:
+        with conn.cursor() as cursor:
+            sql = """
+                SELECT file_path FROM s_original_sample_info
+                WHERE set_no = %s AND file_path IS NOT NULL AND file_path != ''
+            """
+            _execute(cursor, sql, (set_no,))
             return cursor.fetchall()
     finally:
         conn.close()
