@@ -3,7 +3,7 @@ import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import Header from '@/components/Header.vue'
 import Sidebar from '@/components/Sidebar.vue'
-import { getCodeDict, saveSampleSet, querySampleSet, uploadSamples, type CodeDictItem } from '@/api/sample'
+import { getCodeDict, saveSampleSet, querySampleSet, uploadSamples } from '@/api/originalSample'
 import { ElMessage, ElLoading } from 'element-plus'
 
 type ViewMode = 'card' | 'list'
@@ -61,19 +61,7 @@ const sortOptions: { value: SortField; label: string }[] = [
   { value: 'popularity', label: '热度' }
 ]
 
-const sampleSets = ref<SampleSet[]>([
-  { id: 1, setNo: 'SAMPLE-001', name: '线损异常诊断样本集', modality: ['text'], updateTime: '2026-05-28', qualityLevel: '01', version: 'v3.2', popularity: 342, scale: 2865, businessSystem: '线损诊断', fieldCode: '', setDescription: '线损异常诊断文本数据集' },
-  { id: 2, setNo: 'SAMPLE-002', name: '采集异常识别样本集', modality: ['text'], updateTime: '2026-05-27', qualityLevel: '01', version: 'v2.8', popularity: 289, scale: 3215, businessSystem: '采集异常', fieldCode: '', setDescription: '采集运维异常识别专用文本数据集' },
-  { id: 3, setNo: 'SAMPLE-003', name: '电能表故障识别样本集', modality: ['image'], updateTime: '2026-05-26', qualityLevel: '01', version: 'v4.1', popularity: 256, scale: 1542, businessSystem: '电能表', fieldCode: '', setDescription: '电能表外观及内部故障图像样本集' },
-  { id: 5, setNo: 'SAMPLE-005', name: '作业风险识别样本集', modality: ['image'], updateTime: '2026-05-24', qualityLevel: '02', version: 'v1.9', popularity: 176, scale: 8632, businessSystem: '作业安全', fieldCode: '', setDescription: '现场作业风险场景图像集' },
-  { id: 6, setNo: 'SAMPLE-006', name: '市场交易预测样本集', modality: ['text'], updateTime: '2026-05-23', qualityLevel: '02', version: 'v2.1', popularity: 145, scale: 2641, businessSystem: '市场交易', fieldCode: '', setDescription: '电力市场交易及价格预测文本数据' },
-  { id: 7, setNo: 'SAMPLE-007', name: '低电压诊断样本集', modality: ['image'], updateTime: '2026-05-22', qualityLevel: '03', version: 'v1.3', popularity: 112, scale: 5420, businessSystem: '低电压', fieldCode: '', setDescription: '配电网低电压问题诊断图像样本' },
-  { id: 8, setNo: 'SAMPLE-008', name: '谐波分析样本集', modality: ['audio'], updateTime: '2026-05-21', qualityLevel: '03', version: 'v1.1', popularity: 87, scale: 750, businessSystem: '谐波分析', fieldCode: '', setDescription: '电力谐波信号音频数据集' },
-  { id: 9, setNo: 'SAMPLE-009', name: '故障录波识别样本集', modality: ['image'], updateTime: '2026-05-20', qualityLevel: '02', version: 'v2.0', popularity: 203, scale: 1300, businessSystem: '故障识别', fieldCode: '', setDescription: '电网故障录波图像样本' },
-  { id: 10, setNo: 'SAMPLE-010', name: '巡检视频分析样本集', modality: ['video'], updateTime: '2026-05-19', qualityLevel: '04', version: 'v1.0', popularity: 64, scale: 800, businessSystem: '设备缺陷', fieldCode: '', setDescription: '变电站巡检视频及标注数据' },
-  { id: 11, setNo: 'SAMPLE-011', name: '计量异常语音报工样本集', modality: ['audio'], updateTime: '2026-05-18', qualityLevel: '03', version: 'v1.2', popularity: 53, scale: 410, businessSystem: '计量异常', fieldCode: '', setDescription: '计量异常现场语音报工记录数据' },
-  { id: 12, setNo: 'SAMPLE-012', name: '综合能源调度样本集', modality: ['video'], updateTime: '2026-05-17', qualityLevel: '01', version: 'v3.0', popularity: 318, scale: 9100, businessSystem: '市场交易', fieldCode: '', setDescription: '综合能源系统调度优化视频数据集' }
-])
+const sampleSets = ref<SampleSet[]>([])
 
 const viewMode = ref<ViewMode>('card')
 const sortOrder = ref<SortOrder>('desc')
@@ -178,14 +166,14 @@ function toggleSort(field: SortField) {
 }
 
 function goToDetail(item: SampleSet) {
-  router.push({ path: '/sample-detail', query: { setNo: item.setNo, setName: item.name, typeCode: item.modality[0] || '' } })
+  router.push({ path: '/original-sample-detail', query: { setNo: item.setNo, setName: item.name, typeCode: item.modality[0] || '' } })
 }
 
 async function downloadSampleSet(item: SampleSet) {
   const now = new Date()
   const ts = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}${String(now.getHours()).padStart(2, '0')}${String(now.getMinutes()).padStart(2, '0')}`
   const fileName = `${item.name}_${ts}`
-  const url = `/api/sample/download-sample-set?setNo=${encodeURIComponent(item.setNo)}&fileName=${encodeURIComponent(fileName)}`
+  const url = `/api/original-sample/download-sample-set?setNo=${encodeURIComponent(item.setNo)}&fileName=${encodeURIComponent(fileName)}`
   const loadingInstance = ElLoading.service({ lock: true, text: '正在打包下载...', background: 'rgba(0,0,0,0.7)' })
   try {
     const res = await fetch(url)
@@ -256,11 +244,6 @@ async function loadCodeDict() {
         }
         iconMap[item.codeValue] = iconKey
       })
-      // 同时添加默认 key 的映射，确保假数据也能正常展示
-      defaultModalityOptions.forEach(o => {
-        if (!labelMap[o.value]) labelMap[o.value] = o.label
-        if (!iconMap[o.value]) iconMap[o.value] = o.value
-      })
       modalityLabel.value = labelMap
       codeToIconKey.value = iconMap
     } else {
@@ -281,12 +264,6 @@ async function loadCodeDict() {
         labelMap[item.codeValue] = item.codeName
         colorMap[item.codeValue] = qualityColors[idx] || '#00d4ff'
         orderMap[item.codeValue] = data.QUALITY_LEVEL!.length - idx
-      })
-      // 同时添加默认 key 的映射，确保假数据也能正常展示
-      defaultQualityOptions.forEach((o, idx) => {
-        if (!labelMap[o.value]) labelMap[o.value] = o.label
-        if (!colorMap[o.value]) colorMap[o.value] = qualityColors[idx] || '#00d4ff'
-        if (!orderMap[o.value]) orderMap[o.value] = defaultQualityOptions.length - idx
       })
       qualityLabel.value = labelMap
       qualityColor.value = colorMap
@@ -331,24 +308,22 @@ onMounted(() => {
 async function loadSampleSets() {
   try {
     const rows = await querySampleSet()
-    if (rows.length > 0) {
-      const dbData: SampleSet[] = rows.map((row: any, idx: number) => ({
-        id: row.recordId ?? row.id ?? -(idx + 1),
-        setNo: row.setNo || '',
-        name: row.setName || row.setNo || '',
-        modality: row.typeCode ? [row.typeCode] : [],
-        updateTime: row.updateTime ? String(row.updateTime).slice(0, 16) : (row.createTime ? String(row.createTime).slice(0, 16) : ''),
-        qualityLevel: row.qualityLevel || '',
-        version: row.version || '',
-        popularity: row.popularity ?? 0,
-        scale: row.sampleCount ?? 0,
-        businessSystem: row.businessSystem || '',
-        fieldCode: row.sampleFieldCode || '',
-        setDescription: row.setDescription || '',
-        _fromDb: true
-      }))
-      sampleSets.value = [...dbData, ...sampleSets.value]
-    }
+    const dbData: SampleSet[] = rows.map((row: any, idx: number) => ({
+      id: row.recordId ?? row.id ?? -(idx + 1),
+      setNo: row.setNo || '',
+      name: row.setName || row.setNo || '',
+      modality: row.typeCode ? [row.typeCode] : [],
+      updateTime: row.updateTime ? String(row.updateTime).slice(0, 16) : (row.createTime ? String(row.createTime).slice(0, 16) : ''),
+      qualityLevel: row.qualityLevel || '',
+      version: row.version || '',
+      popularity: row.popularity ?? 0,
+      scale: row.sampleCount ?? 0,
+      businessSystem: row.businessSystem || '',
+      fieldCode: row.sampleFieldCode || '',
+      setDescription: row.setDescription || '',
+      _fromDb: true
+    }))
+    sampleSets.value = dbData
   } catch (e) {
     console.error('查询样本集失败:', e)
   }
@@ -493,14 +468,14 @@ async function handleUploadConfirm() {
 
 <template>
   <div class="app-layout">
-    <Header title="模型能力展示与体验工作台" subtitle="样本集管理" />
+    <Header title="模型能力展示与体验工作台" subtitle="原始样本集管理" />
     <div class="main-content">
       <Sidebar />
       <main class="content-area">
         <div class="page-header">
           <div class="page-title">
-            <h2>样本集管理</h2>
-            <p>管理和浏览全部样本集，支持多维度筛选与排序</p>
+            <h2>原始样本集管理</h2>
+            <p>管理和浏览全部原始样本集，支持多维度筛选与排序</p>
           </div>
           <div class="page-actions">
             <el-button type="primary" @click="openCreateDialog">新建样本集</el-button>

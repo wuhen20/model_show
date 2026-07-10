@@ -1,6 +1,7 @@
 from pathlib import Path
 
 from pydantic_settings import BaseSettings, DotEnvSettingsSource
+from pydantic import field_validator
 
 
 class _MultiEncodingDotEnvSource(DotEnvSettingsSource):
@@ -53,6 +54,12 @@ class Settings(BaseSettings):
     db_mode: str = ""  # Oracle 连接模式：sysdba / sysoper / 空（普通用户不需要填）
     sample_upload_dir: str = "E:\人工智能\现场作业专家系统"
 
+    # ---- Ceph 对象存储配置（图像采集使用） ----
+    ceph_endpoint: str = ""          # 如 http://192.168.1.100:8080
+    ceph_access_key: str = ""
+    ceph_secret_key: str = ""
+    ceph_secure: bool = False        # 是否使用 HTTPS
+
     # ---- 知识管理 · LightRAG ----
     lightrag_enabled: bool = True
     lightrag_base_url: str = "http://127.0.0.1:9621"
@@ -101,6 +108,22 @@ class Settings(BaseSettings):
 
     # ---- 知识管理 · 演示模式 ----
     demo_mode: bool = True
+
+    # ===== SM4 加密配置自动解密 =====
+    @field_validator("db_user", "db_password", mode="before")
+    @classmethod
+    def _decrypt_sm4_fields(cls, v: str) -> str:
+        """自动解密带 SM4: 前缀的数据库用户名和密码"""
+        if not isinstance(v, str):
+            return v
+        if not v.startswith("SM4:"):
+            return v  # 未加密，直接返回
+        # 加密格式，解密后返回
+        from app.core.crypto import sm4_decrypt
+        try:
+            return sm4_decrypt(v)
+        except Exception as e:
+            raise ValueError(f"SM4 解密失败: {e}")
     graph_demo_max_nodes: int = 2000
     fake_mode: bool = False
     fake_data_config_path: str = "data/fake_data_config.json"

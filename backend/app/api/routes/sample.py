@@ -1,9 +1,10 @@
 from fastapi import APIRouter, Query, UploadFile, File, Form
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
-from app.core.database import query_code_dict, query_sample_set, query_sample_info, save_sample_set, sample_statistic, sample_trend, query_audio_text, update_sample_score, insert_sample_info, update_label_think, generate_task_no, query_data_collect_task, save_data_collect_task, save_data_collect_task_det, query_data_collect_task_det, update_data_collect_task_det, get_task_det_raw, update_task_status, insert_collect_log, append_collect_log, finish_collect_log, query_collect_log, query_all_scheduled_tasks, get_task_execute_type, update_task_execute_type, delete_data_collect_task, execute_source_sql, save_query_result_to_desktop, query_target_table_columns, query_col_map, save_col_map, write_to_target_table
+from app.core.database import query_code_dict, query_sample_set, query_sample_info, save_sample_set, sample_statistic, sample_trend, query_audio_text, update_sample_score, insert_sample_info, update_label_think, generate_task_no, generate_sample_set_no, generate_sample_no, query_data_collect_task, save_data_collect_task, save_data_collect_task_det, query_data_collect_task_det, update_data_collect_task_det, get_task_det_raw, update_task_status, insert_collect_log, append_collect_log, finish_collect_log, query_collect_log, query_all_scheduled_tasks, get_task_execute_type, update_task_execute_type, delete_data_collect_task, execute_source_sql, save_query_result_to_desktop, query_target_table_columns, query_col_map, save_col_map, write_to_target_table, query_original_sample_set_by_type
 import os
 import io
+import json
 import logging
 import zipfile
 import traceback
@@ -96,7 +97,6 @@ def get_samples_api(setNo: str = Query(..., description="样本集编号")):
 
 
 class SaveSampleSetRequest(BaseModel):
-    setCode: str
     setName: str
     description: str = ""
     businessSystem: str = ""
@@ -115,8 +115,18 @@ class UpdateSampleScoreRequest(BaseModel):
 @router.post("/save-sample-set")
 def save_sample_set_api(req: SaveSampleSetRequest):
     try:
-        rowcount = save_sample_set(req.model_dump())
-        return {"code": 0, "message": "保存成功", "data": {"rowcount": rowcount}}
+        set_no = generate_sample_set_no()
+        # 只保留 SQL 需要的字段，避免 Oracle 报错多余的参数
+        data = {
+            'setCode': set_no,
+            'setName': req.setName,
+            'description': req.description,
+            'businessSystem': req.businessSystem,
+            'sampleTypeCode': req.sampleTypeCode,
+            'sampleFieldCode': req.sampleFieldCode,
+        }
+        rowcount = save_sample_set(data)
+        return {"code": 0, "message": "保存成功", "data": {"rowcount": rowcount, "setNo": set_no}}
     except Exception as e:
         logger.exception("接口异常")
         return {"code": 1, "message": f"保存失败: {str(e)}"}
@@ -304,6 +314,149 @@ def download_sample_set(setNo: str = Query(..., description="样本集编号"), 
     )
 
 
+@router.get("/export-sample-set-json")
+def export_sample_set_json(setNo: str = Query(..., description="样本集编号"),
+                           fileName: str = Query(..., description="下载文件名")):
+    """导出样本集为 ShareGPT 格式 JSON：参考 YOLO转sharegpt.py 脚本逻辑
+    将图片 + 同名 YOLO 标注 txt 转换为 conversations + images 结构
+    """
+    from urllib.parse import quote
+    from PIL import Image
+
+    HUMAN_QUESTION = ("<image>\n请识别图片内装表接电的错接线类型，并标出位置，"
+                      "其中错接线类型有如下几种'一孔多线','端子接线缺失', "
+                      "'单相导线颜色不规范', '零线并接','零线串接','三相导线颜色不规范', "
+                      "'电能表接线杂乱', '单相电能表零火反接', '三相电能表零火反接'")
+    IMAGE_SUFFIXES = ('.jpg', '.jpeg', '.png', '.gif', '.bmp',
+                      '.tiff', '.tif', '.webp', '.svg', '.ico',
+                      '.raw', '.cr2', '.nef', '.arw', '.dng')
+
+    def load_class_map(dir_path):
+        """从 classes.txt / class.txt 读取 YOLO 类别映射 {id: name}"""
+        class_map = {}
+        for cls_name in ("classes.txt", "class.txt"):
+            cls_file = os.path.join(dir_path, cls_name)
+            if os.path.isfile(cls_file):
+                with open(cls_file, "r", encoding="utf-8") as f:
+                    for idx, line in enumerate(f):
+                        name = line.strip()
+                        if name:
+                            class_map[idx] = name
+                break
+        return class_map
+
+    def yolo_to_qwen3vl(yolo_line, img_w, img_h, class_map):
+        try:
+            parts = yolo_line.strip().split()
+            cls_id = int(parts[0])
+            cx, cy, w, h = float(parts[1]), float(parts[2]), float(parts[3]), float(parts[4])
+            x_center = cx * img_w
+            y_center = cy * img_h
+            box_w = w * img_w
+            box_h = h * img_h
+            x1 = x_center - box_w / 2
+            y1 = y_center - box_h / 2
+            x2 = x_center + box_w / 2
+            y2 = y_center + box_h / 2
+            q_x1 = max(0, min(1000, int(round(x1 / img_w * 1000))))
+            q_y1 = max(0, min(1000, int(round(y1 / img_h * 1000))))
+            q_x2 = max(0, min(1000, int(round(x2 / img_w * 1000))))
+            q_y2 = max(0, min(1000, int(round(y2 / img_h * 1000))))
+            label = class_map.get(cls_id, f"未知类别_{cls_id}")
+            return {"bbox_2d": [q_x1, q_y1, q_x2, q_y2], "label": label}
+        except Exception as e:
+            logger.warning(f"解析YOLO标注失败: {yolo_line}, 错误: {e}")
+            return None
+
+    try:
+        samples = query_sample_info(setNo)
+    except Exception as e:
+        logger.exception("接口异常")
+        return {"code": 1, "message": f"查询样本失败: {str(e)}"}
+
+    if not samples:
+        return {"code": 1, "message": "该样本集下无样本数据"}
+
+    sharegpt_data = []
+    skip_no_txt = 0
+    skip_empty_anno = 0
+    skip_bad_img = 0
+    processed = 0
+
+    # 按 samples 顺序处理，每条样本对应一张图片 + 同名 txt 标注
+    for row in samples:
+        file_path = row.get("file_path") or row.get("filePath")
+        if not file_path:
+            continue
+        file_path = os.path.normpath(file_path)
+        if not os.path.isfile(file_path):
+            continue
+
+        ext = os.path.splitext(file_path)[1].lower()
+        if ext not in IMAGE_SUFFIXES:
+            continue
+
+        img_filename = os.path.basename(file_path)
+        dir_path = os.path.dirname(file_path)
+        base_name = os.path.splitext(img_filename)[0]
+        txt_path = os.path.join(dir_path, base_name + ".txt")
+
+        # 1. 无标注文件跳过
+        if not os.path.isfile(txt_path):
+            skip_no_txt += 1
+            continue
+
+        # 2. 读取图片尺寸
+        try:
+            with Image.open(file_path) as img:
+                img_w, img_h = img.width, img.height
+        except Exception as e:
+            logger.warning(f"读取图片尺寸失败: {img_filename}, 错误: {e}")
+            skip_bad_img += 1
+            continue
+
+        # 3. 加载类别映射
+        class_map = load_class_map(dir_path)
+
+        # 4. 解析 YOLO 标注
+        annotations = []
+        with open(txt_path, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                bbox_info = yolo_to_qwen3vl(line, img_w, img_h, class_map)
+                if bbox_info:
+                    annotations.append(bbox_info)
+
+        if not annotations:
+            skip_empty_anno += 1
+            continue
+
+        gpt_value = json.dumps(annotations, ensure_ascii=False)
+        sharegpt_item = {
+            "conversations": [
+                {"from": "human", "value": HUMAN_QUESTION},
+                {"from": "gpt", "value": gpt_value}
+            ],
+            "images": file_path
+        }
+        sharegpt_data.append(sharegpt_item)
+        processed += 1
+
+    logger.info(f"JSON导出统计: 正常处理 {processed} 张，无标注跳过 {skip_no_txt} 张，"
+                f"标注为空 {skip_empty_anno} 张，图片读取失败 {skip_bad_img} 张")
+
+    json_content = json.dumps(sharegpt_data, ensure_ascii=False, indent=2)
+    safe_name = (fileName + ".json").replace(" ", "_")
+    encoded_name = quote(safe_name)
+    return StreamingResponse(
+        io.BytesIO(json_content.encode("utf-8")),
+        media_type="application/json",
+        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{encoded_name}"}
+    )
+
+
 @router.post("/upload-samples")
 async def upload_samples(
     setNo: str = Form(..., description="样本集编号"),
@@ -331,6 +484,9 @@ async def upload_samples(
             content = await file.read()
             with open(file_path, "wb") as f:
                 f.write(content)
+            # 图片类型的 .txt 标注文件只保存，不写样本信息表
+            if typeCode == '05' and ext == '.txt':
+                continue
             # 写入数据库
             insert_sample_info(
                 set_no=setNo,
@@ -394,9 +550,15 @@ def save_collect_task_api(payload: dict):
     remark = payload.get("remark", "").strip()
     execute_type = payload.get("executeType", "01").strip() or "01"
     cron_formula = payload.get("cronFormula", "").strip()
+    sample_type = payload.get("sampleType", "").strip()
+    sample_set_no = payload.get("sampleSetNo", "").strip()
 
     if not task_name:
         return {"code": 1, "message": "任务名称不能为空"}
+    if not sample_type:
+        return {"code": 1, "message": "数据类型不能为空"}
+    if not sample_set_no:
+        return {"code": 1, "message": "原始样本集不能为空"}
     if execute_type not in ("01", "02"):
         return {"code": 1, "message": "执行方式无效，应为 01-手动 或 02-定时"}
     if execute_type == "02" and not cron_formula:
@@ -404,7 +566,7 @@ def save_collect_task_api(payload: dict):
 
     try:
         task_no = generate_task_no()
-        save_data_collect_task(task_no, task_name, remark, execute_type, cron_formula)
+        save_data_collect_task(task_no, task_name, remark, execute_type, cron_formula, sample_type, sample_set_no)
 
         # 定时任务：保存成功后注册到调度器
         if execute_type == "02":
@@ -415,6 +577,26 @@ def save_collect_task_api(payload: dict):
     except Exception as e:
         logger.exception("接口异常")
         return {"code": 1, "message": f"保存失败: {str(e)}"}
+
+
+@router.get("/query-sample-set-by-type")
+def query_sample_set_by_type_api(sampleType: str = Query(..., description="样本类型编码")):
+    """按样本类型查询原始样本集（用于数据采集任务关联选择）"""
+    try:
+        rows = query_original_sample_set_by_type(sampleType)
+        data = [
+            {
+                "setNo": row["set_no"],
+                "setName": row["set_name"],
+                "setDescription": row.get("set_description") or "",
+                "businessSystem": row.get("business_system") or "",
+            }
+            for row in rows
+        ]
+        return {"code": 0, "data": data}
+    except Exception as e:
+        logger.exception("接口异常")
+        return {"code": 1, "message": f"查询失败: {str(e)}"}
 
 
 @router.get("/query-collect-task-det")
@@ -441,6 +623,46 @@ def query_collect_task_det_api(taskNo: str = Query(..., description="任务编�
         return {"code": 1, "message": f"查询失败: {str(e)}"}
 
 
+@router.post("/test-db-connection")
+def test_db_connection_api(payload: dict):
+    """测试数据库连接"""
+    db_type_code = payload.get("dbType", "").strip()
+    host = payload.get("host", "").strip()
+    port = payload.get("port", "").strip()
+    user = payload.get("user", "").strip()
+    pwd = payload.get("pwd", "").strip()
+    database = payload.get("database", "").strip()
+    auth = payload.get("auth", "").strip() or "NONE"
+
+    if not db_type_code or not host or not user:
+        return {"code": 1, "message": "数据库类型、地址、用户名不能为空"}
+
+    # 编码值转换为数据库类型名称
+    db_type_map = {"01": "MYSQL", "02": "ORACLE", "03": "HIVE"}
+    db_type = db_type_map.get(db_type_code)
+    if not db_type:
+        return {"code": 1, "message": f"不支持的数据库类型编码: {db_type_code}"}
+
+    try:
+        # 尝试连接数据库，执行简单查询验证连接
+        from app.core.database import get_connection_by_config
+        conn = get_connection_by_config(
+            db_type=db_type,
+            host=host,
+            port=port,
+            user=user,
+            pwd=pwd,
+            database=database,
+            auth=auth,
+        )
+        # 连接成功，关闭连接
+        conn.close()
+        return {"code": 0, "message": "连接成功"}
+    except Exception as e:
+        logger.exception("数据库连接测试失败")
+        return {"code": 1, "message": f"连接失败: {str(e)}"}
+
+
 @router.post("/save-collect-task-det")
 def save_collect_task_det_api(payload: dict):
     """保存数据采集任务明细（新增或更新）"""
@@ -454,6 +676,11 @@ def save_collect_task_det_api(payload: dict):
     target_table = payload.get("targetTable", "").strip()
     collect_sql = payload.get("collectSql", "").strip()
     source_db_auth = payload.get("sourceDbAuth", "").strip()
+    # 图像类型采集相关字段（可选，时序任务不传）
+    file_get_mode = payload.get("fileGetMode", "").strip()
+    bucket_name = payload.get("bucketName", "").strip()
+    file_id = payload.get("fileId", "").strip()
+    file_name = payload.get("fileName", "").strip()
 
     if not task_no:
         return {"code": 1, "message": "任务编号不能为空"}
@@ -471,6 +698,10 @@ def save_collect_task_det_api(payload: dict):
         "targetTable": target_table,
         "collectSql": collect_sql,
         "sourceDbAuth": source_db_auth,
+        "fileGetMode": file_get_mode or None,
+        "bucketName": bucket_name or None,
+        "fileId": file_id or None,
+        "fileName": file_name or None,
     }
 
     try:
@@ -494,7 +725,10 @@ class ExecuteCollectTaskRequest(BaseModel):
 
 
 def execute_collect_task_internal(task_no: str, trigger_source: str = "manual") -> dict:
-    """执行数据采集任务的核心逻辑：连接源数据库执行SQL，通过字段映射写入目标表。
+    """执行数据采集任务的核心逻辑。
+
+    - 时序类型：连接源数据库执行SQL，通过字段映射写入目标表
+    - 图像类型：连接源数据库执行SQL，根据图像获取配置下载图片文件并登记到 s_original_sample_info
 
     可被 HTTP 接口和定时调度器共同调用。
     trigger_source: manual-手动触发，scheduler-定时调度触发（仅用于日志标识）
@@ -511,6 +745,13 @@ def execute_collect_task_internal(task_no: str, trigger_source: str = "manual") 
     if not collect_sql:
         return {"code": 1, "message": "采集SQL不能为空"}
 
+    sample_type = det.get("sample_type") or ""
+
+    # 图像类型采集：走图像采集流程
+    if sample_type == "05":
+        return _execute_image_collect_task(task_no, det, trigger_source)
+
+    # 时序类型采集：走原有的字段映射写入目标表流程
     target_table = det.get("target_table")
     if not target_table:
         return {"code": 1, "message": "目标表未配置，请先配置目标表"}
@@ -594,9 +835,212 @@ def execute_collect_task_internal(task_no: str, trigger_source: str = "manual") 
         return {"code": 1, "message": f"执行失败: {fail_info}"}
 
 
+def _format_file_size(size_bytes: int) -> str:
+    """格式化文件大小带单位"""
+    if size_bytes < 1024:
+        return f"{size_bytes}B"
+    elif size_bytes < 1024 * 1024:
+        return f"{size_bytes / 1024:.2f}KB"
+    else:
+        return f"{size_bytes / (1024 * 1024):.2f}MB"
+
+
+def _execute_image_collect_task(task_no: str, det: dict, trigger_source: str = "manual") -> dict:
+    """执行图像类型数据采集任务
+
+    流程：连接源数据库执行SQL → 根据获取方式下载图像文件 → 登记到 s_original_sample_info
+    """
+    # 从任务明细获取图像配置
+    file_get_mode = det.get("file_get_mode") or ""
+    file_id_field = det.get("file_id") or ""  # 图像获取字段名
+    file_name_field = det.get("file_name") or ""  # 图像名称字段名
+    bucket_name = det.get("bucket_name") or ""
+    # 关联的原始样本集编号
+    sample_set_no = det.get("original_sample_set_no") or ""
+
+    if not file_get_mode:
+        return {"code": 1, "message": "图像获取方式未配置，请先配置图像获取配置"}
+    if not file_id_field:
+        return {"code": 1, "message": "图像获取字段未配置，请先配置图像获取配置"}
+    if file_get_mode == "02" and not bucket_name:
+        return {"code": 1, "message": "ceph 模式下桶名称不能为空"}
+
+    # 查询任务名称
+    task_name = ""
+    try:
+        from app.core.database import get_connection
+        conn = get_connection()
+        with conn.cursor() as cursor:
+            cursor.execute("SELECT task_name FROM s_data_collect_task WHERE task_no = %s", (task_no,))
+            row = cursor.fetchone()
+            if row:
+                task_name = row["task_name"]
+        conn.close()
+    except Exception:
+        pass
+
+    # 更新任务状态为执行中
+    update_task_status(task_no, "02")
+    trigger_label = "定时调度" if trigger_source == "scheduler" else "手动"
+    init_log = f"图像采集任务：{task_name or task_no}开始执行（{trigger_label}触发）"
+    log_id = insert_collect_log(task_no, init_log)
+
+    try:
+        append_collect_log(log_id, "开始连接源数据库执行SQL")
+
+        # 连接源数据库执行SQL
+        columns, rows = execute_source_sql(
+            db_type=det["source_db_type"],
+            host=det["source_db_host"],
+            port=str(det.get("source_db_port") or ""),
+            user=det["source_db_usr"],
+            pwd=det.get("source_db_pwd") or "",
+            database=det.get("source_db_name") or "",
+            sql=det.get("collect_sql"),
+            auth=det.get("source_db_auth") or "",
+        )
+
+        append_collect_log(log_id, f"SQL执行成功，共获取 {len(rows)} 条数据")
+
+        # 构建列名小写映射，用于大小写不敏感匹配
+        columns_lower_map = {col.lower(): i for i, col in enumerate(columns)}
+        file_id_idx = columns_lower_map.get(file_id_field.lower())
+        if file_id_idx is None:
+            raise ValueError(f"SQL结果中未找到图像获取字段：{file_id_field}，查询出的列：{columns}")
+
+        file_name_idx = None
+        if file_name_field:
+            file_name_idx = columns_lower_map.get(file_name_field.lower())
+            if file_name_idx is None:
+                raise ValueError(f"SQL结果中未找到图像名称字段：{file_name_field}，查询出的列：{columns}")
+
+        # 准备保存目录
+        from app.core.config import settings
+        save_dir = os.path.join(settings.sample_upload_dir, "data_collect", task_no)
+        os.makedirs(save_dir, exist_ok=True)
+
+        append_collect_log(log_id, f"文件保存目录：{save_dir}")
+        mode_names = {"01": "存储路径", "02": "ceph", "03": "oss"}
+        append_collect_log(log_id, f"图像获取方式：{mode_names.get(file_get_mode, file_get_mode)}")
+
+        # 遍历每行数据，获取图像文件
+        success_count = 0
+        fail_count = 0
+        used_filenames = set()  # 用于文件名冲突检测
+
+        from app.core.database import generate_sample_no, insert_original_sample_info_for_collect
+
+        for i, row in enumerate(rows):
+            try:
+                file_id_value = row[file_id_idx] if file_id_idx < len(row) else None
+                if not file_id_value:
+                    append_collect_log(log_id, f"第 {i + 1} 行：图像获取字段值为空，跳过")
+                    fail_count += 1
+                    continue
+
+                file_id_value = str(file_id_value)
+
+                # 文件保存名：直接使用对象 key 的 basename
+                disk_filename = os.path.basename(file_id_value)
+
+                # 如果文件名无后缀，尝试从 Ceph 元数据补充
+                base_name, ext = os.path.splitext(disk_filename)
+                if not ext and file_get_mode == "02":
+                    from app.services.ceph_service import get_ceph_object_ext
+                    ceph_ext = get_ceph_object_ext(bucket_name, file_id_value)
+                    if ceph_ext:
+                        disk_filename = disk_filename + ceph_ext
+                        base_name, ext = os.path.splitext(disk_filename)
+
+                # 处理文件名冲突：自动加序号
+                final_disk_name = disk_filename
+                seq = 1
+                while final_disk_name in used_filenames:
+                    final_disk_name = f"{base_name}_{seq}{ext}"
+                    seq += 1
+                used_filenames.add(final_disk_name)
+
+                local_path = os.path.join(save_dir, final_disk_name)
+
+                # 获取展示用名称（file_name 字段值，仅用于数据库记录和前端展示）
+                display_name = ""
+                if file_name_idx is not None and file_name_idx < len(row) and row[file_name_idx]:
+                    display_name = str(row[file_name_idx])
+
+                # 根据获取方式下载文件
+                if file_get_mode == "01":
+                    # 存储路径：file_id_value 就是文件路径
+                    src_path = file_id_value
+                    if not os.path.exists(src_path):
+                        append_collect_log(log_id, f"第 {i + 1} 行：源文件不存在：{src_path}，跳过")
+                        fail_count += 1
+                        continue
+                    import shutil
+                    shutil.copy2(src_path, local_path)
+                    file_size_bytes = os.path.getsize(local_path)
+                elif file_get_mode == "02":
+                    # ceph：file_id_value 是对象 key
+                    from app.services.ceph_service import download_from_ceph
+                    file_size_bytes = download_from_ceph(bucket_name, file_id_value, local_path)
+                elif file_get_mode == "03":
+                    raise NotImplementedError("oss 获取方式暂未实现")
+                else:
+                    raise ValueError(f"不支持的获取方式：{file_get_mode}")
+
+                # 提取后缀名（不含点）
+                _, file_ext = os.path.splitext(final_disk_name)
+                suffix = file_ext.lstrip(".") if file_ext else ""
+
+                # 格式化文件大小
+                file_size_str = _format_file_size(file_size_bytes)
+
+                # sample_name：优先用 file_name 字段值（展示用），否则用磁盘文件名
+                sample_name = display_name or final_disk_name
+
+                # 生成样本编号并插入原始样本信息表
+                sample_no = generate_sample_no()
+                insert_original_sample_info_for_collect({
+                    "sample_no": sample_no,
+                    "sample_name": sample_name,
+                    "set_no": sample_set_no,
+                    "type_code": "05",
+                    "suffix": suffix,
+                    "file_path": local_path,
+                    "file_size": file_size_str,
+                    "collect_task_no": task_no,
+                })
+                success_count += 1
+
+            except Exception as e:
+                fail_count += 1
+                append_collect_log(log_id, f"第 {i + 1} 行处理失败：{str(e)}")
+
+        append_collect_log(log_id, f"图像采集完成，一共 {len(rows)} 个，获取成功 {success_count} 个，失败 {fail_count} 个")
+
+        finish_collect_log(log_id, success=True, log_content="图像采集任务执行完成")
+        update_task_status(task_no, "03", last_execute_flag=1)
+
+        return {
+            "code": 0,
+            "message": f"执行成功，共获取 {len(rows)} 条数据，成功采集 {success_count} 个图像文件",
+            "data": {"rowCount": len(rows), "successCount": success_count, "failCount": fail_count},
+        }
+    except Exception as e:
+        fail_info = str(e)
+        try:
+            update_task_status(task_no, "03", last_execute_flag=2)
+        except Exception:
+            pass
+        try:
+            finish_collect_log(log_id, success=False, log_content=f"执行出错:{fail_info}")
+        except Exception:
+            pass
+        return {"code": 1, "message": f"执行失败: {fail_info}"}
+
+
 @router.post("/execute-collect-task")
 def execute_collect_task_api(req: ExecuteCollectTaskRequest):
-    """执行数据采集任务：连接源数据库执行SQL，通过字段映射写入目标表"""
+    """执行数据采集任务：根据任务类型走不同流程（时序/图像）"""
     return execute_collect_task_internal(req.taskNo.strip(), trigger_source="manual")
 
 

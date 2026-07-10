@@ -3,18 +3,24 @@ import { ref, computed, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import Header from '@/components/Header.vue'
 import Sidebar from '@/components/Sidebar.vue'
-import { getCodeDict, getCollectTaskDet, saveCollectTaskDet, queryTableColumns, queryColMap, saveColMap, getCollectTaskExecType, updateCollectTaskExecType, type CodeDictItem, type TableColumnInfo, type ColMapItem } from '@/api/sample'
-import { ElMessage } from 'element-plus'
+import { getCodeDict, getCollectTaskDet, saveCollectTaskDet, testDbConnection, queryTableColumns, queryColMap, saveColMap, getCollectTaskExecType, updateCollectTaskExecType, type CodeDictItem, type TableColumnInfo, type ColMapItem } from '@/api/sample'
+import { ElMessage, ElMessageBox } from 'element-plus'
 
 const route = useRoute()
 const router = useRouter()
 
 const taskNo = ref<string>((route.query.taskNo as string) || '')
 
+// 任务数据类型（用于判断是否图像类型）：优先从路由参数获取（新建后立即生效），loadTaskDet 后更新
+const sampleTypeCode = ref<string>((route.query.sampleType as string) || '')
+
 const dbTypeOptions = ref<{ value: string; label: string }[]>([])
+const fileGetModeOptions = ref<{ value: string; label: string }[]>([])
 const loading = ref(false)
 const savingSource = ref(false)
+const testingConnection = ref(false)
 const savingMapping = ref(false)
+const savingImageConfig = ref(false)
 
 // ========== 执行方式配置 ==========
 const execTypeForm = ref({ executeType: '01', cronFormula: '' })
@@ -82,6 +88,23 @@ const isHiveSource = computed(() => {
   return opt ? opt.label.toUpperCase() === 'HIVE' : false
 })
 
+// 是否为图像类型采集任务
+const isImageType = computed(() => sampleTypeCode.value === '05')
+
+// ========== 图像获取配置 ==========
+const imageConfig = ref({
+  fileId: '',        // 图像获取字段名
+  fileName: '',      // 图像名称字段名
+  fileGetMode: '',   // 获取方式编码：01-存储路径 02-ceph 03-oss
+  bucketName: ''     // 桶名称（ceph模式）
+})
+
+/** 从 SELECT ... FROM 形式的 SQL 中提取列别名（忽略大小写），用于图像字段下拉框选项 */
+const sqlAliases = computed(() => {
+  if (!form.value.collectSql) return []
+  return extractSelectAliases(form.value.collectSql)
+})
+
 // 执行结果信息
 const execInfo = ref({
   lastExecuteTime: '',
@@ -90,9 +113,15 @@ const execInfo = ref({
 
 async function loadDbTypeDict() {
   try {
-    const data = await getCodeDict(['DATABASE_TYPE'])
+    const data = await getCodeDict(['DATABASE_TYPE', 'FILE_GET_MODE'])
     if (data.DATABASE_TYPE && data.DATABASE_TYPE.length > 0) {
       dbTypeOptions.value = data.DATABASE_TYPE.map((item: CodeDictItem) => ({
+        value: item.codeValue,
+        label: item.codeName
+      }))
+    }
+    if (data.FILE_GET_MODE && data.FILE_GET_MODE.length > 0) {
+      fileGetModeOptions.value = data.FILE_GET_MODE.map((item: CodeDictItem) => ({
         value: item.codeValue,
         label: item.codeName
       }))
@@ -122,11 +151,57 @@ async function loadTaskDet() {
         lastExecuteTime: det.lastExecuteTime || '',
         lastExecuteFlagName: det.lastExecuteFlagName || ''
       }
+      // 回填数据类型和图像配置
+      sampleTypeCode.value = det.sampleTypeCode || ''
+      imageConfig.value = {
+        fileId: det.fileId || '',
+        fileName: det.fileName || '',
+        fileGetMode: det.fileGetMode || '',
+        bucketName: det.bucketName || ''
+      }
     }
   } catch (e: any) {
     ElMessage.error(e.message || '查询明细失败')
   } finally {
     loading.value = false
+  }
+}
+
+// ========== 测试数据库连接 ==========
+async function handleTestConnection() {
+  if (!form.value.sourceDbType) {
+    ElMessage.warning('请选择数据库类型')
+    return
+  }
+  if (!form.value.sourceDbHost.trim()) {
+    ElMessage.warning('请输入数据库地址')
+    return
+  }
+  if (!form.value.sourceDbUsr.trim()) {
+    ElMessage.warning('请输入用户名')
+    return
+  }
+
+  testingConnection.value = true
+  try {
+    const result = await testDbConnection({
+      dbType: form.value.sourceDbType,
+      host: form.value.sourceDbHost.trim(),
+      port: form.value.sourceDbPort.trim(),
+      user: form.value.sourceDbUsr.trim(),
+      pwd: form.value.sourceDbPwd.trim(),
+      database: form.value.sourceDbName.trim(),
+      auth: form.value.sourceDbAuth
+    })
+    if (result.success) {
+      ElMessageBox.alert(result.message, '测试连接', { type: 'success' })
+    } else {
+      ElMessageBox.alert(result.message, '测试连接', { type: 'error' })
+    }
+  } catch (e: any) {
+    ElMessageBox.alert(e.message || '测试失败', '测试连接', { type: 'error' })
+  } finally {
+    testingConnection.value = false
   }
 }
 
@@ -281,6 +356,63 @@ async function handleSaveMapping() {
   }
 }
 
+// ========== 图像获取配置保存 ==========
+async function handleSaveImageConfig() {
+  if (!form.value.sourceDbType) {
+    ElMessage.warning('请先选择数据库类型')
+    return
+  }
+  if (!form.value.sourceDbHost.trim()) {
+    ElMessage.warning('请先输入数据库地址')
+    return
+  }
+  if (!form.value.sourceDbUsr.trim()) {
+    ElMessage.warning('请先输入用户名')
+    return
+  }
+  if (!form.value.collectSql.trim()) {
+    ElMessage.warning('请先输入采集SQL')
+    return
+  }
+  if (!imageConfig.value.fileId) {
+    ElMessage.warning('请选择图像获取字段')
+    return
+  }
+  if (!imageConfig.value.fileGetMode) {
+    ElMessage.warning('请选择获取方式')
+    return
+  }
+  if (imageConfig.value.fileGetMode === '02' && !imageConfig.value.bucketName.trim()) {
+    ElMessage.warning('ceph 模式下请输入桶名称')
+    return
+  }
+
+  savingImageConfig.value = true
+  try {
+    await saveCollectTaskDet({
+      taskNo: taskNo.value,
+      sourceDbType: form.value.sourceDbType,
+      sourceDbHost: form.value.sourceDbHost.trim(),
+      sourceDbPort: form.value.sourceDbPort.trim(),
+      sourceDbUsr: form.value.sourceDbUsr.trim(),
+      sourceDbPwd: form.value.sourceDbPwd.trim(),
+      sourceDbName: form.value.sourceDbName.trim(),
+      targetTable: form.value.targetTable.trim(),
+      collectSql: form.value.collectSql.trim(),
+      sourceDbAuth: form.value.sourceDbAuth,
+      fileGetMode: imageConfig.value.fileGetMode,
+      bucketName: imageConfig.value.bucketName.trim(),
+      fileId: imageConfig.value.fileId,
+      fileName: imageConfig.value.fileName
+    })
+    ElMessage.success('图像获取配置保存成功')
+  } catch (e: any) {
+    ElMessage.error(e.message || '保存失败')
+  } finally {
+    savingImageConfig.value = false
+  }
+}
+
 function goBack() {
   router.push('/collect-task')
 }
@@ -401,7 +533,7 @@ onMounted(() => {
             <div v-if="form.sourceDbType === '03'" class="form-row">
               <div class="form-col form-col-small">
                 <el-form-item label="认证方式" required>
-                  <el-select v-model="form.sourceDbAuth" placeholder="请选择Hive认证方式" popper-class="detail-popper">
+                  <el-select v-model="form.sourceDbAuth" placeholder="请选择Hive认证方式" popper-class="detail-popper" style="width: 160px">
                     <el-option v-for="opt in hiveAuthOptions" :key="opt.value" :label="opt.label" :value="opt.value" />
                   </el-select>
                 </el-form-item>
@@ -414,12 +546,13 @@ onMounted(() => {
             </div>
           </el-form>
           <div class="section-footer">
+            <el-button :loading="testingConnection" @click="handleTestConnection">测试连接</el-button>
             <el-button type="primary" :loading="savingSource" @click="handleSaveSource">保存源数据配置</el-button>
           </div>
         </div>
 
-        <!-- ========== 下方：目标字段映射配置 ========== -->
-        <div class="section-card">
+        <!-- ========== 下方：目标字段映射配置（仅时序类型显示） ========== -->
+        <div class="section-card" v-if="!isImageType">
           <div class="section-title">
             <h3>目标字段映射</h3>
           </div>
@@ -469,6 +602,38 @@ onMounted(() => {
 
           <div class="section-footer">
             <el-button type="primary" :loading="savingMapping" @click="handleSaveMapping">保存字段映射</el-button>
+          </div>
+        </div>
+
+        <!-- ========== 图像获取配置（仅图像类型显示） ========== -->
+        <div class="section-card" v-if="isImageType">
+          <div class="section-title">
+            <h3>图像获取配置</h3>
+          </div>
+          <el-form label-width="120px" label-position="right">
+            <el-form-item label="图像获取字段" required>
+              <el-select v-model="imageConfig.fileId" placeholder="请选择图像获取字段" filterable popper-class="detail-popper" style="width: 100%">
+                <el-option v-for="alias in sqlAliases" :key="alias" :label="alias" :value="alias" />
+              </el-select>
+              <div class="field-tip">从采集SQL的结果列中选择用于获取图像的字段（字段值是文件路径或ceph对象key）</div>
+            </el-form-item>
+            <el-form-item label="图像名称字段">
+              <el-select v-model="imageConfig.fileName" placeholder="请选择图像名称字段（可选）" filterable clearable popper-class="detail-popper" style="width: 100%">
+                <el-option v-for="alias in sqlAliases" :key="alias" :label="alias" :value="alias" />
+              </el-select>
+              <div class="field-tip">从采集SQL的结果列中选择作为文件名的字段，未选择时使用图像获取字段的文件名</div>
+            </el-form-item>
+            <el-form-item label="获取方式" required>
+              <el-radio-group v-model="imageConfig.fileGetMode">
+                <el-radio v-for="opt in fileGetModeOptions" :key="opt.value" :value="opt.value">{{ opt.label }}</el-radio>
+              </el-radio-group>
+            </el-form-item>
+            <el-form-item v-if="imageConfig.fileGetMode === '02'" label="桶名称" required>
+              <el-input v-model="imageConfig.bucketName" placeholder="请输入 Ceph 桶名称" maxlength="128" style="max-width: 400px" />
+            </el-form-item>
+          </el-form>
+          <div class="section-footer">
+            <el-button type="primary" :loading="savingImageConfig" @click="handleSaveImageConfig">保存图像获取配置</el-button>
           </div>
         </div>
       </main>
@@ -719,6 +884,13 @@ onMounted(() => {
 }
 
 .cron-tip {
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.4);
+  margin-top: 4px;
+  line-height: 1.5;
+}
+
+.field-tip {
   font-size: 12px;
   color: rgba(255, 255, 255, 0.4);
   margin-top: 4px;

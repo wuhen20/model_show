@@ -4,6 +4,7 @@ import { useRouter } from 'vue-router'
 import Header from '@/components/Header.vue'
 import Sidebar from '@/components/Sidebar.vue'
 import { getCleanTasks, saveCleanTask, executeCleanTask, deleteCleanTask, getCleanLogs, type CleanTask, type CleanLog } from '@/api/clean'
+import { getCodeDict } from '@/api/sample'
 import { ElMessage, ElMessageBox } from 'element-plus'
 
 const router = useRouter()
@@ -11,6 +12,9 @@ const router = useRouter()
 const taskList = ref<CleanTask[]>([])
 const loading = ref(false)
 const executingSet = ref<Set<string>>(new Set())
+
+// 数据类型选项
+const sampleTypeOptions = ref<{ value: string; label: string }[]>([])
 
 const filterName = ref('')
 
@@ -40,10 +44,10 @@ function resetFilters() {
 // 新增任务弹框
 const dialogVisible = ref(false)
 const dialogSaving = ref(false)
-const dialogForm = ref({ taskName: '', remark: '' })
+const dialogForm = ref({ taskName: '', remark: '', sampleType: '' })
 
 function openCreateDialog() {
-  dialogForm.value = { taskName: '', remark: '' }
+  dialogForm.value = { taskName: '', remark: '', sampleType: '' }
   dialogVisible.value = true
 }
 
@@ -56,7 +60,8 @@ async function handleCreateConfirm() {
   try {
     const taskNo = await saveCleanTask(
       dialogForm.value.taskName.trim(),
-      dialogForm.value.remark.trim()
+      dialogForm.value.remark.trim(),
+      dialogForm.value.sampleType
     )
     ElMessage.success('新建任务成功')
     dialogVisible.value = false
@@ -84,14 +89,14 @@ function statusColor(statusCode: string): string {
 // 执行任务（下载 Excel）
 async function handleExecute(task: CleanTask) {
   try {
-    await ElMessageBox.confirm('确认执行该清理任务？执行后将下载清洗结果 Excel 文件。', '提示', { type: 'warning' })
+    await ElMessageBox.confirm('确认执行该清理任务？执行后清洗结果将以 JSON 文件保存到服务器。', '提示', { type: 'warning' })
   } catch {
     return
   }
   executingSet.value.add(task.taskNo)
   try {
-    await executeCleanTask(task.taskNo)
-    ElMessage.success('清洗结果已下载')
+    const result = await executeCleanTask(task.taskNo)
+    ElMessage.success(`执行成功，清洗结果已保存（共 ${result.resultCount} 条），文件：${result.fileName}`)
     await loadTasks()
   } catch (e: any) {
     ElMessage.error(e.message || '执行失败')
@@ -163,7 +168,22 @@ function openLogDetailDialog(log: CleanLog) {
 
 onMounted(() => {
   loadTasks()
+  loadCodeDict()
 })
+
+async function loadCodeDict() {
+  try {
+    const data = await getCodeDict()
+    if (data.SAMPLE_TYPE && data.SAMPLE_TYPE.length > 0) {
+      sampleTypeOptions.value = data.SAMPLE_TYPE.map((item: any) => ({
+        value: item.codeValue,
+        label: item.codeName
+      }))
+    }
+  } catch (e) {
+    console.error('获取数据类型字典失败:', e)
+  }
+}
 </script>
 
 <template>
@@ -268,6 +288,11 @@ onMounted(() => {
       <el-form label-width="80px" label-position="right">
         <el-form-item label="任务名称" required>
           <el-input v-model="dialogForm.taskName" placeholder="请输入任务名称" maxlength="100" />
+        </el-form-item>
+        <el-form-item label="数据类型">
+          <el-select v-model="dialogForm.sampleType" placeholder="请选择数据类型" clearable style="width: 100%">
+            <el-option v-for="opt in sampleTypeOptions" :key="opt.value" :label="opt.label" :value="opt.value" />
+          </el-select>
         </el-form-item>
         <el-form-item label="任务说明">
           <el-input v-model="dialogForm.remark" type="textarea" :rows="3" placeholder="请输入任务说明（选填）" maxlength="500" />
@@ -437,15 +462,36 @@ onMounted(() => {
   background: linear-gradient(135deg, rgba(17, 24, 39, 0.9) 0%, rgba(26, 35, 50, 0.8) 100%);
   border: 1px solid rgba(0, 212, 255, 0.2);
   border-radius: 12px;
-  overflow: hidden;
+  overflow-x: auto;
+
+  &::-webkit-scrollbar {
+    height: 8px;
+  }
+
+  &::-webkit-scrollbar-track {
+    background: rgba(0, 0, 0, 0.2);
+    border-radius: 4px;
+  }
+
+  &::-webkit-scrollbar-thumb {
+    background: rgba(0, 212, 255, 0.3);
+    border-radius: 4px;
+
+    &:hover {
+      background: rgba(0, 212, 255, 0.5);
+    }
+  }
 }
 
 .list-header,
 .list-row {
   display: flex;
   align-items: center;
-  padding: 0 20px;
+  padding: 0 12px;
   min-height: 52px;
+  box-sizing: border-box;
+  width: max-content;
+  min-width: 100%;
 }
 
 .list-header {
@@ -479,13 +525,13 @@ onMounted(() => {
 }
 
 .col-no { width: 130px; flex-shrink: 0; color: #00d4ff; }
-.col-name { flex: 1; min-width: 0; }
+.col-name { width: 200px; flex-shrink: 0; }
 .col-remark { width: 160px; flex-shrink: 0; color: rgba(255, 255, 255, 0.6); }
 .col-create { width: 160px; flex-shrink: 0; color: rgba(255, 255, 255, 0.6); }
 .col-exec { width: 160px; flex-shrink: 0; color: rgba(255, 255, 255, 0.6); }
 .col-result { width: 90px; flex-shrink: 0; text-align: center; }
 .col-status { width: 90px; flex-shrink: 0; text-align: center; }
-.col-action { width: 320px; flex-shrink: 0; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.col-action { width: 320px; flex-grow: 1; flex-shrink: 0; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 
 .link-col {
   cursor: pointer;

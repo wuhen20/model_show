@@ -3,7 +3,7 @@ import { ref, computed, nextTick, onMounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import Header from '@/components/Header.vue'
 import Sidebar from '@/components/Sidebar.vue'
-import { getSamples, getImageUrl, getAnnotations, getAudioText, updateSampleScore, uploadSamples, saveLabelThink, type SampleInfoRow, type AnnotationData, type AnnotationBox } from '@/api/sample'
+import { getSamples, getImageUrl, getAnnotations, getAudioText, updateSampleScore, uploadSamples, saveLabelThink, queryTimeSeriesData, type SampleInfoRow, type AnnotationData, type AnnotationBox, type TimeSeriesColumn } from '@/api/originalSample'
 import { ElMessage } from 'element-plus'
 
 const route = useRoute()
@@ -23,6 +23,13 @@ const isImageSet = computed(() => typeCode.value === '05')
 // 判断是否为时序样本集
 const isTimeSeriesSet = computed(() => typeCode.value === '02')
 
+// 时序数据相关
+const tsTotal = ref(0)
+const tsCurrentPage = ref(1)
+const tsPageSize = 20
+const tsColumns = ref<TimeSeriesColumn[]>([])
+const tsTargetTable = ref<string | null>(null)
+
 // 视图模式：缩略图 / 列表
 const viewMode = ref<'thumbnail' | 'list'>('list')
 
@@ -41,7 +48,7 @@ const typeCodeToExtensions: Record<string, string[]> = {
 
 // 样本类型编码 → 允许的 accept 值
 const typeCodeToAccept: Record<string, string> = {
-  '05': 'image/*,.txt',
+  '05': 'image/*',
   '02': '.txt,.csv,.json,.xml,.doc,.docx,.pdf',
   '03': 'audio/*',
   '04': 'video/*',
@@ -50,46 +57,6 @@ const typeCodeToAccept: Record<string, string> = {
 function openUploadDialog() {
   uploadFileList.value = []
   uploadDialogVisible.value = true
-}
-
-// 导出相关
-const exportDialogVisible = ref(false)
-const exportFormat = ref<'original' | 'json'>('original')
-const exportLoading = ref(false)
-
-function openExportDialog() {
-  exportFormat.value = 'original'
-  exportDialogVisible.value = true
-}
-
-async function confirmExport() {
-  if (!setNo.value) {
-    ElMessage.warning('样本集编号为空')
-    return
-  }
-  exportLoading.value = true
-  try {
-    const fileName = (setName.value || setNo.value).replace(/\s+/g, '_')
-    let url = ''
-    if (exportFormat.value === 'original') {
-      url = `/api/sample/download-sample-set?setNo=${encodeURIComponent(setNo.value)}&fileName=${encodeURIComponent(fileName)}`
-    } else {
-      url = `/api/sample/export-sample-set-json?setNo=${encodeURIComponent(setNo.value)}&fileName=${encodeURIComponent(fileName)}`
-    }
-    // 触发下载
-    const a = document.createElement('a')
-    a.href = url
-    a.download = ''
-    document.body.appendChild(a)
-    a.click()
-    document.body.removeChild(a)
-    exportDialogVisible.value = false
-    ElMessage.success('导出任务已开始，请等待浏览器下载')
-  } catch (e: any) {
-    ElMessage.error(e.message || '导出失败')
-  } finally {
-    exportLoading.value = false
-  }
 }
 
 function handleUploadFileChange(_file: any, fileList: any[]) {
@@ -106,13 +73,11 @@ async function handleUploadConfirm() {
     return
   }
 
-  // 前端校验文件类型（图片类型允许额外附带 .txt 标注文件）
+  // 前端校验文件类型
   const allowedExts = typeCodeToExtensions[typeCode.value]
   if (allowedExts) {
-    const isImageType = typeCode.value === '05'
     const invalidFiles = uploadFileList.value.filter(f => {
       const ext = '.' + f.name.split('.').pop()?.toLowerCase()
-      if (isImageType && ext === '.txt') return false
       return !allowedExts.includes(ext)
     })
     if (invalidFiles.length > 0) {
@@ -136,7 +101,6 @@ async function handleUploadConfirm() {
 
 // 筛选条件
 const filterName = ref('')
-const filterLabelFlag = ref('')
 
 // 分页
 const currentPage = ref(1)
@@ -149,19 +113,26 @@ const filteredList = computed(() => {
     const kw = filterName.value.toLowerCase()
     list = list.filter(s => String(s.sampleName || '').toLowerCase().includes(kw))
   }
-  if (filterLabelFlag.value) {
-    list = list.filter(s => String(s.labelFlag || '') === filterLabelFlag.value)
-  }
   return list
 })
 
 // 当前页数据
 const pagedList = computed(() => {
+  // 时序类型：服务端分页，直接使用 sampleList
+  if (isTimeSeriesSet.value) return sampleList.value
   const start = (currentPage.value - 1) * pageSize
   return filteredList.value.slice(start, start + pageSize)
 })
 
-const totalPages = computed(() => Math.ceil(filteredList.value.length / pageSize))
+const totalPages = computed(() => {
+  if (isTimeSeriesSet.value) {
+    return Math.ceil(tsTotal.value / tsPageSize)
+  }
+  return Math.ceil(filteredList.value.length / pageSize)
+})
+
+// 当前总条数（用于页面显示）
+const totalCount = computed(() => isTimeSeriesSet.value ? tsTotal.value : filteredList.value.length)
 
 function handlePageChange(page: number) {
   currentPage.value = page
@@ -169,12 +140,11 @@ function handlePageChange(page: number) {
 
 function resetFilters() {
   filterName.value = ''
-  filterLabelFlag.value = ''
   currentPage.value = 1
 }
 
 // 筛选条件变化时重置页码
-watch([filterName, filterLabelFlag], () => {
+watch([filterName], () => {
   currentPage.value = 1
 })
 
@@ -182,22 +152,38 @@ async function loadSamples() {
   if (!setNo.value) return
   loading.value = true
   try {
-    const data = await getSamples(setNo.value)
-    sampleList.value = data
-    // 根据返回数据动态生成列
-    if (data.length > 0) {
-      columns.value = Object.keys(data[0]).map(key => ({
-        key,
-        label: keyToLabel(key)
-      }))
+    if (isTimeSeriesSet.value) {
+      // 时序类型：调用时序数据接口
+      const data = await queryTimeSeriesData(setNo.value, tsCurrentPage.value, tsPageSize)
+      sampleList.value = data.rows || []
+      tsTotal.value = data.total || 0
+      tsTargetTable.value = data.targetTable
+      tsColumns.value = data.columns || []
+      columns.value = data.columns || []
     } else {
-      columns.value = []
+      // 其他类型：调用样本信息接口
+      const data = await getSamples(setNo.value)
+      sampleList.value = data
+      if (data.length > 0) {
+        columns.value = Object.keys(data[0]).map(key => ({
+          key,
+          label: keyToLabel(key)
+        }))
+      } else {
+        columns.value = []
+      }
     }
   } catch (e: any) {
     ElMessage.error(e.message || '查询样本信息失败')
   } finally {
     loading.value = false
   }
+}
+
+// 时序类型分页切换
+function handleTsPageChange(page: number) {
+  tsCurrentPage.value = page
+  loadSamples()
 }
 
 // 常见字段名映射为中文
@@ -211,12 +197,11 @@ const labelMap: Record<string, string> = {
   suffix: '后缀名',
   labelFlagCode: '标注状态编号',
   labelFlag: '标注状态',
-  labelThink: '思维链',
   filePath: '文件路径',
   fileName: '文件名',
   fileSize: '文件大小',
   sampleScore: '质量评分',
-  resultCount: '数据数量',
+  labelThink: '标签思维链',
   status: '状态',
   createTime: '创建时间',
   updateTime: '更新时间'
@@ -227,70 +212,11 @@ function keyToLabel(key: string): string {
 }
 
 function goBack() {
-  router.push('/sample-set')
-}
-
-// ========== 时序类型查看/下载 ==========
-const tsViewVisible = ref(false)
-const tsViewLoading = ref(false)
-const tsViewData = ref<{ taskNo: string; taskName: string; executeTime: string; totalCount: number; removedCount: number; resultCount: number; columns: string[]; rows: Record<string, any>[] } | null>(null)
-const tsViewSampleName = ref('')  // 当前查看的样本名称
-const tsViewCurrentPage = ref(1)
-const tsViewPageSize = 20
-
-const tsViewPagedRows = computed(() => {
-  if (!tsViewData.value?.rows) return []
-  const start = (tsViewCurrentPage.value - 1) * tsViewPageSize
-  return tsViewData.value.rows.slice(start, start + tsViewPageSize)
-})
-
-async function handleViewTimeSeries(row: SampleInfoRow) {
-  const filePath = row.filePath
-  if (!filePath) {
-    ElMessage.warning('该样本无文件路径')
-    return
-  }
-  tsViewVisible.value = true
-  tsViewLoading.value = true
-  tsViewData.value = null
-  tsViewSampleName.value = row.sampleName || ''
-  tsViewCurrentPage.value = 1
-  try {
-    const res = await fetch(`/api/clean/view-clean-result-by-path?filePath=${encodeURIComponent(filePath)}`)
-    const json = await res.json()
-    if (json.code !== 0) throw new Error(json.message || '查看失败')
-    tsViewData.value = json.data
-  } catch (e: any) {
-    ElMessage.error(e.message || '查看失败')
-  } finally {
-    tsViewLoading.value = false
-  }
-}
-
-function handleDownloadTimeSeries(row: SampleInfoRow) {
-  const filePath = row.filePath
-  if (!filePath) {
-    ElMessage.warning('该样本无文件路径')
-    return
-  }
-  const url = `/api/clean/download-clean-result-by-path?filePath=${encodeURIComponent(filePath)}`
-  const a = document.createElement('a')
-  a.href = url
-  a.download = row.sampleName || 'data.json'
-  document.body.appendChild(a)
-  a.click()
-  document.body.removeChild(a)
+  router.push('/original-sample-set')
 }
 
 // 隐藏的字段（不需要在表格中展示）
-const hiddenColumns = computed(() => {
-  const base = new Set(['recordId', 'sampleNo', 'typeCode', 'filePath', 'fileName', 'labelFlagCode', 'sampleScore'])
-  if (isTimeSeriesSet.value) {
-    base.add('labelFlag')
-    base.add('labelThink')
-  }
-  return base
-})
+const hiddenColumns = new Set(['recordId', 'sampleNo', 'typeCode', 'filePath', 'fileName', 'labelFlagCode', 'sampleScore', 'labelThink'])
 
 // ========== 文件预览 ==========
 const imageExtSet = new Set(['jpg', 'jpeg', 'png', 'bmp', 'gif', 'webp', 'tif', 'tiff'])
@@ -761,19 +687,19 @@ onMounted(() => {
 
 <template>
   <div class="app-layout">
-    <Header title="模型能力展示与体验工作台" subtitle="样本详情" />
+    <Header title="模型能力展示与体验工作台" subtitle="原始样本详情" />
     <div class="main-content">
       <Sidebar />
       <main class="content-area">
         <div class="page-header">
           <div class="page-title">
             <h2>
-              <span class="back-btn" @click="goBack" title="返回样本集管理">
+              <span class="back-btn" @click="goBack" title="返回原始样本集管理">
                 <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 18l-6-6 6-6"/></svg>
               </span>
               {{ setName || setNo }}
             </h2>
-            <p>样本集编号：{{ setNo }}，共 {{ filteredList.length }} 条样本</p>
+            <p>样本集编号：{{ setNo }}，共 {{ totalCount }} 条样本<span v-if="isTimeSeriesSet && tsTargetTable">（数据表：{{ tsTargetTable }}）</span></p>
           </div>
           <div class="page-actions">
             <div v-if="isImageSet" class="view-toggle">
@@ -786,35 +712,15 @@ onMounted(() => {
                 <span>列表</span>
               </button>
             </div>
-            <el-button type="primary" @click="openUploadDialog">上传样本</el-button>
-            <el-button v-if="isImageSet" type="success" @click="openExportDialog">导出</el-button>
+            <el-button v-if="!isTimeSeriesSet" type="primary" @click="openUploadDialog">上传样本</el-button>
           </div>
         </div>
 
-        <!-- 导出对话框 -->
-        <el-dialog v-model="exportDialogVisible" title="选择导出格式" width="400px" :close-on-click-modal="false">
-          <el-radio-group v-model="exportFormat" class="export-radio-group">
-            <el-radio :label="'original'">原件（打包下载图片+标注文件）</el-radio>
-            <el-radio :label="'json'">JSON（ShareGPT 格式）</el-radio>
-          </el-radio-group>
-          <template #footer>
-            <el-button @click="exportDialogVisible = false">取消</el-button>
-            <el-button type="primary" :loading="exportLoading" @click="confirmExport">确认导出</el-button>
-          </template>
-        </el-dialog>
-
-        <!-- 筛选条件 -->
-        <div class="filter-bar">
+        <!-- 筛选条件（时序类型不显示） -->
+        <div class="filter-bar" v-if="!isTimeSeriesSet">
           <div class="filter-item">
             <label>样本名称</label>
             <el-input v-model="filterName" placeholder="输入样本名称" clearable size="default" style="width: 200px" />
-          </div>
-          <div class="filter-item" v-if="!isTimeSeriesSet">
-            <label>标注状态</label>
-            <el-select v-model="filterLabelFlag" placeholder="全部" clearable size="default" style="width: 140px">
-              <el-option label="已标注" value="已标注" />
-              <el-option label="未标注" value="未标注" />
-            </el-select>
           </div>
           <el-button size="default" @click="resetFilters">重置</el-button>
         </div>
@@ -829,10 +735,6 @@ onMounted(() => {
               </div>
             </div>
             <div class="thumbnail-name" :title="row.sampleName">{{ row.sampleName }}</div>
-            <div class="thumbnail-meta">
-              <span class="thumbnail-score" :class="`score-${getScoreStars(row.sampleScore)}`">{{ getScoreLabel(row.sampleScore) }}</span>
-              <span class="thumbnail-label-flag">{{ row.labelFlag || '未标注' }}</span>
-            </div>
           </div>
           <div v-if="pagedList.length === 0 && !loading" class="empty-state">
             <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="rgba(0,212,255,0.3)" stroke-width="1"><path d="M4 20h16v-2H4v2zm0-6h16v-2H4v2zm0-6h16V6H4v2z"/></svg>
@@ -840,42 +742,23 @@ onMounted(() => {
           </div>
         </div>
 
-        <!-- 列表视图 -->
-        <div class="table-wrapper" v-if="!isImageSet || viewMode === 'list'" v-loading="loading">
+        <!-- 列表视图（含时序类型） -->
+        <div class="table-wrapper" v-if="isTimeSeriesSet || (!isImageSet || viewMode === 'list')" v-loading="loading">
           <table v-if="pagedList.length > 0" class="sample-table">
             <thead>
               <tr>
                 <th class="col-index">#</th>
                 <th v-for="col in columns" :key="col.key" v-show="!hiddenColumns.has(col.key)">{{ col.label }}</th>
-                <th v-if="!isTimeSeriesSet" class="col-score">质量评分</th>
-                <th v-if="isTimeSeriesSet" class="col-action">操作</th>
               </tr>
             </thead>
             <tbody>
               <tr v-for="(row, idx) in pagedList" :key="idx">
-                <td class="col-index">{{ (currentPage - 1) * pageSize + idx + 1 }}</td>
+                <td class="col-index">{{ (isTimeSeriesSet ? tsCurrentPage - 1 : currentPage - 1) * (isTimeSeriesSet ? tsPageSize : pageSize) + idx + 1 }}</td>
                 <td v-for="col in columns" :key="col.key" v-show="!hiddenColumns.has(col.key)">
                   <template v-if="col.key === 'sampleName' && isPreviewable(row)">
                     <span class="link-name" @click="openPreview(row)">{{ row[col.key] ?? '-' }}</span>
                   </template>
                   <template v-else>{{ row[col.key] ?? '-' }}</template>
-                </td>
-                <td v-if="!isTimeSeriesSet" class="col-score">
-                  <div class="star-rating">
-                    <span
-                      v-for="star in 5"
-                      :key="star"
-                      class="star-item"
-                      :class="{ active: star <= getScoreStars(row.sampleScore), loading: ratingLoading === `${row.sampleNo}_${row.sampleName}` }"
-                      @click="handleRate(row, star)"
-                      :title="`${star}星 - ${starLabels[star]}`"
-                    >★</span>
-                    <span class="score-label" :class="`score-${getScoreStars(row.sampleScore)}`">{{ getScoreLabel(row.sampleScore) }}</span>
-                  </div>
-                </td>
-                <td v-if="isTimeSeriesSet" class="col-action">
-                  <el-button size="small" @click="handleViewTimeSeries(row)">查看</el-button>
-                  <el-button size="small" @click="handleDownloadTimeSeries(row)">下载</el-button>
                 </td>
               </tr>
             </tbody>
@@ -889,8 +772,19 @@ onMounted(() => {
           </div>
         </div>
 
+
         <!-- 分页 -->
-        <div class="pagination-bar" v-if="totalPages > 1">
+        <div class="pagination-bar" v-if="isTimeSeriesSet && tsTotal > tsPageSize">
+          <el-pagination
+            v-model:current-page="tsCurrentPage"
+            :page-size="tsPageSize"
+            :total="tsTotal"
+            layout="prev, pager, next, total"
+            background
+            @current-change="handleTsPageChange"
+          />
+        </div>
+        <div class="pagination-bar" v-else-if="!isTimeSeriesSet && totalPages > 1">
           <el-pagination
             v-model:current-page="currentPage"
             :page-size="pageSize"
@@ -912,7 +806,7 @@ onMounted(() => {
         </div>
         <div class="upload-info-row">
           <span class="upload-info-label">允许格式：</span>
-          <span class="upload-info-value">{{ typeCode === '05' ? '图像文件（jpg/png/bmp等），可附带同名txt标注和classes.txt' : typeCode === '02' ? '文本文件（txt/csv/doc等）' : typeCode === '03' ? '音频文件（mp3/wav等）' : typeCode === '04' ? '视频文件（mp4/avi等）' : '不限' }}</span>
+          <span class="upload-info-value">{{ typeCode === '05' ? '图像文件（jpg/png/bmp等）' : typeCode === '02' ? '文本文件（txt/csv/doc等）' : typeCode === '03' ? '音频文件（mp3/wav等）' : typeCode === '04' ? '视频文件（mp4/avi等）' : '不限' }}</span>
         </div>
         <el-upload
           :accept="typeCodeToAccept[typeCode] || ''"
@@ -1159,48 +1053,6 @@ onMounted(() => {
         </template>
       </div>
     </el-dialog>
-
-    <!-- 时序类型查看弹框 -->
-    <el-dialog v-model="tsViewVisible" :title="`数据查看 - ${tsViewSampleName}`" width="90%" top="5vh" :close-on-click-modal="false" class="preview-dialog" destroy-on-close>
-      <div v-if="tsViewLoading" style="text-align:center;padding:60px;color:rgba(255,255,255,0.5)">加载中...</div>
-      <div v-else-if="tsViewData" class="ts-view-content">
-        <div class="ts-view-summary">
-          <span>任务编号：<b>{{ tsViewData.taskNo }}</b></span>
-          <span>执行时间：<b>{{ tsViewData.executeTime }}</b></span>
-          <span>原始数据：<b>{{ tsViewData.totalCount }}</b> 条</span>
-          <span>移除重复：<b>{{ tsViewData.removedCount }}</b> 条</span>
-          <span>结果数据：<b style="color:#00ff88">{{ tsViewData.resultCount }}</b> 条</span>
-        </div>
-        <div class="ts-view-table-wrap">
-          <table class="ts-view-table">
-            <thead>
-              <tr>
-                <th class="th-index">#</th>
-                <th v-for="col in tsViewData.columns" :key="col">{{ col }}</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr v-for="(row, idx) in tsViewPagedRows" :key="idx">
-                <td class="td-index">{{ (tsViewCurrentPage - 1) * tsViewPageSize + idx + 1 }}</td>
-                <td v-for="col in tsViewData.columns" :key="col" :title="String(row[col] ?? '')">{{ row[col] ?? '' }}</td>
-              </tr>
-              <tr v-if="tsViewPagedRows.length === 0">
-                <td :colspan="tsViewData.columns.length + 1" class="td-empty">暂无数据</td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-        <div class="ts-view-pagination" v-if="tsViewData.rows.length > tsViewPageSize">
-          <el-pagination
-            v-model:current-page="tsViewCurrentPage"
-            :page-size="tsViewPageSize"
-            :total="tsViewData.rows.length"
-            layout="prev, pager, next"
-            background
-          />
-        </div>
-      </div>
-    </el-dialog>
   </div>
 </template>
 
@@ -1232,17 +1084,6 @@ onMounted(() => {
   background: linear-gradient(135deg, rgba(17, 24, 39, 0.9) 0%, rgba(26, 35, 50, 0.8) 100%);
   border: 1px solid rgba(0, 212, 255, 0.2);
   border-radius: 12px;
-}
-
-.export-radio-group {
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-  padding: 12px 8px;
-}
-
-.export-radio-group .el-radio {
-  margin-right: 0;
 }
 
 .page-title h2 {
@@ -2265,95 +2106,5 @@ onMounted(() => {
       color: rgba(255, 255, 255, 0.3);
     }
   }
-}
-
-// ========== 时序类型查看弹框 ==========
-.ts-view-content {
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-}
-
-.ts-view-summary {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 20px;
-  padding: 14px 20px;
-  background: rgba(0, 212, 255, 0.05);
-  border: 1px solid rgba(0, 212, 255, 0.12);
-  border-radius: 8px;
-  font-size: 13px;
-  color: rgba(255, 255, 255, 0.7);
-
-  b {
-    color: #e6edf3;
-  }
-}
-
-.ts-view-table-wrap {
-  max-height: 60vh;
-  overflow: auto;
-  border: 1px solid rgba(0, 212, 255, 0.15);
-  border-radius: 8px;
-}
-
-.ts-view-table {
-  width: 100%;
-  border-collapse: separate;
-  border-spacing: 0;
-  font-size: 13px;
-
-  thead th {
-    position: sticky;
-    top: 0;
-    z-index: 10;
-    background: #0d2137;
-    border-bottom: 2px solid rgba(0, 212, 255, 0.6);
-  }
-
-  th, td {
-    padding: 8px 12px;
-    text-align: left;
-    border-bottom: 1px solid rgba(0, 212, 255, 0.08);
-    white-space: nowrap;
-    max-width: 260px;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-
-  th {
-    color: rgba(255, 255, 255, 0.85);
-    font-weight: 600;
-  }
-
-  td {
-    color: rgba(255, 255, 255, 0.8);
-    background: transparent;
-  }
-
-  .th-index, .td-index {
-    width: 50px;
-    text-align: center;
-    color: rgba(255, 255, 255, 0.4);
-  }
-
-  .td-empty {
-    text-align: center;
-    padding: 40px;
-    color: rgba(255, 255, 255, 0.35);
-  }
-
-  tbody tr:hover td {
-    background: rgba(0, 212, 255, 0.06);
-  }
-}
-
-.ts-view-pagination {
-  display: flex;
-  justify-content: flex-end;
-}
-
-.col-action {
-  min-width: 140px;
 }
 </style>

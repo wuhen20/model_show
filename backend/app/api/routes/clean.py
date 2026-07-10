@@ -1,13 +1,16 @@
 """样本数据清理任务接口"""
-import io
 import json
+import logging
+import os
 from datetime import datetime
 from fastapi import APIRouter, Query, UploadFile, File
-from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
+
+logger = logging.getLogger("app.clean")
 
 from app.core.database import (
     generate_clean_task_no,
+    generate_sample_no,
     query_data_clean_tasks,
     save_data_clean_task,
     save_data_clean_task_nodes,
@@ -21,6 +24,9 @@ from app.core.database import (
     append_clean_log,
     finish_clean_log,
     query_clean_log,
+    query_clean_results,
+    query_sample_set_options,
+    batch_insert_sample_info,
     get_connection,
     _execute,
     _select_all_from,
@@ -32,6 +38,7 @@ router = APIRouter()
 class SaveCleanTaskRequest(BaseModel):
     taskName: str
     remark: str = ""
+    sampleType: str = ""
 
 
 class SaveCleanTaskNodesRequest(BaseModel):
@@ -87,7 +94,7 @@ def save_clean_task_api(req: SaveCleanTaskRequest):
         return {"code": 1, "message": "任务名称不能为空"}
     try:
         task_no = generate_clean_task_no()
-        save_data_clean_task(task_no, task_name, req.remark)
+        save_data_clean_task(task_no, task_name, req.remark, req.sampleType)
         return {"code": 0, "message": "保存成功", "data": {"taskNo": task_no}}
     except Exception as e:
         return {"code": 1, "message": f"保存失败: {str(e)}"}
@@ -473,42 +480,73 @@ def execute_clean_task_api(req: ExecuteCleanTaskRequest):
         else:
             append_clean_log(log_id, "无空值处理节点，跳过空值处理")
 
-        # 生成 Excel
-        append_clean_log(log_id, "正在生成 Excel 文件...")
-        output = io.BytesIO()
-        with pd.ExcelWriter(output, engine="openpyxl") as writer:
-            df.to_excel(writer, index=False, sheet_name="清洗结果")
-        output.seek(0)
+        # 生成 JSON 文件并保存到本地
+        append_clean_log(log_id, "正在生成清洗结果 JSON 文件...")
 
         result_count = len(df)
 
-        # 完成执行记录
+        # 构造 JSON 数据
+        # 将 DataFrame 转为记录列表，处理 NaN 和 Timestamp
+        records = []
+        for _, row in df.iterrows():
+            record = {}
+            for col in df.columns:
+                val = row[col]
+                # 处理 pandas NaN
+                if pd.isna(val):
+                    record[col] = None
+                elif hasattr(val, "isoformat"):
+                    record[col] = val.isoformat()
+                else:
+                    record[col] = val
+            records.append(record)
+
+        result_data = {
+            "taskNo": task_no,
+            "taskName": task.get("task_name", task_no),
+            "executeTime": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "totalCount": total_count,
+            "removedCount": removed_count,
+            "resultCount": result_count,
+            "columns": list(df.columns),
+            "rows": records,
+        }
+
+        # 确定保存目录：SAMPLE_UPLOAD_DIR 下的 clean_result 文件夹
+        from app.core.config import settings
+        base_dir = getattr(settings, "sample_upload_dir", "")
+        if not base_dir:
+            base_dir = os.path.abspath("uploads")
+        clean_result_dir = os.path.join(base_dir, "clean_result")
+        os.makedirs(clean_result_dir, exist_ok=True)
+
+        # 文件命名：清洗任务编号_时间戳.json
+        timestamp_str = datetime.now().strftime("%Y%m%d_%H%M%S")
+        file_name = f"{task_no}_{timestamp_str}.json"
+        file_path = os.path.join(clean_result_dir, file_name)
+
+        # 写入文件（UTF-8 编码，ensure_ascii=False 保留中文）
+        with open(file_path, "w", encoding="utf-8") as f:
+            json.dump(result_data, f, ensure_ascii=False, indent=2, default=str)
+
+        append_clean_log(log_id, f"清洗结果已保存到：{file_path}")
+
+        # 完成执行记录（带文件名和路径）
         finish_clean_log(
             log_id,
             execute_status="03",
             total_count=total_count,
             removed_count=removed_count,
             result_count=result_count,
-            log_content="执行完成，清洗结果已生成"
+            log_content="执行完成，清洗结果已保存为 JSON 文件",
+            file_name=file_name,
+            file_path=file_path,
         )
 
         # 更新任务状态为已完成
         update_clean_task_status(task_no, "03", last_execute_flag=1)
 
-        task_name = task.get("task_name", task_no)
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        filename = f"{task_name}_清洗结果_{timestamp}.xlsx"
-        from urllib.parse import quote
-        encoded_filename = quote(filename)
-
-        headers = {
-            "Content-Disposition": f"attachment; filename*=UTF-8''{encoded_filename}"
-        }
-        return StreamingResponse(
-            output,
-            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            headers=headers,
-        )
+        return {"code": 0, "message": "执行成功，清洗结果已保存", "data": {"fileName": file_name, "filePath": file_path, "resultCount": result_count}}
     except Exception as e:
         # 失败时追加错误日志并更新执行记录
         if log_id:
@@ -545,3 +583,275 @@ def query_clean_log_api(taskNo: str = Query(..., description="任务编号")):
         return {"code": 0, "data": logs}
     except Exception as e:
         return {"code": 1, "message": f"查询失败: {str(e)}"}
+
+
+@router.get("/query-clean-results")
+def query_clean_results_api():
+    """查询清洗结果列表（仅已完成 execute_status=03 的记录）"""
+    try:
+        rows = query_clean_results()
+        results = []
+        for row in rows:
+            item = _to_camel_dict(row)
+            results.append(item)
+        return {"code": 0, "data": results}
+    except Exception as e:
+        logger.exception("查询清洗结果异常")
+        return {"code": 1, "message": f"查询失败: {str(e)}"}
+
+
+@router.get("/view-clean-result")
+def view_clean_result_api(recordId: int = Query(..., description="记录ID")):
+    """查看清洗结果 JSON 文件内容"""
+    try:
+        conn = get_connection()
+        try:
+            with conn.cursor() as cursor:
+                sql = "SELECT file_path, file_name FROM s_data_clean_log WHERE record_id = %s"
+                _execute(cursor, sql, (recordId,))
+                row = cursor.fetchone()
+        finally:
+            conn.close()
+
+        if not row or not row.get("file_path"):
+            return {"code": 1, "message": "清洗结果文件不存在"}
+
+        file_path = row["file_path"]
+        if not os.path.exists(file_path):
+            return {"code": 1, "message": f"文件不存在：{file_path}"}
+
+        with open(file_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+
+        return {"code": 0, "data": data}
+    except Exception as e:
+        logger.exception("查看清洗结果异常")
+        return {"code": 1, "message": f"查看失败: {str(e)}"}
+
+
+@router.get("/download-clean-result")
+def download_clean_result_api(recordId: int = Query(..., description="记录ID"),
+                               format: str = Query("json", description="下载格式：json / excel")):
+    """下载清洗结果文件，支持 JSON 和 Excel 格式"""
+    try:
+        conn = get_connection()
+        try:
+            with conn.cursor() as cursor:
+                sql = "SELECT file_path, file_name, task_no FROM s_data_clean_log WHERE record_id = %s"
+                _execute(cursor, sql, (recordId,))
+                row = cursor.fetchone()
+        finally:
+            conn.close()
+
+        if not row or not row.get("file_path"):
+            return {"code": 1, "message": "清洗结果文件不存在"}
+
+        file_path = row["file_path"]
+        if not os.path.exists(file_path):
+            return {"code": 1, "message": f"文件不存在：{file_path}"}
+
+        task_no = row.get("task_no", "unknown")
+        from urllib.parse import quote
+
+        if format == "excel":
+            # 读取 JSON 并转换为 Excel
+            with open(file_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+
+            import pandas as pd
+            import io as _io
+            columns = data.get("columns", [])
+            rows = data.get("rows", [])
+            df = pd.DataFrame(rows, columns=columns) if columns else pd.DataFrame(rows)
+
+            output = _io.BytesIO()
+            with pd.ExcelWriter(output, engine="openpyxl") as writer:
+                df.to_excel(writer, index=False, sheet_name="清洗结果")
+            output.seek(0)
+
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            filename = f"{task_no}_清洗结果_{timestamp}.xlsx"
+            encoded_filename = quote(filename)
+            headers = {
+                "Content-Disposition": f"attachment; filename*=UTF-8''{encoded_filename}"
+            }
+            from fastapi.responses import StreamingResponse
+            return StreamingResponse(
+                output,
+                media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                headers=headers,
+            )
+        else:
+            # 直接下载 JSON 文件
+            filename = row.get("file_name") or f"{task_no}_清洗结果.json"
+            encoded_filename = quote(filename)
+            headers = {
+                "Content-Disposition": f"attachment; filename*=UTF-8''{encoded_filename}"
+            }
+            from fastapi.responses import FileResponse
+            return FileResponse(
+                file_path,
+                media_type="application/json",
+                filename=filename,
+                headers=headers,
+            )
+    except Exception as e:
+        logger.exception("下载清洗结果异常")
+        return {"code": 1, "message": f"下载失败: {str(e)}"}
+
+
+@router.get("/view-clean-result-by-path")
+def view_clean_result_by_path_api(filePath: str = Query(..., description="文件路径")):
+    """通过文件路径查看清洗结果 JSON 内容"""
+    try:
+        if not os.path.exists(filePath):
+            return {"code": 1, "message": f"文件不存在：{filePath}"}
+
+        with open(filePath, "r", encoding="utf-8") as f:
+            data = json.load(f)
+
+        return {"code": 0, "data": data}
+    except Exception as e:
+        logger.exception("查看清洗结果异常")
+        return {"code": 1, "message": f"查看失败: {str(e)}"}
+
+
+@router.get("/download-clean-result-by-path")
+def download_clean_result_by_path_api(filePath: str = Query(..., description="文件路径")):
+    """通过文件路径下载清洗结果 JSON 文件"""
+    try:
+        if not os.path.exists(filePath):
+            return {"code": 1, "message": f"文件不存在：{filePath}"}
+
+        filename = os.path.basename(filePath)
+        from urllib.parse import quote
+        encoded_filename = quote(filename)
+        headers = {
+            "Content-Disposition": f"attachment; filename*=UTF-8''{encoded_filename}"
+        }
+        from fastapi.responses import FileResponse
+        return FileResponse(
+            filePath,
+            media_type="application/json",
+            filename=filename,
+            headers=headers,
+        )
+    except Exception as e:
+        logger.exception("下载清洗结果异常")
+        return {"code": 1, "message": f"下载失败: {str(e)}"}
+
+
+@router.get("/sample-set-options")
+def sample_set_options_api(typeCode: str = Query("", description="样本类型编码，为空则返回全部")):
+    """获取样本集下拉选项，可按类型过滤"""
+    try:
+        rows = query_sample_set_options(typeCode)
+        # 转为 camelCase 格式
+        options = [_to_camel_dict(row) for row in rows]
+        return {"code": 0, "data": options}
+    except Exception as e:
+        logger.exception("查询样本集选项异常")
+        return {"code": 1, "message": f"查询失败: {str(e)}"}
+
+
+class ImportToSampleRequest(BaseModel):
+    recordId: int
+    setNo: str
+    sampleName: str = ""
+
+
+@router.post("/import-to-sample")
+def import_to_sample_api(req: ImportToSampleRequest):
+    """将清洗结果入库到样本信息表"""
+    try:
+        # 1. 获取清洗记录
+        conn = get_connection()
+        try:
+            with conn.cursor() as cursor:
+                sql = """
+                    SELECT l.file_path, l.file_name, l.task_no, t.sample_type, t.task_name
+                    FROM s_data_clean_log l
+                    LEFT JOIN s_data_clean_task t ON l.task_no = t.task_no
+                    WHERE l.record_id = %s
+                """
+                _execute(cursor, sql, (req.recordId,))
+                log_row = cursor.fetchone()
+        finally:
+            conn.close()
+
+        if not log_row:
+            return {"code": 1, "message": "清洗记录不存在"}
+        if not log_row.get("file_path"):
+            return {"code": 1, "message": "清洗结果文件路径为空"}
+
+        # 2. 获取样本集信息
+        conn = get_connection()
+        try:
+            with conn.cursor() as cursor:
+                sql = "SELECT set_no, set_name, type_code, business_system FROM s_sample_set WHERE set_no = %s"
+                _execute(cursor, sql, (req.setNo,))
+                set_row = cursor.fetchone()
+        finally:
+            conn.close()
+
+        if not set_row:
+            return {"code": 1, "message": "所选样本集不存在"}
+
+        # 3. 读取 JSON 文件获取数据行
+        file_path = log_row["file_path"]
+        if not os.path.exists(file_path):
+            return {"code": 1, "message": f"文件不存在：{file_path}"}
+
+        with open(file_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+
+        columns = data.get("columns", [])
+        rows = data.get("rows", [])
+        if not rows:
+            return {"code": 1, "message": "清洗结果无数据"}
+
+        # 4. 确定类型编码：优先样本集的 type_code，其次任务的 sample_type
+        type_code = set_row.get("type_code") or log_row.get("sample_type") or ""
+        business_system = set_row.get("business_system") or ""
+        file_name = log_row.get("file_name") or ""
+
+        # 5. 将每行数据转为 JSON 字符串作为样本，批量插入
+        import json as _json
+        file_size_bytes = os.path.getsize(file_path)
+        # 格式化文件大小带单位
+        if file_size_bytes < 1024:
+            file_size = f"{file_size_bytes}B"
+        elif file_size_bytes < 1024 * 1024:
+            file_size = f"{file_size_bytes / 1024:.2f}KB"
+        else:
+            file_size = f"{file_size_bytes / (1024 * 1024):.2f}MB"
+        suffix = "json"
+
+        # 一个文件生成一条样本记录
+        sample_no = generate_sample_no()
+        # 使用用户输入的样本名称，若为空则使用文件名（去掉.json后缀）
+        if req.sampleName.strip():
+            sample_name = req.sampleName.strip()
+        else:
+            sample_name = file_name.replace(".json", "") if file_name.endswith(".json") else file_name
+
+        # 结果数据数量
+        result_count = len(rows)
+
+        record = {
+            "sample_no": sample_no,
+            "sample_name": sample_name,
+            "set_no": req.setNo,
+            "type_code": type_code,
+            "suffix": suffix,
+            "business_system": business_system,
+            "file_path": file_path,
+            "file_size": file_size,
+            "result_count": result_count,
+        }
+
+        batch_insert_sample_info([record])
+        return {"code": 0, "message": "入库成功", "data": {"count": 1, "sampleNo": sample_no}}
+    except Exception as e:
+        logger.exception("清洗结果入库异常")
+        return {"code": 1, "message": f"入库失败: {str(e)}"}

@@ -10,6 +10,7 @@ export interface CodeDictResult {
   QUALITY_LEVEL?: CodeDictItem[]
   SAMPLE_FIELD?: CodeDictItem[]
   DATABASE_TYPE?: CodeDictItem[]
+  FILE_GET_MODE?: CodeDictItem[]
 }
 
 export async function getCodeDict(sortNo: string[] = ['SAMPLE_TYPE', 'QUALITY_LEVEL', 'SAMPLE_FIELD', 'DATABASE_TYPE']): Promise<CodeDictResult> {
@@ -21,7 +22,6 @@ export async function getCodeDict(sortNo: string[] = ['SAMPLE_TYPE', 'QUALITY_LE
 }
 
 export interface SaveSampleSetParams {
-  setCode: string
   setName: string
   description: string
   businessSystem: string
@@ -177,6 +177,8 @@ export interface CollectTask {
   executeTypeCode: string
   executeTypeName: string
   cronFormula: string
+  sampleTypeCode: string
+  sampleSetNo: string
 }
 
 export async function getCollectTasks(): Promise<CollectTask[]> {
@@ -190,16 +192,32 @@ export async function saveCollectTask(
   taskName: string,
   remark: string,
   executeType: string = '01',
-  cronFormula: string = ''
+  cronFormula: string = '',
+  sampleType: string = '',
+  sampleSetNo: string = ''
 ): Promise<string> {
   const res = await fetch(`${BASE_URL}/save-collect-task`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ taskName, remark, executeType, cronFormula })
+    body: JSON.stringify({ taskName, remark, executeType, cronFormula, sampleType, sampleSetNo })
   })
   const json = await res.json()
   if (json.code !== 0) throw new Error(json.message || '保存失败')
   return json.data.taskNo
+}
+
+export interface SampleSetOption {
+  setNo: string
+  setName: string
+  setDescription: string
+  businessSystem: string
+}
+
+export async function querySampleSetByType(sampleType: string): Promise<SampleSetOption[]> {
+  const res = await fetch(`${BASE_URL}/query-sample-set-by-type?sampleType=${encodeURIComponent(sampleType)}`)
+  const json = await res.json()
+  if (json.code !== 0) throw new Error(json.message || '查询样本集失败')
+  return json.data || []
 }
 
 export interface CollectLog {
@@ -230,6 +248,10 @@ export interface CollectTaskDetParams {
   targetTable: string
   collectSql: string
   sourceDbAuth: string
+  fileGetMode?: string
+  bucketName?: string
+  fileId?: string
+  fileName?: string
 }
 
 export interface CollectTaskDet {
@@ -246,6 +268,11 @@ export interface CollectTaskDet {
   lastExecuteTime: string
   lastExecuteFlagCode: number
   lastExecuteFlagName: string
+  sampleTypeCode?: string
+  fileGetMode?: string
+  bucketName?: string
+  fileId?: string
+  fileName?: string
 }
 
 export async function getCollectTaskDet(taskNo: string): Promise<CollectTaskDet | null> {
@@ -263,6 +290,24 @@ export async function saveCollectTaskDet(params: CollectTaskDetParams): Promise<
   })
   const json = await res.json()
   if (json.code !== 0) throw new Error(json.message || '保存失败')
+}
+
+export async function testDbConnection(params: {
+  dbType: string
+  host: string
+  port: string
+  user: string
+  pwd: string
+  database: string
+  auth: string
+}): Promise<{ success: boolean; message: string }> {
+  const res = await fetch(`${BASE_URL}/test-db-connection`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(params)
+  })
+  const json = await res.json()
+  return { success: json.code === 0, message: json.message }
 }
 
 export async function executeCollectTask(taskNo: string): Promise<string> {

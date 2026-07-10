@@ -3,7 +3,7 @@ import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import Header from '@/components/Header.vue'
 import Sidebar from '@/components/Sidebar.vue'
-import { getCollectTasks, saveCollectTask, executeCollectTask, stopCollectTask, deleteCollectTask, getCollectLogs, type CollectTask, type CollectLog } from '@/api/sample'
+import { getCollectTasks, saveCollectTask, executeCollectTask, stopCollectTask, deleteCollectTask, getCollectLogs, getCodeDict, querySampleSetByType, type CollectTask, type CollectLog, type SampleSetOption } from '@/api/sample'
 import { ElMessage, ElMessageBox } from 'element-plus'
 
 const router = useRouter()
@@ -11,6 +11,12 @@ const router = useRouter()
 const taskList = ref<CollectTask[]>([])
 const loading = ref(false)
 const executingSet = ref<Set<string>>(new Set())
+
+// 数据类型选项
+const sampleTypeOptions = ref<{ value: string; label: string }[]>([])
+// 原始样本集选项（根据数据类型动态加载）
+const sampleSetOptions = ref<SampleSetOption[]>([])
+const sampleSetLoading = ref(false)
 
 // 筛选
 const filterName = ref('')
@@ -41,16 +47,40 @@ function resetFilters() {
 // ========== 新增任务弹框 ==========
 const dialogVisible = ref(false)
 const dialogSaving = ref(false)
-const dialogForm = ref({ taskName: '', remark: '', executeType: '01', cronFormula: '' })
+const dialogForm = ref({ taskName: '', remark: '', executeType: '01', cronFormula: '', sampleType: '', sampleSetNo: '' })
 
 function openCreateDialog() {
-  dialogForm.value = { taskName: '', remark: '', executeType: '01', cronFormula: '' }
+  dialogForm.value = { taskName: '', remark: '', executeType: '01', cronFormula: '', sampleType: '', sampleSetNo: '' }
+  sampleSetOptions.value = []
   dialogVisible.value = true
+}
+
+// 数据类型变化时，清空已选样本集并重新加载
+async function onSampleTypeChange(val: string) {
+  dialogForm.value.sampleSetNo = ''
+  sampleSetOptions.value = []
+  if (!val) return
+  sampleSetLoading.value = true
+  try {
+    sampleSetOptions.value = await querySampleSetByType(val)
+  } catch (e: any) {
+    ElMessage.error(e.message || '查询原始样本集失败')
+  } finally {
+    sampleSetLoading.value = false
+  }
 }
 
 async function handleCreateConfirm() {
   if (!dialogForm.value.taskName.trim()) {
     ElMessage.warning('请输入任务名称')
+    return
+  }
+  if (!dialogForm.value.sampleType) {
+    ElMessage.warning('请选择数据类型')
+    return
+  }
+  if (!dialogForm.value.sampleSetNo) {
+    ElMessage.warning('请选择原始样本集')
     return
   }
   if (dialogForm.value.executeType === '02' && !dialogForm.value.cronFormula.trim()) {
@@ -63,12 +93,14 @@ async function handleCreateConfirm() {
       dialogForm.value.taskName.trim(),
       dialogForm.value.remark.trim(),
       dialogForm.value.executeType,
-      dialogForm.value.cronFormula.trim()
+      dialogForm.value.cronFormula.trim(),
+      dialogForm.value.sampleType,
+      dialogForm.value.sampleSetNo
     )
     ElMessage.success('新建任务成功')
     dialogVisible.value = false
-    // 跳转到任务明细页面
-    router.push({ path: '/collect-task-detail', query: { taskNo } })
+    // 跳转到任务明细页面，传递 sampleType 用于判断图像/时序类型
+    router.push({ path: '/collect-task-detail', query: { taskNo, sampleType: dialogForm.value.sampleType } })
   } catch (e: any) {
     ElMessage.error(e.message || '新建失败')
   } finally {
@@ -173,13 +205,28 @@ async function handleDelete(task: CollectTask) {
   }
 }
 
-function goToDetail(taskNo: string) {
-  router.push({ path: '/collect-task-detail', query: { taskNo } })
+function goToDetail(task: CollectTask) {
+  router.push({ path: '/collect-task-detail', query: { taskNo: task.taskNo, sampleType: task.sampleTypeCode || '' } })
 }
 
 onMounted(() => {
   loadTasks()
+  loadCodeDict()
 })
+
+async function loadCodeDict() {
+  try {
+    const data = await getCodeDict()
+    if (data.SAMPLE_TYPE && data.SAMPLE_TYPE.length > 0) {
+      sampleTypeOptions.value = data.SAMPLE_TYPE.map((item: any) => ({
+        value: item.codeValue,
+        label: item.codeName
+      }))
+    }
+  } catch (e) {
+    console.error('获取数据类型字典失败:', e)
+  }
+}
 </script>
 
 <template>
@@ -219,6 +266,7 @@ onMounted(() => {
               <span class="col col-exec">最近执行时间</span>
               <span class="col col-result">执行结果</span>
               <span class="col col-status">执行状态</span>
+              <span class="col col-sample-type">数据类型</span>
               <span class="col col-exec-type">执行方式</span>
               <span class="col col-action">操作</span>
             </div>
@@ -233,8 +281,8 @@ onMounted(() => {
             </div>
             <div v-else>
             <div class="list-row" v-for="item in filteredList" :key="item.taskNo">
-              <span class="col col-no link-col" @click="goToDetail(item.taskNo)">{{ item.taskNo }}</span>
-              <span class="col col-name link-col" @click="goToDetail(item.taskNo)">{{ item.taskName }}</span>
+              <span class="col col-no link-col" @click="goToDetail(item)">{{ item.taskNo }}</span>
+              <span class="col col-name link-col" @click="goToDetail(item)">{{ item.taskName }}</span>
               <span class="col col-remark">{{ item.remark || '-' }}</span>
               <span class="col col-create">{{ item.createTime || '-' }}</span>
               <span class="col col-exec">{{ item.lastExecuteTime || '-' }}</span>
@@ -247,6 +295,9 @@ onMounted(() => {
                 <span class="status-tag" :style="{ color: statusColor(item.taskStatusCode) }">
                   {{ item.taskStatusName || '未执行' }}
                 </span>
+              </span>
+              <span class="col col-sample-type">
+                {{ sampleTypeOptions.find(o => o.value === item.sampleTypeCode)?.label || item.sampleTypeCode || '-' }}
               </span>
               <span class="col col-exec-type">
                 <span class="exec-type-tag">{{ item.executeTypeName || '手动' }}</span>
@@ -288,10 +339,20 @@ onMounted(() => {
     </div>
 
     <!-- 新增任务弹框 -->
-    <el-dialog v-model="dialogVisible" title="新增采集任务" width="620px" :close-on-click-modal="false" class="create-dialog">
-      <el-form label-width="90px" label-position="right">
+    <el-dialog v-model="dialogVisible" title="新增采集任务" width="680px" :close-on-click-modal="false" class="create-dialog">
+      <el-form label-width="100px" label-position="right">
         <el-form-item label="任务名称" required>
           <el-input v-model="dialogForm.taskName" placeholder="请输入任务名称" maxlength="100" />
+        </el-form-item>
+        <el-form-item label="数据类型" required>
+          <el-select v-model="dialogForm.sampleType" placeholder="请选择数据类型" style="width: 100%" @change="onSampleTypeChange">
+            <el-option v-for="opt in sampleTypeOptions" :key="opt.value" :label="opt.label" :value="opt.value" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="原始样本集" required>
+          <el-select v-model="dialogForm.sampleSetNo" placeholder="请先选择数据类型" :loading="sampleSetLoading" :disabled="!dialogForm.sampleType" style="width: 100%">
+            <el-option v-for="opt in sampleSetOptions" :key="opt.setNo" :label="opt.setName" :value="opt.setNo" />
+          </el-select>
         </el-form-item>
         <el-form-item label="执行方式" required>
           <el-radio-group v-model="dialogForm.executeType">
@@ -501,6 +562,7 @@ onMounted(() => {
 .col-exec { width: 160px; flex-shrink: 0; color: rgba(255, 255, 255, 0.6); }
 .col-result { width: 90px; flex-shrink: 0; text-align: center; }
 .col-status { width: 90px; flex-shrink: 0; text-align: center; }
+.col-sample-type { width: 90px; flex-shrink: 0; text-align: center; color: rgba(255, 255, 255, 0.7); }
 .col-exec-type { width: 150px; flex-shrink: 0; display: flex; flex-direction: column; gap: 2px; }
 .col-action { width: 320px; flex-grow: 1; flex-shrink: 0; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 

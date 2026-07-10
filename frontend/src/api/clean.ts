@@ -54,11 +54,11 @@ export async function getCleanTasks(): Promise<CleanTask[]> {
   return json.data || []
 }
 
-export async function saveCleanTask(taskName: string, remark: string): Promise<string> {
+export async function saveCleanTask(taskName: string, remark: string, sampleType: string = ''): Promise<string> {
   const res = await fetch(`${BASE_URL}/save-clean-task`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ taskName, remark })
+    body: JSON.stringify({ taskName, remark, sampleType })
   })
   const json = await res.json()
   if (json.code !== 0) throw new Error(json.message || '保存失败')
@@ -106,51 +106,27 @@ export async function queryCleanTableColumns(tableName: string): Promise<TableCo
   return json.data || []
 }
 
-export async function executeCleanTask(taskNo: string): Promise<void> {
+export async function executeCleanTask(taskNo: string): Promise<{ fileName: string; filePath: string; resultCount: number }> {
   const res = await fetch(`${BASE_URL}/execute-clean-task`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ taskNo })
   })
 
-  // 检查是否是 JSON 错误响应（非文件下载）
   const contentType = res.headers.get('content-type') || ''
-  if (contentType.includes('application/json')) {
-    const json = await res.json()
+  if (!contentType.includes('application/json')) {
+    throw new Error('执行失败：响应格式异常')
+  }
+
+  const json = await res.json()
+  if (json.code !== 0) {
     throw new Error(json.message || '执行失败')
   }
-
-  if (!res.ok) {
-    throw new Error('执行失败')
+  return {
+    fileName: json.data?.fileName || '',
+    filePath: json.data?.filePath || '',
+    resultCount: json.data?.resultCount || 0
   }
-
-  // 触发浏览器下载
-  const blob = await res.blob()
-  const disposition = res.headers.get('content-disposition') || ''
-  let filename = '清洗结果.xlsx'
-  // 优先解析 filename*=UTF-8'' 格式（RFC 5987，支持中文）
-  const starMatch = disposition.match(/filename\*=UTF-8''([^;]+)/i)
-  if (starMatch) {
-    filename = decodeURIComponent(starMatch[1])
-  } else {
-    // 兼容旧的 filename="..." 格式
-    const match = disposition.match(/filename="?([^"]+)"?/)
-    if (match) {
-      try {
-        filename = decodeURIComponent(match[1])
-      } catch {
-        filename = match[1]
-      }
-    }
-  }
-  const url = window.URL.createObjectURL(blob)
-  const a = document.createElement('a')
-  a.href = url
-  a.download = filename
-  document.body.appendChild(a)
-  a.click()
-  document.body.removeChild(a)
-  window.URL.revokeObjectURL(url)
 }
 
 export interface CleanLog {
@@ -171,4 +147,76 @@ export async function getCleanLogs(taskNo: string): Promise<CleanLog[]> {
   const json = await res.json()
   if (json.code !== 0) throw new Error(json.message || '查询失败')
   return json.data || []
+}
+
+// ========== 清洗结果 ==========
+
+export interface CleanResult {
+  recordId: number
+  taskNo: string
+  taskName: string
+  sampleTypeCode: string
+  startTime: string
+  endTime: string
+  resultCount: number
+  fileName: string
+  filePath: string
+}
+
+export async function getCleanResults(): Promise<CleanResult[]> {
+  const res = await fetch(`${BASE_URL}/query-clean-results`)
+  const json = await res.json()
+  if (json.code !== 0) throw new Error(json.message || '查询失败')
+  return json.data || []
+}
+
+// ========== 清洗结果查看/下载 ==========
+
+export interface CleanResultData {
+  taskNo: string
+  taskName: string
+  executeTime: string
+  totalCount: number
+  removedCount: number
+  resultCount: number
+  columns: string[]
+  rows: Record<string, any>[]
+}
+
+export async function viewCleanResult(recordId: number): Promise<CleanResultData> {
+  const res = await fetch(`${BASE_URL}/view-clean-result?recordId=${recordId}`)
+  const json = await res.json()
+  if (json.code !== 0) throw new Error(json.message || '查看失败')
+  return json.data
+}
+
+export function getDownloadCleanResultUrl(recordId: number, format: 'json' | 'excel'): string {
+  return `${BASE_URL}/download-clean-result?recordId=${recordId}&format=${format}`
+}
+
+// ========== 清洗结果入库 ==========
+
+export interface SampleSetOption {
+  setNo: string
+  setName: string
+  typeCode: string
+}
+
+export async function getSampleSetOptions(typeCode: string = ''): Promise<SampleSetOption[]> {
+  const params = typeCode ? `?typeCode=${encodeURIComponent(typeCode)}` : ''
+  const res = await fetch(`${BASE_URL}/sample-set-options${params}`)
+  const json = await res.json()
+  if (json.code !== 0) throw new Error(json.message || '查询样本集失败')
+  return json.data || []
+}
+
+export async function importToSample(recordId: number, setNo: string, sampleName: string = ''): Promise<number> {
+  const res = await fetch(`${BASE_URL}/import-to-sample`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ recordId, setNo, sampleName })
+  })
+  const json = await res.json()
+  if (json.code !== 0) throw new Error(json.message || '入库失败')
+  return json.data.count
 }

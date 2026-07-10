@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, reactive, onMounted, markRaw, watch, nextTick } from 'vue'
+import { ref, reactive, computed, onMounted, markRaw, watch, nextTick } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import Header from '@/components/Header.vue'
 import Sidebar from '@/components/Sidebar.vue'
@@ -257,6 +257,65 @@ function onDedupFieldsChange(fields: string[]) {
 // 当 nullfill 节点的字段变化时，更新配置
 function onNullFillFieldsChange(fields: string[]) {
   updateSelectedNodeConfig({ fields })
+}
+
+// 空值处理：区间选择器（手动输入起止字段名，自动匹配同前缀+数字的区间字段）
+const nullFillRangeStart = ref('')
+const nullFillRangeEnd = ref('')
+
+// 解析字段名：返回 {prefix, num} 或 null
+function parseFieldName(name: string): { prefix: string; num: number } | null {
+  const match = name.match(/^([^\d]*?)(\d+)$/)
+  if (!match) return null
+  return { prefix: match[1], num: parseInt(match[2]) }
+}
+
+// 添加区间选择：根据起止字段名，自动勾选同前缀+数字区间内的所有字段
+function onAddNullFillRange() {
+  const startRaw = nullFillRangeStart.value.trim()
+  const endRaw = nullFillRangeEnd.value.trim()
+  if (!startRaw || !endRaw) {
+    ElMessage.warning('请输入起始和结束字段名')
+    return
+  }
+  const startParsed = parseFieldName(startRaw)
+  const endParsed = parseFieldName(endRaw)
+  if (!startParsed || !endParsed) {
+    ElMessage.warning('字段名必须以数字结尾（如 time0000、P0015）')
+    return
+  }
+  if (startParsed.prefix !== endParsed.prefix) {
+    ElMessage.warning(`前缀不一致："${startParsed.prefix}" 与 "${endParsed.prefix}"`)
+    return
+  }
+  let start = startParsed.num
+  let end = endParsed.num
+  if (start > end) { [start, end] = [end, start] }
+  if (columnList.value.length === 0) {
+    ElMessage.warning('请先点击"刷新字段"加载字段列表')
+    return
+  }
+  const prefix = startParsed.prefix
+  const fieldsToAdd: string[] = []
+  for (const col of columnList.value) {
+    const parsed = parseFieldName(col.fieldName)
+    if (parsed && parsed.prefix === prefix && parsed.num >= start && parsed.num <= end) {
+      fieldsToAdd.push(col.fieldName)
+    }
+  }
+  if (fieldsToAdd.length === 0) {
+    ElMessage.warning(`未找到前缀为 "${prefix}" 且数字在 ${start}~${end} 之间的字段`)
+    return
+  }
+  const currentFields = new Set(selectedNode.value?.data?.config?.fields || [])
+  fieldsToAdd.forEach(f => currentFields.add(f))
+  onNullFillFieldsChange(Array.from(currentFields))
+  ElMessage.success(`已添加 ${fieldsToAdd.length} 个字段`)
+}
+
+// 清空空值处理已选字段
+function onClearNullFillFields() {
+  onNullFillFieldsChange([])
 }
 
 // 当 nullfill 节点的策略变化时，更新配置
@@ -621,6 +680,8 @@ onMounted(() => {
                     placeholder="请选择去重字段"
                     multiple
                     filterable
+                    :collapse-tags="(selectedNode.data?.config?.fields || []).length > 5"
+                    collapse-tags-tooltip
                     :loading="columnLoading"
                     style="width: 100%"
                     @change="onDedupFieldsChange"
@@ -648,11 +709,37 @@ onMounted(() => {
                       请先配置上游数据源并连线
                     </span>
                   </div>
+                  <!-- 字段区间选择器 -->
+                  <div class="range-selector">
+                    <div class="range-selector-row">
+                      <el-input
+                        v-model="nullFillRangeStart"
+                        size="small"
+                        placeholder="起始字段名"
+                        style="width: 140px"
+                      />
+                      <span class="range-separator">~</span>
+                      <el-input
+                        v-model="nullFillRangeEnd"
+                        size="small"
+                        placeholder="结束字段名"
+                        style="width: 140px"
+                      />
+                      <el-button size="small" type="primary" @click="onAddNullFillRange">
+                        添加区间
+                      </el-button>
+                    </div>
+                    <div class="config-tip">
+                      输入起止字段名（如 time0000 ~ time2300），自动勾选同前缀+数字区间内所有字段
+                    </div>
+                  </div>
                   <el-select
                     :model-value="selectedNode.data?.config?.fields || []"
                     placeholder="请选择需要处理空值的字段"
                     multiple
                     filterable
+                    :collapse-tags="(selectedNode.data?.config?.fields || []).length > 5"
+                    collapse-tags-tooltip
                     :loading="columnLoading"
                     style="width: 100%"
                     @change="onNullFillFieldsChange"
@@ -664,6 +751,10 @@ onMounted(() => {
                       :value="col.fieldName"
                     />
                   </el-select>
+                  <div v-if="(selectedNode.data?.config?.fields || []).length > 0" class="field-count-bar">
+                    <span>已选 {{ (selectedNode.data?.config?.fields || []).length }} 个字段</span>
+                    <el-button size="small" link type="danger" @click="onClearNullFillFields">清空</el-button>
+                  </div>
                 </div>
                 <div class="config-item">
                   <label>处理方式</label>
@@ -948,6 +1039,44 @@ onMounted(() => {
 .field-tip {
   font-size: 12px;
   color: #ff6b6b;
+}
+
+.range-selector {
+  padding: 10px 12px;
+  background: rgba(0, 212, 255, 0.06);
+  border: 1px solid rgba(0, 212, 255, 0.2);
+  border-radius: 6px;
+  margin-bottom: 8px;
+}
+
+.range-selector-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+
+.range-label {
+  font-size: 14px;
+  color: #00d4ff;
+  font-weight: 600;
+}
+
+.range-separator {
+  font-size: 14px;
+  color: rgba(255, 255, 255, 0.5);
+}
+
+.field-count-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 6px;
+  padding: 4px 8px;
+  background: rgba(0, 212, 255, 0.05);
+  border-radius: 4px;
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.6);
 }
 
 .panel-footer {
