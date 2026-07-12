@@ -255,3 +255,37 @@ export async function queryOriginalSampleSetOptions(typeCode: string = ''): Prom
   if (json.code !== 0) throw new Error(json.message || '查询原始样本集失败')
   return json.data || []
 }
+
+// ========== 图像清洗结果（被清洗图片） ==========
+
+export interface CleanPicRecord {
+  recordId: number
+  taskNo: string
+  cleanType: string
+  cleanTypeName: string
+  fileName: string
+  filePath: string
+}
+
+export async function queryCleanPics(taskNo: string): Promise<CleanPicRecord[]> {
+  const res = await fetch(`${BASE_URL}/query-clean-pics?taskNo=${encodeURIComponent(taskNo)}`)
+  const json = await res.json()
+  if (json.code !== 0) throw new Error(json.message || '查询清洗图片失败')
+  return json.data || []
+}
+
+/** 构造被清洗图片的展示 URL */
+export function getCleanPicImageUrl(filePath: string): string {
+  return `${BASE_URL}/serve-image?filePath=${encodeURIComponent(filePath)}`
+}
+
+export async function rollbackCleanPics(taskNo: string): Promise<{ restoredCount: number; skippedCount: number }> {
+  const res = await fetch(`${BASE_URL}/rollback-clean-pics`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ taskNo })
+  })
+  const json = await res.json()
+  if (json.code !== 0) throw new Error(json.message || '回滚失败')
+  return json.data
+}

@@ -162,6 +162,18 @@ export async function uploadSamples(setNo: string, setName: string, typeCode: st
   return json.message
 }
 
+export async function uploadSamplesBatch(setNo: string, setName: string, typeCode: string, file: File): Promise<string> {
+  const formData = new FormData()
+  formData.append('setNo', setNo)
+  formData.append('setName', setName)
+  formData.append('typeCode', typeCode)
+  formData.append('file', file)
+  const res = await fetch(`${BASE_URL}/upload-samples-batch`, { method: 'POST', body: formData })
+  const json = await res.json()
+  if (json.code !== 0) throw new Error(json.message || '批量导入失败')
+  return json.message
+}
+
 // ========== 数据采集任务 ==========
 
 export interface CollectTask {

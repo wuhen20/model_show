@@ -506,6 +506,44 @@ async def upload_samples(
     return {"code": 0, "message": msg}
 
 
+@router.post("/upload-samples-batch")
+async def upload_samples_batch(
+    setNo: str = Form(...),
+    setName: str = Form(...),
+    typeCode: str = Form(...),
+    file: UploadFile = File(...),
+):
+    """批量导入：上传单个 ZIP，解压图片到 sample_upload_dir/setName/，写入 s_sample_info"""
+    from app.core.config import settings
+    from app.services.sample_import_service import extract_zip_and_import
+
+    if typeCode != "05":
+        return {"code": 1, "message": "批量导入仅支持图片类型（05）样本集"}
+
+    content = await file.read()
+    if not zipfile.is_zipfile(io.BytesIO(content)):
+        return {"code": 1, "message": "上传文件不是有效的 ZIP 文件"}
+
+    target_dir = os.path.join(settings.sample_upload_dir, setName)
+    try:
+        result = extract_zip_and_import(
+            zip_bytes=content,
+            target_dir=target_dir,
+            set_no=setNo,
+            type_code=typeCode,
+            insert_callback=insert_sample_info,
+        )
+        msg = (f"成功导入 {result['image_count']} 张图片，"
+               f"保存 {result['txt_count']} 个标注文件，"
+               f"跳过 {result['skipped_count']} 个文件")
+        if result["errors"]:
+            msg += f"，失败 {len(result['errors'])} 个: {'; '.join(result['errors'][:5])}"
+        return {"code": 0, "message": msg}
+    except Exception as e:
+        logger.exception("批量导入异常")
+        return {"code": 1, "message": f"批量导入失败: {str(e)}"}
+
+
 @router.post("/update-label-think")
 async def update_label_think_api(payload: dict):
     """保存样本思维链"""
@@ -914,9 +952,15 @@ def _execute_image_collect_task(task_no: str, det: dict, trigger_source: str = "
             if file_name_idx is None:
                 raise ValueError(f"SQL结果中未找到图像名称字段：{file_name_field}，查询出的列：{columns}")
 
-        # 准备保存目录
+        # 准备保存目录：优先使用关联原始样本集的 set_path 根目录
         from app.core.config import settings
-        save_dir = os.path.join(settings.sample_upload_dir, "data_collect", task_no)
+        set_path = det.get("set_path") or ""
+        if set_path:
+            save_dir = set_path
+        else:
+            # 兜底：旧数据无 set_path 时回退原逻辑，并记日志告警
+            save_dir = os.path.join(settings.sample_upload_dir, "data_collect", task_no)
+            append_collect_log(log_id, f"警告：原始样本集未配置 set_path，回退到 {save_dir}")
         os.makedirs(save_dir, exist_ok=True)
 
         append_collect_log(log_id, f"文件保存目录：{save_dir}")

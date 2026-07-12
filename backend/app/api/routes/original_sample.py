@@ -71,7 +71,11 @@ class SaveSampleSetRequest(BaseModel):
 @router.post("/save-sample-set")
 def save_sample_set_api(req: SaveSampleSetRequest):
     try:
+        from app.core.config import settings
         set_no = generate_sample_set_no()
+        # 生成以样本集名称命名的文件夹，路径写入 set_path
+        set_path = os.path.join(settings.sample_upload_dir, req.setName)
+        os.makedirs(set_path, exist_ok=True)
         # 只保留 SQL 需要的字段，避免 Oracle 报错多余的参数
         data = {
             'setCode': set_no,
@@ -80,6 +84,7 @@ def save_sample_set_api(req: SaveSampleSetRequest):
             'businessSystem': req.businessSystem,
             'sampleTypeCode': req.sampleTypeCode,
             'sampleFieldCode': req.sampleFieldCode,
+            'setPath': set_path,
         }
         rowcount = save_original_sample_set(data)
         return {"code": 0, "message": "保存成功", "data": {"rowcount": rowcount, "setNo": set_no}}
@@ -316,6 +321,44 @@ async def upload_samples(
     if errors:
         msg += f"，失败 {len(errors)} 个: {'; '.join(errors[:5])}"
     return {"code": 0, "message": msg}
+
+
+@router.post("/upload-samples-batch")
+async def upload_samples_batch(
+    setNo: str = Form(...),
+    setName: str = Form(...),
+    typeCode: str = Form(...),
+    file: UploadFile = File(...),
+):
+    """批量导入：上传单个 ZIP，解压图片到 sample_upload_dir/setName/，写入 s_original_sample_info"""
+    from app.core.config import settings
+    from app.services.sample_import_service import extract_zip_and_import
+
+    if typeCode != "05":
+        return {"code": 1, "message": "批量导入仅支持图片类型（05）样本集"}
+
+    content = await file.read()
+    if not zipfile.is_zipfile(io.BytesIO(content)):
+        return {"code": 1, "message": "上传文件不是有效的 ZIP 文件"}
+
+    target_dir = os.path.join(settings.sample_upload_dir, setName)
+    try:
+        result = extract_zip_and_import(
+            zip_bytes=content,
+            target_dir=target_dir,
+            set_no=setNo,
+            type_code=typeCode,
+            insert_callback=insert_original_sample_info,
+        )
+        msg = (f"成功导入 {result['image_count']} 张图片，"
+               f"保存 {result['txt_count']} 个标注文件，"
+               f"跳过 {result['skipped_count']} 个文件")
+        if result["errors"]:
+            msg += f"，失败 {len(result['errors'])} 个: {'; '.join(result['errors'][:5])}"
+        return {"code": 0, "message": msg}
+    except Exception as e:
+        logger.exception("批量导入异常")
+        return {"code": 1, "message": f"批量导入失败: {str(e)}"}
 
 
 class UpdateSampleScoreRequest(BaseModel):

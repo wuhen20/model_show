@@ -3,7 +3,7 @@ import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import Header from '@/components/Header.vue'
 import Sidebar from '@/components/Sidebar.vue'
-import { getCodeDict, saveSampleSet, querySampleSet, uploadSamples, type CodeDictItem } from '@/api/sample'
+import { getCodeDict, saveSampleSet, querySampleSet, uploadSamples, uploadSamplesBatch, type CodeDictItem } from '@/api/sample'
 import { ElMessage, ElLoading } from 'element-plus'
 
 type ViewMode = 'card' | 'list'
@@ -223,6 +223,8 @@ function handleCardCommand(command: string, item: SampleSet) {
     downloadSampleSet(item)
   } else if (command === 'upload') {
     openUploadDialog(item)
+  } else if (command === 'batch') {
+    openBatchDialog(item)
   }
 }
 
@@ -489,6 +491,60 @@ async function handleUploadConfirm() {
     uploadSaving.value = false
   }
 }
+
+// ========== 批量导入弹框（仅图片类型）==========
+const batchDialogVisible = ref(false)
+const batchSaving = ref(false)
+const batchTarget = ref<SampleSet | null>(null)
+const batchFile = ref<File | null>(null)
+
+function openBatchDialog(item: SampleSet) {
+  if (item.modality[0] !== '05') {
+    ElMessage.warning('批量导入仅支持图片类型样本集')
+    return
+  }
+  batchTarget.value = item
+  batchFile.value = null
+  batchDialogVisible.value = true
+}
+
+function handleBatchFileChange(file: any) {
+  batchFile.value = file.raw
+}
+
+function handleBatchFileRemove() {
+  batchFile.value = null
+}
+
+async function handleBatchConfirm() {
+  if (!batchTarget.value) return
+  if (!batchFile.value) {
+    ElMessage.warning('请选择要上传的 ZIP 文件')
+    return
+  }
+  const fileName = batchFile.value.name.toLowerCase()
+  if (!fileName.endsWith('.zip')) {
+    ElMessage.warning('仅支持 ZIP 文件')
+    return
+  }
+  const typeCode = batchTarget.value.modality[0] || ''
+  batchSaving.value = true
+  try {
+    const msg = await uploadSamplesBatch(
+      batchTarget.value.setNo,
+      batchTarget.value.name,
+      typeCode,
+      batchFile.value
+    )
+    ElMessage.success(msg)
+    batchDialogVisible.value = false
+    loadSampleSets()
+  } catch (e: any) {
+    ElMessage.error(e.message || '批量导入失败')
+  } finally {
+    batchSaving.value = false
+  }
+}
 </script>
 
 <template>
@@ -632,6 +688,7 @@ async function handleUploadConfirm() {
                 <template #dropdown>
                   <el-dropdown-menu>
                     <el-dropdown-item command="upload">上传</el-dropdown-item>
+                    <el-dropdown-item v-if="item.modality[0] === '05'" command="batch">批量导入</el-dropdown-item>
                     <el-dropdown-item command="download">下载</el-dropdown-item>
                     <el-dropdown-item command="delete" disabled>删除</el-dropdown-item>
                   </el-dropdown-menu>
@@ -682,6 +739,7 @@ async function handleUploadConfirm() {
             <span class="col col-update">{{ item.updateTime }}</span>
             <span class="col col-action">
               <el-button text size="small" class="action-btn" @click="openUploadDialog(item)">上传</el-button>
+              <el-button v-if="item.modality[0] === '05'" text size="small" class="action-btn" @click="openBatchDialog(item)">批量导入</el-button>
               <el-button text size="small" class="action-btn" @click="downloadSampleSet(item)">下载</el-button>
             </span>
           </div>
@@ -759,6 +817,39 @@ async function handleUploadConfirm() {
       <template #footer>
         <el-button type="primary" :loading="uploadSaving" @click="handleUploadConfirm">确认上传</el-button>
         <el-button @click="uploadDialogVisible = false">取消</el-button>
+      </template>
+    </el-dialog>
+
+    <el-dialog v-model="batchDialogVisible" title="批量导入（ZIP）" width="520px" :close-on-click-modal="false" class="create-dialog">
+      <div v-if="batchTarget" class="upload-dialog-content">
+        <div class="upload-info-row">
+          <span class="upload-info-label">样本集：</span>
+          <span class="upload-info-value">{{ batchTarget.name }}</span>
+        </div>
+        <div class="upload-info-row">
+          <span class="upload-info-label">说明：</span>
+          <span class="upload-info-value">上传 ZIP，自动解压图片与同名 .txt 标注、classes.txt 到样本集目录</span>
+        </div>
+        <el-upload
+          accept=".zip"
+          :auto-upload="false"
+          :limit="1"
+          :on-change="handleBatchFileChange"
+          :on-remove="handleBatchFileRemove"
+          drag
+        >
+          <div class="upload-drag-content">
+            <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="rgba(0,212,255,0.5)" stroke-width="1.5">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M17 8l-5-5-5 5M12 3v12"/>
+            </svg>
+            <p>将 ZIP 文件拖到此处，或<em>点击上传</em></p>
+            <p class="upload-tip">仅支持单个 ZIP，图片类型样本集</p>
+          </div>
+        </el-upload>
+      </div>
+      <template #footer>
+        <el-button type="primary" :loading="batchSaving" @click="handleBatchConfirm">确认导入</el-button>
+        <el-button @click="batchDialogVisible = false">取消</el-button>
       </template>
     </el-dialog>
   </div>

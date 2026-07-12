@@ -3,7 +3,7 @@ import { ref, computed, nextTick, onMounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import Header from '@/components/Header.vue'
 import Sidebar from '@/components/Sidebar.vue'
-import { getSamples, getImageUrl, getAnnotations, getAudioText, updateSampleScore, uploadSamples, saveLabelThink, queryTimeSeriesData, type SampleInfoRow, type AnnotationData, type AnnotationBox, type TimeSeriesColumn } from '@/api/originalSample'
+import { getSamples, getImageUrl, getAnnotations, getAudioText, updateSampleScore, uploadSamples, uploadSamplesBatch, saveLabelThink, queryTimeSeriesData, type SampleInfoRow, type AnnotationData, type AnnotationBox, type TimeSeriesColumn } from '@/api/originalSample'
 import { ElMessage } from 'element-plus'
 
 const route = useRoute()
@@ -96,6 +96,51 @@ async function handleUploadConfirm() {
     ElMessage.error(e.message || '上传失败')
   } finally {
     uploadSaving.value = false
+  }
+}
+
+// ========== 批量导入弹框（仅图片类型）==========
+const batchDialogVisible = ref(false)
+const batchSaving = ref(false)
+const batchFile = ref<File | null>(null)
+
+function openBatchDialog() {
+  if (typeCode.value !== '05') {
+    ElMessage.warning('批量导入仅支持图片类型样本集')
+    return
+  }
+  batchFile.value = null
+  batchDialogVisible.value = true
+}
+
+function handleBatchFileChange(file: any) {
+  batchFile.value = file.raw
+}
+
+function handleBatchFileRemove() {
+  batchFile.value = null
+}
+
+async function handleBatchConfirm() {
+  if (!batchFile.value) {
+    ElMessage.warning('请选择要上传的 ZIP 文件')
+    return
+  }
+  const fileName = batchFile.value.name.toLowerCase()
+  if (!fileName.endsWith('.zip')) {
+    ElMessage.warning('仅支持 ZIP 文件')
+    return
+  }
+  batchSaving.value = true
+  try {
+    const msg = await uploadSamplesBatch(setNo.value, setName.value, typeCode.value, batchFile.value)
+    ElMessage.success(msg)
+    batchDialogVisible.value = false
+    loadSamples()
+  } catch (e: any) {
+    ElMessage.error(e.message || '批量导入失败')
+  } finally {
+    batchSaving.value = false
   }
 }
 
@@ -713,6 +758,7 @@ onMounted(() => {
               </button>
             </div>
             <el-button v-if="!isTimeSeriesSet" type="primary" @click="openUploadDialog">上传样本</el-button>
+            <el-button v-if="isImageSet" @click="openBatchDialog">批量导入</el-button>
           </div>
         </div>
 
@@ -828,6 +874,40 @@ onMounted(() => {
       <template #footer>
         <el-button type="primary" :loading="uploadSaving" @click="handleUploadConfirm">确认上传</el-button>
         <el-button @click="uploadDialogVisible = false">取消</el-button>
+      </template>
+    </el-dialog>
+
+    <!-- 批量导入弹框（仅图片类型） -->
+    <el-dialog v-model="batchDialogVisible" title="批量导入（ZIP）" width="520px" :close-on-click-modal="false" class="upload-dialog">
+      <div class="upload-dialog-content">
+        <div class="upload-info-row">
+          <span class="upload-info-label">样本集：</span>
+          <span class="upload-info-value">{{ setName }}</span>
+        </div>
+        <div class="upload-info-row">
+          <span class="upload-info-label">说明：</span>
+          <span class="upload-info-value">上传 ZIP，自动解压图片与同名 .txt 标注、classes.txt 到样本集目录</span>
+        </div>
+        <el-upload
+          accept=".zip"
+          :auto-upload="false"
+          :limit="1"
+          :on-change="handleBatchFileChange"
+          :on-remove="handleBatchFileRemove"
+          drag
+        >
+          <div class="upload-drag-content">
+            <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="rgba(0,212,255,0.5)" stroke-width="1.5">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M17 8l-5-5-5 5M12 3v12"/>
+            </svg>
+            <p>将 ZIP 文件拖到此处，或<em>点击上传</em></p>
+            <p class="upload-tip">仅支持单个 ZIP，图片类型样本集</p>
+          </div>
+        </el-upload>
+      </div>
+      <template #footer>
+        <el-button type="primary" :loading="batchSaving" @click="handleBatchConfirm">确认导入</el-button>
+        <el-button @click="batchDialogVisible = false">取消</el-button>
       </template>
     </el-dialog>
 

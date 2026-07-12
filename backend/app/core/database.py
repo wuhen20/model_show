@@ -675,6 +675,7 @@ def query_original_sample_set():
                         scd.code_value = s.quality_level
                         and scd.sort_no = 'QUALITY_LEVEL') as quality_level_name,
                     s.business_system,
+                    s.set_path,
                     {_date_format('s.update_time')} as update_time,
                     {_date_format('s.create_time')} as create_time,
                     s.version,
@@ -721,8 +722,8 @@ def save_original_sample_set(data: dict):
     try:
         with conn.cursor() as cursor:
             sql = """
-                INSERT INTO s_original_sample_set (set_no, set_name, set_description, business_system, type_code, sample_field)
-                VALUES (%(setCode)s, %(setName)s, %(description)s, %(businessSystem)s, %(sampleTypeCode)s, %(sampleFieldCode)s)
+                INSERT INTO s_original_sample_set (set_no, set_name, set_description, business_system, type_code, sample_field, set_path)
+                VALUES (%(setCode)s, %(setName)s, %(description)s, %(businessSystem)s, %(sampleTypeCode)s, %(sampleFieldCode)s, %(setPath)s)
             """
             _execute(cursor, sql, data)
         conn.commit()
@@ -852,15 +853,16 @@ def query_time_series_data_by_set_no(set_no: str, page: int = 1, page_size: int 
 
 
 def insert_original_sample_info(set_no: str, sample_name: str, suffix: str, type_code: str, file_path: str, file_size: int):
-    """插入原始样本信息"""
+    """插入原始样本信息，自动生成 sample_no"""
+    sample_no = generate_sample_no()
     conn = get_connection()
     try:
         with conn.cursor() as cursor:
             sql = """
-                INSERT INTO s_original_sample_info (set_no, sample_name, suffix, type_code, file_path, file_size, label_flag)
-                VALUES (%s, %s, %s, %s, %s, %s, 0)
+                INSERT INTO s_original_sample_info (sample_no, set_no, sample_name, suffix, type_code, file_path, file_size, label_flag)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, 0)
             """
-            _execute(cursor, sql, (set_no, sample_name, suffix, type_code, file_path, file_size))
+            _execute(cursor, sql, (sample_no, set_no, sample_name, suffix, type_code, file_path, file_size))
         conn.commit()
         return cursor.rowcount
     finally:
@@ -1170,9 +1172,11 @@ def get_task_det_raw(task_no: str):
                     d.source_db_usr, d.source_db_pwd, d.source_db_name, d.target_table,
                     d.collect_sql, d.source_db_auth,
                     d.file_get_mode, d.bucket_name, d.file_id, d.file_name,
-                    t.sample_type, t.original_sample_set_no
+                    t.sample_type, t.original_sample_set_no,
+                    s.set_path
                 FROM s_data_collect_task_det d
                 LEFT JOIN s_data_collect_task t ON t.task_no = d.task_no
+                LEFT JOIN s_original_sample_set s ON s.set_no = t.original_sample_set_no
                 WHERE d.task_no = %s
                 ORDER BY d.record_id DESC
             """, 1)
@@ -2068,6 +2072,69 @@ def insert_clean_pic_record(task_no: str, clean_type: str, file_name: str, file_
             """
             _execute(cursor, sql, (task_no, clean_type, file_name, file_path))
         conn.commit()
+    finally:
+        conn.close()
+
+
+def query_clean_pic_records(task_no: str):
+    """查询图像清洗任务的被清洗图片记录，关联字典获取清洗类型名称"""
+    conn = get_connection()
+    try:
+        with conn.cursor() as cursor:
+            sql = """
+                SELECT
+                    p.record_id,
+                    p.task_no,
+                    p.clean_type,
+                    d.CODE_NAME as clean_type_name,
+                    p.file_name,
+                    p.file_path
+                FROM s_data_clean_pic p
+                LEFT JOIN sys_code_dict d
+                    ON d.SORT_NO = 'PIC_CLEAN_TYPE' AND d.CODE_VALUE = p.clean_type
+                WHERE p.task_no = %s
+                ORDER BY p.record_id
+            """
+            _execute(cursor, sql, (task_no,))
+            return cursor.fetchall()
+    finally:
+        conn.close()
+
+
+def delete_original_sample_info_by_path(file_path: str):
+    """根据 file_path 删除 s_original_sample_info 中的对应记录"""
+    conn = get_connection()
+    try:
+        with conn.cursor() as cursor:
+            sql = "DELETE FROM s_original_sample_info WHERE file_path = %s"
+            _execute(cursor, sql, (file_path,))
+        conn.commit()
+        return cursor.rowcount
+    finally:
+        conn.close()
+
+
+def get_original_sample_set_path(set_no: str):
+    """查询原始样本集的 set_path 和 type_code"""
+    conn = get_connection()
+    try:
+        with conn.cursor() as cursor:
+            sql = "SELECT set_no, set_name, set_path, type_code FROM s_original_sample_set WHERE set_no = %s"
+            _execute(cursor, sql, (set_no,))
+            return cursor.fetchone()
+    finally:
+        conn.close()
+
+
+def delete_clean_pic_records(task_no: str):
+    """删除指定清洗任务的所有图片清洗记录"""
+    conn = get_connection()
+    try:
+        with conn.cursor() as cursor:
+            sql = "DELETE FROM s_data_clean_pic WHERE task_no = %s"
+            _execute(cursor, sql, (task_no,))
+        conn.commit()
+        return cursor.rowcount
     finally:
         conn.close()
 

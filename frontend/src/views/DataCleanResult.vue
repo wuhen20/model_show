@@ -2,9 +2,9 @@
 import { ref, computed, onMounted } from 'vue'
 import Header from '@/components/Header.vue'
 import Sidebar from '@/components/Sidebar.vue'
-import { getCleanResults, viewCleanResult, getDownloadCleanResultUrl, getSampleSetOptions, importToSample, type CleanResult, type CleanResultData, type SampleSetOption } from '@/api/clean'
+import { getCleanResults, viewCleanResult, getDownloadCleanResultUrl, getSampleSetOptions, importToSample, queryCleanPics, getCleanPicImageUrl, rollbackCleanPics, type CleanResult, type CleanResultData, type SampleSetOption, type CleanPicRecord } from '@/api/clean'
 import { getCodeDict } from '@/api/sample'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 
 const resultList = ref<CleanResult[]>([])
 const loading = ref(false)
@@ -85,6 +85,12 @@ const viewTotalPages = computed(() => {
 })
 
 async function handleView(item: CleanResult) {
+  // 图片类型清洗结果：查询被清洗的图片记录并展示
+  if (item.sampleTypeCode === '05') {
+    await handleViewImageResult(item)
+    return
+  }
+  // 时序/结构化类型：查看 JSON 结果文件
   viewVisible.value = true
   viewLoading.value = true
   viewData.value = null
@@ -95,6 +101,68 @@ async function handleView(item: CleanResult) {
     ElMessage.error(e.message || '查看失败')
   } finally {
     viewLoading.value = false
+  }
+}
+
+// ========== 图像清洗结果查看弹框 ==========
+const imageResultVisible = ref(false)
+const imageResultLoading = ref(false)
+const imageResultList = ref<CleanPicRecord[]>([])
+const imageResultTaskName = ref('')
+const imageFilterType = ref('')
+
+const imageFilteredResult = computed(() => {
+  if (!imageFilterType.value) return imageResultList.value
+  return imageResultList.value.filter(p => p.cleanType === imageFilterType.value)
+})
+
+const imageCleanTypeOptions = computed(() => {
+  const map = new Map<string, string>()
+  for (const p of imageResultList.value) {
+    if (!map.has(p.cleanType)) {
+      map.set(p.cleanType, p.cleanTypeName)
+    }
+  }
+  return Array.from(map.entries()).map(([value, label]) => ({ value, label }))
+})
+
+async function handleViewImageResult(item: CleanResult) {
+  imageResultVisible.value = true
+  imageResultLoading.value = true
+  imageResultList.value = []
+  imageResultTaskName.value = item.taskName || item.taskNo
+  imageFilterType.value = ''
+  try {
+    imageResultList.value = await queryCleanPics(item.taskNo)
+  } catch (e: any) {
+    ElMessage.error(e.message || '查看失败')
+  } finally {
+    imageResultLoading.value = false
+  }
+}
+
+// ========== 回滚 ==========
+const rollbackSet = ref<Set<string>>(new Set())
+
+async function handleRollback(item: CleanResult) {
+  try {
+    await ElMessageBox.confirm(
+      `确认回滚清洗任务「${item.taskName || item.taskNo}」？\n被隔离的图片将移回原始样本集目录，并恢复原始样本记录。`,
+      '回滚确认',
+      { type: 'warning', confirmButtonText: '回滚', cancelButtonText: '取消' }
+    )
+  } catch {
+    return
+  }
+  rollbackSet.value.add(item.taskNo)
+  try {
+    const result = await rollbackCleanPics(item.taskNo)
+    ElMessage.success(`回滚成功，恢复 ${result.restoredCount} 张图片${result.skippedCount ? `，跳过 ${result.skippedCount} 张` : ''}`)
+    await loadResults()
+  } catch (e: any) {
+    ElMessage.error(e.message || '回滚失败')
+  } finally {
+    rollbackSet.value.delete(item.taskNo)
   }
 }
 
@@ -230,8 +298,15 @@ onMounted(() => {
               <span class="col col-path" :title="item.filePath">{{ item.filePath || '-' }}</span>
               <span class="col col-action">
                 <el-button size="small" @click="handleView(item)">查看</el-button>
-                <el-button size="small" @click="handleDownload(item)">下载</el-button>
-                <el-button size="small" type="primary" @click="handleImport(item)">入库</el-button>
+                <el-button v-if="item.sampleTypeCode !== '05'" size="small" @click="handleDownload(item)">下载</el-button>
+                <el-button v-if="item.sampleTypeCode !== '05'" size="small" type="primary" @click="handleImport(item)">入库</el-button>
+                <el-button
+                  v-if="item.sampleTypeCode === '05'"
+                  size="small"
+                  type="warning"
+                  :loading="rollbackSet.has(item.taskNo)"
+                  @click="handleRollback(item)"
+                >回滚</el-button>
               </span>
             </div>
           </div>
@@ -279,6 +354,44 @@ onMounted(() => {
           />
         </div>
       </div>
+    </el-dialog>
+
+    <!-- 图像清洗结果查看弹框 -->
+    <el-dialog
+      v-model="imageResultVisible"
+      :title="`被清洗图片 - ${imageResultTaskName}`"
+      width="90%"
+      top="5vh"
+      :close-on-click-modal="false"
+      class="image-result-dialog"
+      destroy-on-close
+    >
+      <div v-if="imageResultLoading" class="view-loading">加载中...</div>
+      <div v-else-if="imageResultList.length === 0" class="view-loading">暂无被清洗图片记录</div>
+      <div v-else class="image-result-content">
+        <div class="image-result-toolbar">
+          <span class="image-result-summary">
+            共 <b>{{ imageResultList.length }}</b> 张被清洗图片
+          </span>
+          <el-select v-model="imageFilterType" placeholder="按清洗原因筛选" clearable size="default" style="width: 220px">
+            <el-option v-for="opt in imageCleanTypeOptions" :key="opt.value" :label="opt.label" :value="opt.value" />
+          </el-select>
+        </div>
+        <div class="image-grid">
+          <div v-for="pic in imageFilteredResult" :key="pic.recordId" class="image-card">
+            <div class="image-thumb">
+              <img :src="getCleanPicImageUrl(pic.filePath)" :alt="pic.fileName" loading="lazy" />
+            </div>
+            <div class="image-info">
+              <div class="image-name" :title="pic.fileName">{{ pic.fileName }}</div>
+              <div class="image-reason">{{ pic.cleanTypeName }}</div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <template #footer>
+        <el-button @click="imageResultVisible = false">关闭</el-button>
+      </template>
     </el-dialog>
 
     <!-- 下载弹框 -->
@@ -586,6 +699,115 @@ onMounted(() => {
   display: flex;
   justify-content: center;
   padding-top: 16px;
+}
+
+// ========== 图像清洗结果弹框 ==========
+.image-result-content {
+  display: flex;
+  flex-direction: column;
+  height: 70vh;
+}
+
+.image-result-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 10px 16px;
+  background: rgba(0, 212, 255, 0.08);
+  border: 1px solid rgba(0, 212, 255, 0.15);
+  border-radius: 8px;
+  margin-bottom: 16px;
+
+  .image-result-summary {
+    font-size: 13px;
+    color: rgba(255, 255, 255, 0.7);
+
+    b {
+      color: #ff5555;
+      font-weight: 600;
+    }
+  }
+}
+
+.image-grid {
+  flex: 1;
+  overflow-y: auto;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 16px;
+  align-content: start;
+  padding: 4px;
+
+  &::-webkit-scrollbar {
+    width: 8px;
+  }
+
+  &::-webkit-scrollbar-track {
+    background: rgba(0, 0, 0, 0.2);
+    border-radius: 4px;
+  }
+
+  &::-webkit-scrollbar-thumb {
+    background: rgba(0, 212, 255, 0.3);
+    border-radius: 4px;
+
+    &:hover {
+      background: rgba(0, 212, 255, 0.5);
+    }
+  }
+}
+
+.image-card {
+  background: rgba(0, 212, 255, 0.04);
+  border: 1px solid rgba(0, 212, 255, 0.15);
+  border-radius: 8px;
+  overflow: hidden;
+  transition: border-color 0.2s, transform 0.2s;
+
+  &:hover {
+    border-color: rgba(0, 212, 255, 0.5);
+    transform: translateY(-2px);
+  }
+}
+
+.image-thumb {
+  width: 100%;
+  height: 160px;
+  background: rgba(0, 0, 0, 0.3);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+
+  img {
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+  }
+}
+
+.image-info {
+  padding: 8px 10px;
+}
+
+.image-name {
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.8);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  margin-bottom: 4px;
+}
+
+.image-reason {
+  font-size: 11px;
+  color: #ffaa00;
+  background: rgba(255, 170, 0, 0.1);
+  border: 1px solid rgba(255, 170, 0, 0.2);
+  border-radius: 4px;
+  padding: 2px 6px;
+  display: inline-block;
 }
 
 // ========== 下载弹框 ==========

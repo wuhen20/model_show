@@ -29,11 +29,16 @@ from app.core.database import (
     query_clean_results,
     query_sample_set_options,
     batch_insert_sample_info,
+    insert_original_sample_info,
     get_connection,
     _execute,
     _select_all_from,
     query_pic_clean_type_dict,
     insert_clean_pic_record,
+    query_clean_pic_records,
+    delete_original_sample_info_by_path,
+    get_original_sample_set_path,
+    delete_clean_pic_records,
     query_original_sample_file_paths,
     query_original_sample_set_by_type,
 )
@@ -296,10 +301,13 @@ def _execute_image_clean_task(task: dict, task_no: str):
         append_clean_log(log_id, "正在查询样本文件路径...")
         file_rows = query_original_sample_file_paths(set_no)
         file_paths = []
+        # 构建 规范化绝对路径 → 数据库存储 file_path 的映射，用于移动后精确删除原始样本记录
+        norm_path_to_stored = {}
         for row in file_rows:
             fp = row.get("file_path") if isinstance(row, dict) else row[0]
             if fp:
                 file_paths.append(fp)
+                norm_path_to_stored[os.path.normpath(os.path.abspath(fp))] = fp
 
         if not file_paths:
             raise ValueError("原始样本集下未找到样本文件")
@@ -325,13 +333,18 @@ def _execute_image_clean_task(task: dict, task_no: str):
 
         imagelab = Imagelab(data_path=data_path)
 
+        # issue_types 格式：{"exact_duplicates":{}, "blurry":{"threshold":0.45}, ...}，key 为 SPARE1 英文名
+        issue_types = {spare1: {} for spare1 in configured_issues}
+        # 模糊类型设置自定义阈值
+        if "blurry" in issue_types:
+            issue_types["blurry"] = {"threshold": 0.45}
+        append_clean_log(log_id, f"检测类型参数：{issue_types}")
+
         # 禁用 tqdm 输出
         os.environ['TQDM_DISABLE'] = '1'
         original_stderr = sys.stderr
         try:
             sys.stderr = open(os.devnull, 'w')
-            # 尝试只检测配置的类型
-            issue_types = {spare1: {} for spare1 in configured_issues}
             try:
                 imagelab.find_issues(issue_types=issue_types, verbose=False, n_jobs=2)
             except Exception as e_issue:
@@ -363,6 +376,39 @@ def _execute_image_clean_task(task: dict, task_no: str):
             if issues_for_image:
                 problem_images[image_name] = issues_for_image
 
+        # 6.1 对于重复类型（exact_duplicates / near_duplicates），每个重复组保留一张，不全删除
+        # cleanvision 的重复分组存储在 imagelab.info[issue_key]["sets"]，是 list[list[str]] 结构
+        duplicate_type_codes = {
+            code_val: info["spare1"]
+            for code_val, info in code_to_issue.items()
+            if info["spare1"] in ("exact_duplicates", "near_duplicates")
+        }
+        kept_for_duplicate = 0
+        if duplicate_type_codes:
+            imagelab_info = getattr(imagelab, "info", {}) or {}
+            for code_val, spare1 in duplicate_type_codes.items():
+                issue_info = imagelab_info.get(spare1, {}) or {}
+                sets = issue_info.get("sets", []) or []
+                append_clean_log(log_id, f"重复类型 [{spare1}] 检测到 {len(sets)} 个重复组")
+                for group in sets:
+                    if not group or len(group) < 2:
+                        continue
+                    # 保留组内第一张：从其问题列表中移除该重复类型编码
+                    keep_image = group[0]
+                    if keep_image in problem_images:
+                        issue_list = problem_images[keep_image]
+                        if code_val in issue_list:
+                            issue_list.remove(code_val)
+                            kept_for_duplicate += 1
+                        # 若该图片已无任何问题类型，则从待移动集合中移除
+                        if not issue_list:
+                            del problem_images[keep_image]
+            if kept_for_duplicate > 0:
+                append_clean_log(
+                    log_id,
+                    f"重复图片处理：每组保留 1 张，共保留 {kept_for_duplicate} 张重复图片不移动"
+                )
+
         removed_count = len(problem_images)
         result_count = total_count - removed_count
         append_clean_log(log_id, f"发现 {removed_count} 张问题图片，剩余 {result_count} 张正常图片")
@@ -378,6 +424,7 @@ def _execute_image_clean_task(task: dict, task_no: str):
         append_clean_log(log_id, f"正在移动问题图片到：{target_dir}")
 
         moved_count = 0
+        deleted_info_count = 0
         for image_name, issue_codes in problem_images.items():
             # image_name 是相对于 data_path 的路径
             src_path = os.path.join(data_path, image_name)
@@ -402,10 +449,17 @@ def _execute_image_clean_task(task: dict, task_no: str):
                 # 对每种问题类型插入一条记录
                 for code_val in issue_codes:
                     insert_clean_pic_record(task_no, code_val, os.path.basename(image_name), dst_path)
+                # 删除 s_original_sample_info 中对应的原始样本记录
+                stored_fp = norm_path_to_stored.get(os.path.normpath(os.path.abspath(src_path)))
+                if stored_fp:
+                    try:
+                        deleted_info_count += delete_original_sample_info_by_path(stored_fp)
+                    except Exception as e_del:
+                        append_clean_log(log_id, f"警告：删除原始样本记录失败：{image_name}，{e_del}")
             except Exception as e_move:
                 append_clean_log(log_id, f"警告：移动文件失败：{image_name}，{e_move}")
 
-        append_clean_log(log_id, f"成功移动 {moved_count} 张问题图片")
+        append_clean_log(log_id, f"成功移动 {moved_count} 张问题图片，删除 {deleted_info_count} 条原始样本记录")
 
         # 8. 完成执行记录
         finish_clean_log(
@@ -1016,6 +1070,157 @@ def query_pic_clean_types_api():
     except Exception as e:
         logger.exception("查询图像清洗类型字典异常")
         return {"code": 1, "message": f"查询失败: {str(e)}"}
+
+
+@router.get("/query-clean-pics")
+def query_clean_pics_api(taskNo: str = Query(..., description="清洗任务编号")):
+    """查询图像清洗任务被清洗的图片记录（含清洗原因）"""
+    try:
+        rows = query_clean_pic_records(taskNo)
+        pics = []
+        for row in rows:
+            pics.append({
+                "recordId": row.get("record_id"),
+                "taskNo": row.get("task_no", ""),
+                "cleanType": row.get("clean_type", ""),
+                "cleanTypeName": row.get("clean_type_name", "") or row.get("clean_type", ""),
+                "fileName": row.get("file_name", ""),
+                "filePath": row.get("file_path", ""),
+            })
+        return {"code": 0, "data": pics}
+    except Exception as e:
+        logger.exception("查询图像清洗图片记录异常")
+        return {"code": 1, "message": f"查询失败: {str(e)}"}
+
+
+@router.get("/serve-image")
+def serve_image_api(filePath: str = Query(..., description="图片文件路径")):
+    """读取并返回图片文件，用于展示被清洗的图片"""
+    file_path = os.path.normpath(filePath)
+    if not os.path.isfile(file_path):
+        return {"code": 1, "message": f"图片文件不存在: {file_path}"}
+    ext = os.path.splitext(file_path)[1].lower()
+    content_types = {
+        ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png",
+        ".bmp": "image/bmp", ".gif": "image/gif", ".webp": "image/webp",
+        ".tif": "image/tiff", ".tiff": "image/tiff",
+    }
+    media_type = content_types.get(ext, "application/octet-stream")
+    from fastapi.responses import FileResponse
+    return FileResponse(file_path, media_type=media_type)
+
+
+class RollbackCleanPicsRequest(BaseModel):
+    taskNo: str
+
+
+@router.post("/rollback-clean-pics")
+def rollback_clean_pics_api(req: RollbackCleanPicsRequest):
+    """回滚图像清洗：将隔离目录中的图片移回原始样本集目录，并恢复 s_original_sample_info 记录"""
+    task_no = req.taskNo.strip()
+    if not task_no:
+        return {"code": 1, "message": "任务编号不能为空"}
+
+    try:
+        # 1. 查询任务节点，获取原始样本集编号（set_no）
+        task = get_clean_task_raw(task_no)
+        if not task:
+            return {"code": 1, "message": "未找到清洗任务"}
+
+        set_no = ""
+        for node in task.get("nodes", []):
+            if node.get("node_type") == "image_clean":
+                set_no = node.get("node_id", "")
+                break
+        if not set_no:
+            return {"code": 1, "message": "清洗任务未关联原始样本集，无法回滚"}
+
+        # 2. 查询原始样本集的 set_path 和 type_code
+        set_row = get_original_sample_set_path(set_no)
+        if not set_row:
+            return {"code": 1, "message": "原始样本集不存在"}
+        set_path = set_row.get("set_path", "") or ""
+        type_code = set_row.get("type_code", "") or "05"
+        if not set_path:
+            return {"code": 1, "message": "原始样本集未配置 set_path，无法确定恢复目录"}
+        os.makedirs(set_path, exist_ok=True)
+
+        # 3. 查询被清洗图片记录，按隔离路径去重（同一图片可能有多个清洗类型记录）
+        pic_rows = query_clean_pic_records(task_no)
+        if not pic_rows:
+            return {"code": 1, "message": "无可回滚的清洗图片记录"}
+
+        # 按 file_path(隔离路径) 去重，保留 file_name
+        unique_files = {}
+        for row in pic_rows:
+            iso_path = row.get("file_path", "")
+            file_name = row.get("file_name", "")
+            if iso_path and iso_path not in unique_files:
+                unique_files[iso_path] = file_name
+
+        # 4. 逐个将文件从隔离目录移回 set_path，并恢复原始样本记录
+        restored_count = 0
+        skipped_count = 0
+        errors = []
+        for iso_path, file_name in unique_files.items():
+            iso_path = os.path.normpath(iso_path)
+            if not os.path.isfile(iso_path):
+                errors.append(f"{file_name}: 隔离文件不存在，跳过")
+                skipped_count += 1
+                continue
+
+            restore_path = os.path.join(set_path, file_name)
+            # 处理同名文件冲突：若 set_path 已存在同名文件，添加后缀
+            if os.path.exists(restore_path):
+                name, ext = os.path.splitext(file_name)
+                idx = 1
+                while os.path.exists(os.path.join(set_path, f"{name}_{idx}{ext}")):
+                    idx += 1
+                restore_path = os.path.join(set_path, f"{name}_{idx}{ext}")
+
+            try:
+                file_size = os.path.getsize(iso_path)
+                shutil.move(iso_path, restore_path)
+                # 恢复 s_original_sample_info 记录（自动生成 sample_no）
+                suffix = os.path.splitext(file_name)[1].lstrip(".").lower()
+                insert_original_sample_info(
+                    set_no=set_no,
+                    sample_name=os.path.basename(restore_path),
+                    suffix=suffix,
+                    type_code=type_code,
+                    file_path=restore_path,
+                    file_size=file_size,
+                )
+                restored_count += 1
+            except Exception as e_restore:
+                errors.append(f"{file_name}: 恢复失败 - {e_restore}")
+                skipped_count += 1
+
+        # 5. 删除清洗图片记录（无论文件是否成功恢复，记录都已处理）
+        delete_clean_pic_records(task_no)
+
+        # 6. 尝试清理空的隔离目录
+        from app.core.config import settings
+        base_dir = getattr(settings, "sample_upload_dir", "")
+        if base_dir:
+            target_dir = os.path.join(base_dir, "clean_result", task_no)
+            if os.path.isdir(target_dir):
+                try:
+                    # 仅在目录为空时删除
+                    if not os.listdir(target_dir):
+                        os.rmdir(target_dir)
+                except Exception:
+                    pass
+
+        msg = f"回滚完成，恢复 {restored_count} 张图片"
+        if skipped_count:
+            msg += f"，跳过 {skipped_count} 张"
+        if errors:
+            msg += f"，失败: {'; '.join(errors[:5])}"
+        return {"code": 0, "message": msg, "data": {"restoredCount": restored_count, "skippedCount": skipped_count}}
+    except Exception as e:
+        logger.exception("回滚图像清洗异常")
+        return {"code": 1, "message": f"回滚失败: {str(e)}"}
 
 
 @router.get("/original-sample-set-options")
