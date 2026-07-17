@@ -4,7 +4,9 @@
 """
 import os
 import io
+import shutil
 import zipfile
+import tempfile
 import logging
 
 logger = logging.getLogger("app.sample_import")
@@ -47,11 +49,12 @@ def _get_unique_filename(target_dir: str, basename: str, used_names: set) -> str
 
 
 def extract_zip_and_import(
-    zip_bytes: bytes,
     target_dir: str,
     set_no: str,
     type_code: str,
     insert_callback,
+    zip_bytes: bytes | None = None,
+    zip_path: str | None = None,
 ) -> dict:
     """解压 ZIP 压缩包并导入图片样本到目标目录和数据库。
 
@@ -59,6 +62,14 @@ def extract_zip_and_import(
     - 图片文件保存到 target_dir 并调用 insert_callback 写入数据库
     - .txt 标注文件仅保存到 target_dir，不写数据库
     - 文件名冲突时自动添加序号（_1, _2...），同名图片的标注文件同步重命名
+
+    参数:
+        target_dir: 目标目录路径
+        set_no: 样本集编号
+        type_code: 样本类型编码
+        insert_callback: 写入数据库的回调函数
+        zip_bytes: ZIP 文件的字节内容（小文件用，已废弃不推荐）
+        zip_path: ZIP 文件的磁盘路径（推荐，避免大文件读入内存）
 
     insert_callback 签名: (set_no, sample_name, suffix, type_code, file_path, file_size_bytes, label_flag) -> None
 
@@ -73,11 +84,17 @@ def extract_zip_and_import(
 
     # 已使用的文件名集合（用于避免重名）
     used_names = set()
-    
+
     # 图片重命名映射：{原文件名: 新文件名}，用于同步重命名标注文件
     rename_map = {}
 
-    with zipfile.ZipFile(io.BytesIO(zip_bytes)) as zf:
+    # 根据输入方式打开 ZIP
+    if zip_path:
+        zf_ctx = zipfile.ZipFile(zip_path)
+    else:
+        zf_ctx = zipfile.ZipFile(io.BytesIO(zip_bytes))
+
+    with zf_ctx as zf:
         # 预扫描：收集 ZIP 中 .txt 标注文件的 basename（不含扩展名），用于判断图片是否有标注
         txt_basenames = set()
         for info in zf.infolist():

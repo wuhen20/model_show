@@ -38,7 +38,7 @@ def _is_missing(val, treat_zero_as_null):
 
 def _fill_short_gap_horizontal(df, fields, columns, w, treat_zero_as_null, ctx):
     """横向滑动窗口均值补全：对每行，在同行相邻字段中取窗口内有效值均值。
-    只补全单个字段缺失（前后字段均有值）的情况。
+    只补全单个字段缺失（前后字段均有值）的情况，即连续缺失长度=1的短期空值。
     当 treat_zero_as_null=True 时，0也视为缺失参与检测，但不被替换为NaN。
 
     df: DataFrame（原地修改）
@@ -53,22 +53,34 @@ def _fill_short_gap_horizontal(df, fields, columns, w, treat_zero_as_null, ctx):
     if not ordered:
         return 0
 
+    n_fields = len(ordered)
     total_filled = 0
-    for row in df.index:
-        for col_pos, col_name in ordered:
-            val = df.at[row, col_name]
-            # 判断是否为缺失（NaN 或 0-当treatZeroAsNull）
-            if not _is_missing(val, treat_zero_as_null):
-                continue
 
-            # 在 ordered 中找到当前字段的索引
-            current_idx = None
-            for idx, (cp, cn) in enumerate(ordered):
-                if cn == col_name:
-                    current_idx = idx
-                    break
-            if current_idx is None:
-                continue
+    for row in df.index:
+        # 先检测该行中的连续缺失段
+        missing_mask = []
+        for _, col_name in ordered:
+            missing_mask.append(_is_missing(df.at[row, col_name], treat_zero_as_null))
+
+        # 检测连续缺失段（start, end, length）
+        gaps = []
+        i = 0
+        while i < n_fields:
+            if missing_mask[i]:
+                start = i
+                while i < n_fields and missing_mask[i]:
+                    i += 1
+                gaps.append((start, i, i - start))
+            else:
+                i += 1
+
+        # 只处理长度为1的短期空值
+        short_gaps = [g for g in gaps if g[2] == 1]
+
+        for s, e, gap_len in short_gaps:
+            # s == e - 1，只有一个缺失点
+            current_idx = s
+            col_pos, col_name = ordered[current_idx]
 
             # 收集窗口内的有效值（排除NaN和0-当treatZeroAsNull）
             win_vals = []
@@ -150,6 +162,7 @@ class NullfillShortOperator(BaseOperator):
 
         ctx.log(
             f"执行短期空值处理（横向滑动窗口均值），窗口大小：{window_size}，"
+            f"判定条件：同行单个字段缺失（连续1个缺失点），"
             f"字段：{', '.join(fields)}，共 {null_count_before} 处缺失"
             + ("（含0视为空值）" if treat_zero_as_null else "")
         )
@@ -161,4 +174,4 @@ class NullfillShortOperator(BaseOperator):
         if total_filled > 0:
             ctx.log(f"短期空值处理完成，共补全 {total_filled} 处")
         else:
-            ctx.log("短期空值处理完成，无短期缺失需补全")
+            ctx.log("短期空值处理完成，无短期缺失需补全（同行单个字段缺失）")

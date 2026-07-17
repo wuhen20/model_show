@@ -43,6 +43,7 @@ pandas>=2.2.2
 openpyxl>=3.1.2
 xlrd>=2.0.1
 chronos-forecasting>=2.2.2
+scikit-learn>=1.5.0
 # PyTorch（GPU 加速）：直接 `pip install torch` 在 Windows 下默认安装 CPU 版，无法使用 GPU。
 #   · RTX 50 系（Blackwell / sm_120）：需 cu128 及以上
 #       pip install torch>=2.7.0 torchvision>=0.22.0 --index-url https://download.pytorch.org/whl/cu128

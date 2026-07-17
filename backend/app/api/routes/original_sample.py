@@ -453,25 +453,37 @@ async def upload_samples_batch(
     typeCode: str = Form(...),
     file: UploadFile = File(...),
 ):
-    """批量导入：上传单个 ZIP，解压图片到 sample_upload_dir/setName/，写入 s_original_sample_info"""
+    """批量导入：上传单个 ZIP，解压图片到 sample_upload_dir/setName/，写入 s_original_sample_info。
+    大文件采用流式写入临时文件再解压，避免一次性读入内存。"""
     from app.core.config import settings
     from app.services.sample_import_service import extract_zip_and_import
 
     if typeCode != "05":
         return {"code": 1, "message": "批量导入仅支持图片类型（05）样本集"}
 
-    content = await file.read()
-    if not zipfile.is_zipfile(io.BytesIO(content)):
-        return {"code": 1, "message": "上传文件不是有效的 ZIP 文件"}
-
-    target_dir = os.path.join(settings.sample_upload_dir, setName)
+    # 流式写入临时文件，避免大 ZIP 一次性读入内存触发 400
+    tmp_path = None
     try:
+        import tempfile
+        tmp_dir = settings.upload_tmp_dir or tempfile.gettempdir()
+        tmp_path = os.path.join(tmp_dir, f"batch_import_{setNo}_{id(file)}.zip")
+        with open(tmp_path, "wb") as tmp_f:
+            while True:
+                chunk = await file.read(1024 * 1024)  # 1MB 分块
+                if not chunk:
+                    break
+                tmp_f.write(chunk)
+
+        if not zipfile.is_zipfile(tmp_path):
+            return {"code": 1, "message": "上传文件不是有效的 ZIP 文件"}
+
+        target_dir = os.path.join(settings.sample_upload_dir, setName)
         result = extract_zip_and_import(
-            zip_bytes=content,
             target_dir=target_dir,
             set_no=setNo,
             type_code=typeCode,
             insert_callback=insert_original_sample_info,
+            zip_path=tmp_path,
         )
         msg = (f"成功导入 {result['image_count']} 张图片，"
                f"保存 {result['txt_count']} 个标注文件，"
@@ -482,6 +494,13 @@ async def upload_samples_batch(
     except Exception as e:
         logger.exception("批量导入异常")
         return {"code": 1, "message": f"批量导入失败: {str(e)}"}
+    finally:
+        # 清理临时文件
+        if tmp_path and os.path.isfile(tmp_path):
+            try:
+                os.remove(tmp_path)
+            except Exception:
+                pass
 
 
 class UpdateSampleScoreRequest(BaseModel):

@@ -375,7 +375,7 @@ function onAddNullFillRange() {
     ElMessage.warning('字段名必须以数字结尾（如 time0000、P0015）')
     return
   }
-  if (startParsed.prefix !== endParsed.prefix) {
+  if (startParsed.prefix.toLowerCase() !== endParsed.prefix.toLowerCase()) {
     ElMessage.warning(`前缀不一致："${startParsed.prefix}" 与 "${endParsed.prefix}"`)
     return
   }
@@ -390,7 +390,7 @@ function onAddNullFillRange() {
   const fieldsToAdd: string[] = []
   for (const col of columnList.value) {
     const parsed = parseFieldName(col.fieldName)
-    if (parsed && parsed.prefix === prefix && parsed.num >= start && parsed.num <= end) {
+    if (parsed && parsed.prefix.toLowerCase() === prefix.toLowerCase() && parsed.num >= start && parsed.num <= end) {
       fieldsToAdd.push(col.fieldName)
     }
   }
@@ -462,7 +462,7 @@ function onAddOutlierRange() {
     ElMessage.warning('字段名必须以数字结尾（如 time0000、P0015）')
     return
   }
-  if (startParsed.prefix !== endParsed.prefix) {
+  if (startParsed.prefix.toLowerCase() !== endParsed.prefix.toLowerCase()) {
     ElMessage.warning(`前缀不一致："${startParsed.prefix}" 与 "${endParsed.prefix}"`)
     return
   }
@@ -477,7 +477,7 @@ function onAddOutlierRange() {
   const fieldsToAdd: string[] = []
   for (const col of columnList.value) {
     const parsed = parseFieldName(col.fieldName)
-    if (parsed && parsed.prefix === prefix && parsed.num >= start && parsed.num <= end) {
+    if (parsed && parsed.prefix.toLowerCase() === prefix.toLowerCase() && parsed.num >= start && parsed.num <= end) {
       fieldsToAdd.push(col.fieldName)
     }
   }

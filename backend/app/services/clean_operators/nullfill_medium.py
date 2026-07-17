@@ -175,6 +175,7 @@ class NullfillMediumOperator(BaseOperator):
 
         ctx.log(
             f"执行中期空值处理（横向拉格朗日插值），"
+            f"判定条件：同行2-4个连续字段缺失，"
             f"字段：{', '.join(fields)}，共 {null_count_before} 处缺失"
             + ("（含0视为空值）" if treat_zero_as_null else "")
         )

@@ -508,7 +508,7 @@ def sample_statistic():
                 result["avgQualityName"] = "未评分"
 
             # 样本覆盖领域（sample_field 去重计数）
-            _execute(cursor, "SELECT COUNT(DISTINCT sample_field) AS domainCount FROM s_sample_set WHERE sample_field IS NOT NULL AND sample_field != ''")
+            _execute(cursor, "SELECT COUNT(DISTINCT sample_field) AS domainCount FROM s_sample_set WHERE sample_field IS NOT NULL")
             result["domainCount"] = cursor.fetchone()["domainCount"]
 
             # 领域分布
@@ -526,7 +526,7 @@ def sample_statistic():
                     COUNT(si.sample_no) AS sampleCount
                 FROM s_sample_set s
                 LEFT JOIN s_sample_info si ON si.set_no = s.set_no
-                WHERE s.sample_field IS NOT NULL AND s.sample_field != ''
+                WHERE s.sample_field IS NOT NULL
                 GROUP BY s.sample_field
                 ORDER BY sampleCount DESC
             """)
@@ -559,7 +559,7 @@ def sample_statistic():
                     COUNT(si.sample_no) AS count
                 FROM s_sample_set s
                 LEFT JOIN s_sample_info si ON si.set_no = s.set_no
-                WHERE s.type_code IS NOT NULL AND s.type_code != ''
+                WHERE s.type_code IS NOT NULL
                 GROUP BY s.type_code
                 ORDER BY count DESC
             """)
@@ -1369,7 +1369,6 @@ def query_all_scheduled_tasks():
                 FROM s_data_collect_task
                 WHERE execute_type = '02'
                   AND cron_formula IS NOT NULL
-                  AND cron_formula <> ''
             """
             _execute(cursor, sql, ())
             return cursor.fetchall()
@@ -2327,9 +2326,10 @@ def query_original_sample_file_paths(set_no: str):
     conn = get_connection()
     try:
         with conn.cursor() as cursor:
+            # Oracle中空字符串''等同于NULL，IS NOT NULL即可过滤；MySQL中正常数据file_path不为空字符串
             sql = """
                 SELECT file_path FROM s_original_sample_info
-                WHERE set_no = %s AND file_path IS NOT NULL AND file_path != ''
+                WHERE set_no = %s AND file_path IS NOT NULL
             """
             _execute(cursor, sql, (set_no,))
             return cursor.fetchall()

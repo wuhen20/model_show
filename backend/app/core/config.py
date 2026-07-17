@@ -53,6 +53,8 @@ class Settings(BaseSettings):
     db_schema: str = ""               # Oracle 模式下设置默认 schema（如 PDBADMIN），为空则不切换
     db_mode: str = ""  # Oracle 连接模式：sysdba / sysoper / 空（普通用户不需要填）
     sample_upload_dir: str = "E:\人工智能\现场作业专家系统"
+    # 上传临时文件目录，用于批量导入大 ZIP 文件的临时存储；为空则使用系统临时目录（C:\Users\...\AppData\Local\Temp）
+    upload_tmp_dir: str = ""
 
     # ---- 样本集版本管理 ----
     # 大版本变更阈值：样本总量每达到该阈值的下一个整数倍，大版本号 +1，小版本号归 0

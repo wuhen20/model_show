@@ -789,6 +789,7 @@ onMounted(() => {
 
 .image-info {
   padding: 8px 10px;
+  min-height: 50px;
 }
 
 .image-name {
@@ -808,6 +809,11 @@ onMounted(() => {
   border-radius: 4px;
   padding: 2px 6px;
   display: inline-block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  box-sizing: border-box;
 }
 
 // ========== 下载弹框 ==========

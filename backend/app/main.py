@@ -128,6 +128,20 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# Starlette >= 0.38 的 MultiPartParser 默认 max_part_size=1MB，
+# 超过此大小的文件上传会触发 400 Bad Request。
+# 将 Request._get_form 和 MultiPartParser 的限制提升至 2GB，支持大 ZIP 批量导入。
+from starlette.requests import Request, MultiPartParser
+_MAX_UPLOAD = 2 * 1024 * 1024 * 1024  # 2GB
+# 修改 Request._get_form 的 max_part_size 默认值
+_get_form_defaults = Request._get_form.__kwdefaults__
+if _get_form_defaults and "max_part_size" in _get_form_defaults:
+    _get_form_defaults["max_part_size"] = _MAX_UPLOAD
+# 同时修改 MultiPartParser.__init__ 的默认值
+_mp_defaults = MultiPartParser.__init__.__kwdefaults__
+if _mp_defaults and "max_part_size" in _mp_defaults:
+    _mp_defaults["max_part_size"] = _MAX_UPLOAD
+
 # 多个允许的源用逗号分隔；保持 "*" 时自动禁用 credentials（避免浏览器拒绝）。
 _origins = [o.strip() for o in settings.cors_origin.split(",") if o.strip()]
 _use_credentials = not (len(_origins) == 1 and _origins[0] == "*")

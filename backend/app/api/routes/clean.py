@@ -305,6 +305,7 @@ def _execute_image_clean_task(task: dict, task_no: str):
         append_clean_log(log_id, "正在查询样本文件路径...")
         logger.info("正在查询样本文件路径...")
         file_rows = query_original_sample_file_paths(set_no)
+        logger.info(f"查询返回 {len(file_rows)} 条记录，set_no={set_no}")
         file_paths = []
         # 构建 规范化绝对路径 → 数据库存储 file_path 的映射，用于移动后精确删除原始样本记录
         norm_path_to_stored = {}
@@ -315,7 +316,8 @@ def _execute_image_clean_task(task: dict, task_no: str):
                 norm_path_to_stored[os.path.normpath(os.path.abspath(fp))] = fp
 
         if not file_paths:
-            raise ValueError("原始样本集下未找到样本文件")
+            logger.error(f"原始样本集下未找到样本文件，set_no={set_no}，查询返回 {len(file_rows)} 条记录")
+            raise ValueError(f"原始样本集下未找到样本文件（set_no={set_no}，查询返回 {len(file_rows)} 条记录）")
 
         total_count = len(file_paths)
         append_clean_log(log_id, f"共 {total_count} 个样本文件")
