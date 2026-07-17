@@ -3,7 +3,7 @@ import { ref, computed, nextTick, onMounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import Header from '@/components/Header.vue'
 import Sidebar from '@/components/Sidebar.vue'
-import { getSamples, getImageUrl, getAnnotations, getAudioText, updateSampleScore, uploadSamples, uploadSamplesBatch, saveLabelThink, type SampleInfoRow, type AnnotationData, type AnnotationBox } from '@/api/sample'
+import { getSamples, getImageUrl, getAnnotations, getAudioText, updateSampleScore, uploadSamples, uploadSamplesBatch, saveLabelThink, getClasses, getSamplesByLabels, type SampleInfoRow, type AnnotationData, type AnnotationBox } from '@/api/sample'
 import { ElMessage } from 'element-plus'
 
 const route = useRoute()
@@ -30,6 +30,7 @@ const viewMode = ref<'thumbnail' | 'list'>('list')
 const uploadDialogVisible = ref(false)
 const uploadSaving = ref(false)
 const uploadFileList = ref<File[]>([])
+const uploadDisplayList = ref<any[]>([]) // el-upload 显示的文件列表
 
 // 样本类型编码 → 允许的文件扩展名
 const typeCodeToExtensions: Record<string, string[]> = {
@@ -49,6 +50,7 @@ const typeCodeToAccept: Record<string, string> = {
 
 function openUploadDialog() {
   uploadFileList.value = []
+  uploadDisplayList.value = []
   uploadDialogVisible.value = true
 }
 
@@ -138,6 +140,9 @@ async function handleUploadConfirm() {
 const batchDialogVisible = ref(false)
 const batchSaving = ref(false)
 const batchFile = ref<File | null>(null)
+const batchMajorVersion = ref(false)
+const batchVersionRemark = ref('')
+const batchUploadRef = ref()
 
 function openBatchDialog() {
   if (typeCode.value !== '05') {
@@ -145,7 +150,13 @@ function openBatchDialog() {
     return
   }
   batchFile.value = null
+  batchMajorVersion.value = false
+  batchVersionRemark.value = ''
   batchDialogVisible.value = true
+  // 清空 el-upload 内部文件列表
+  setTimeout(() => {
+    batchUploadRef.value?.clearFiles()
+  }, 0)
 }
 
 function handleBatchFileChange(file: any) {
@@ -166,9 +177,20 @@ async function handleBatchConfirm() {
     ElMessage.warning('仅支持 ZIP 文件')
     return
   }
+  if (batchVersionRemark.value.length > 150) {
+    ElMessage.warning('变更说明不能超过 150 个字')
+    return
+  }
   batchSaving.value = true
   try {
-    const msg = await uploadSamplesBatch(setNo.value, setName.value, typeCode.value, batchFile.value)
+    const msg = await uploadSamplesBatch(
+      setNo.value,
+      setName.value,
+      typeCode.value,
+      batchFile.value,
+      batchMajorVersion.value,
+      batchVersionRemark.value.trim()
+    )
     ElMessage.success(msg)
     batchDialogVisible.value = false
     loadSamples()
@@ -182,6 +204,9 @@ async function handleBatchConfirm() {
 // 筛选条件
 const filterName = ref('')
 const filterLabelFlag = ref('')
+const filterLabels = ref<string[]>([]) // 标签筛选（多选）
+const classOptions = ref<string[]>([]) // classes.txt 中的标签选项
+const labelFilteredSamples = ref<SampleInfoRow[] | null>(null) // 标签筛选结果（null 表示未启用标签筛选）
 
 // 分页
 const currentPage = ref(1)
@@ -189,7 +214,8 @@ const pageSize = 20
 
 // 筛选后的数据
 const filteredList = computed(() => {
-  let list = sampleList.value
+  // 基础列表：若启用了标签筛选，则从标签筛选结果中再过滤
+  let list = labelFilteredSamples.value !== null ? labelFilteredSamples.value : sampleList.value
   if (filterName.value) {
     const kw = filterName.value.toLowerCase()
     list = list.filter(s => String(s.sampleName || '').toLowerCase().includes(kw))
@@ -215,8 +241,26 @@ function handlePageChange(page: number) {
 function resetFilters() {
   filterName.value = ''
   filterLabelFlag.value = ''
+  filterLabels.value = []
+  labelFilteredSamples.value = null
   currentPage.value = 1
 }
+
+// 标签筛选变化时请求后端
+watch(filterLabels, async (val) => {
+  currentPage.value = 1
+  if (!val || val.length === 0) {
+    labelFilteredSamples.value = null
+    return
+  }
+  try {
+    const data = await getSamplesByLabels(setNo.value, val)
+    labelFilteredSamples.value = data
+  } catch (e: any) {
+    ElMessage.error(e.message || '标签筛选失败')
+    labelFilteredSamples.value = []
+  }
+})
 
 // 筛选条件变化时重置页码
 watch([filterName, filterLabelFlag], () => {
@@ -237,6 +281,14 @@ async function loadSamples() {
       }))
     } else {
       columns.value = []
+    }
+    // 图片类型样本集：加载标签选项
+    if (isImageSet.value) {
+      try {
+        classOptions.value = await getClasses(setNo.value)
+      } catch {
+        classOptions.value = []
+      }
     }
   } catch (e: any) {
     ElMessage.error(e.message || '查询样本信息失败')
@@ -329,10 +381,9 @@ function handleDownloadTimeSeries(row: SampleInfoRow) {
 
 // 隐藏的字段（不需要在表格中展示）
 const hiddenColumns = computed(() => {
-  const base = new Set(['recordId', 'sampleNo', 'typeCode', 'filePath', 'fileName', 'labelFlagCode', 'sampleScore'])
+  const base = new Set(['recordId', 'sampleNo', 'typeCode', 'filePath', 'fileName', 'labelFlagCode', 'sampleScore', 'labelThink'])
   if (isTimeSeriesSet.value) {
     base.add('labelFlag')
-    base.add('labelThink')
   }
   return base
 })
@@ -862,6 +913,12 @@ onMounted(() => {
               <el-option label="未标注" value="未标注" />
             </el-select>
           </div>
+          <div class="filter-item" v-if="isImageSet && classOptions.length > 0">
+            <label>标签</label>
+            <el-select v-model="filterLabels" placeholder="全部" clearable multiple collapse-tags collapse-tags-tooltip size="default" style="width: 200px">
+              <el-option v-for="cls in classOptions" :key="cls" :label="cls" :value="cls" />
+            </el-select>
+          </div>
           <el-button size="default" @click="resetFilters">重置</el-button>
         </div>
 
@@ -963,6 +1020,7 @@ onMounted(() => {
         <el-upload
           :accept="typeCodeToAccept[typeCode] || ''"
           :auto-upload="false"
+          :file-list="uploadDisplayList"
           :on-change="handleUploadFileChange"
           :on-remove="handleUploadFileRemove"
           multiple
@@ -973,7 +1031,7 @@ onMounted(() => {
               <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M17 8l-5-5-5 5M12 3v12"/>
             </svg>
             <p>将文件拖到此处，或<em>点击上传</em></p>
-            <p class="upload-tip">仅支持该样本集对应类型的文件</p>
+            <p class="upload-tip">图片类型可同时选择图片和同名txt标注文件</p>
           </div>
         </el-upload>
       </div>
@@ -995,6 +1053,7 @@ onMounted(() => {
           <span class="upload-info-value">上传 ZIP，自动解压图片与同名 .txt 标注、classes.txt 到样本集目录</span>
         </div>
         <el-upload
+          ref="batchUploadRef"
           accept=".zip"
           :auto-upload="false"
           :limit="1"
@@ -1010,6 +1069,20 @@ onMounted(() => {
             <p class="upload-tip">仅支持单个 ZIP，图片类型样本集</p>
           </div>
         </el-upload>
+        <div class="batch-version-row">
+          <el-checkbox v-model="batchMajorVersion">大版本变更</el-checkbox>
+        </div>
+        <div v-if="batchMajorVersion" class="batch-remark-row">
+          <div class="batch-remark-label">变更说明<span class="batch-remark-tip">（非必填，最多 150 字）</span></div>
+          <el-input
+            v-model="batchVersionRemark"
+            type="textarea"
+            :rows="3"
+            placeholder="请输入变更说明，留空则自动生成"
+            maxlength="150"
+            show-word-limit
+          />
+        </div>
       </div>
       <template #footer>
         <el-button type="primary" :loading="batchSaving" @click="handleBatchConfirm">确认导入</el-button>
@@ -2344,6 +2417,22 @@ onMounted(() => {
       font-size: 12px;
       color: rgba(255, 255, 255, 0.3);
     }
+  }
+  .batch-version-row {
+    margin-top: 16px;
+    padding-left: 0;
+  }
+  .batch-remark-row {
+    margin-top: 12px;
+  }
+  .batch-remark-label {
+    font-size: 13px;
+    color: rgba(255, 255, 255, 0.7);
+    margin-bottom: 6px;
+  }
+  .batch-remark-tip {
+    color: rgba(255, 255, 255, 0.4);
+    font-size: 12px;
   }
 }
 

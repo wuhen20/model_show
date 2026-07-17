@@ -3,7 +3,7 @@ import { ref, computed, nextTick, onMounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import Header from '@/components/Header.vue'
 import Sidebar from '@/components/Sidebar.vue'
-import { getSamples, getImageUrl, getAnnotations, getAudioText, updateSampleScore, uploadSamples, uploadSamplesBatch, saveLabelThink, queryTimeSeriesData, type SampleInfoRow, type AnnotationData, type AnnotationBox, type TimeSeriesColumn } from '@/api/originalSample'
+import { getSamples, getImageUrl, getAnnotations, getAudioText, updateSampleScore, uploadSamples, uploadSamplesBatch, saveLabelThink, queryTimeSeriesData, getClasses, getSamplesByLabels, type SampleInfoRow, type AnnotationData, type AnnotationBox, type TimeSeriesColumn } from '@/api/originalSample'
 import { ElMessage } from 'element-plus'
 
 const route = useRoute()
@@ -37,6 +37,7 @@ const viewMode = ref<'thumbnail' | 'list'>('list')
 const uploadDialogVisible = ref(false)
 const uploadSaving = ref(false)
 const uploadFileList = ref<File[]>([])
+const uploadDisplayList = ref<any[]>([]) // el-upload 显示的文件列表
 
 // 样本类型编码 → 允许的文件扩展名
 const typeCodeToExtensions: Record<string, string[]> = {
@@ -48,7 +49,7 @@ const typeCodeToExtensions: Record<string, string[]> = {
 
 // 样本类型编码 → 允许的 accept 值
 const typeCodeToAccept: Record<string, string> = {
-  '05': 'image/*',
+  '05': 'image/*,.txt',
   '02': '.txt,.csv,.json,.xml,.doc,.docx,.pdf',
   '03': 'audio/*',
   '04': 'video/*',
@@ -56,6 +57,7 @@ const typeCodeToAccept: Record<string, string> = {
 
 function openUploadDialog() {
   uploadFileList.value = []
+  uploadDisplayList.value = []
   uploadDialogVisible.value = true
 }
 
@@ -73,11 +75,13 @@ async function handleUploadConfirm() {
     return
   }
 
-  // 前端校验文件类型
+  // 前端校验文件类型（图片类型允许额外附带 .txt 标注文件）
   const allowedExts = typeCodeToExtensions[typeCode.value]
   if (allowedExts) {
+    const isImageType = typeCode.value === '05'
     const invalidFiles = uploadFileList.value.filter(f => {
       const ext = '.' + f.name.split('.').pop()?.toLowerCase()
+      if (isImageType && ext === '.txt') return false
       return !allowedExts.includes(ext)
     })
     if (invalidFiles.length > 0) {
@@ -146,6 +150,9 @@ async function handleBatchConfirm() {
 
 // 筛选条件
 const filterName = ref('')
+const filterLabels = ref<string[]>([]) // 标签筛选（多选）
+const classOptions = ref<string[]>([]) // classes.txt 中的标签选项
+const labelFilteredSamples = ref<SampleInfoRow[] | null>(null) // 标签筛选结果（null 表示未启用标签筛选）
 
 // 分页
 const currentPage = ref(1)
@@ -153,7 +160,7 @@ const pageSize = 20
 
 // 筛选后的数据
 const filteredList = computed(() => {
-  let list = sampleList.value
+  let list = labelFilteredSamples.value !== null ? labelFilteredSamples.value : sampleList.value
   if (filterName.value) {
     const kw = filterName.value.toLowerCase()
     list = list.filter(s => String(s.sampleName || '').toLowerCase().includes(kw))
@@ -185,8 +192,26 @@ function handlePageChange(page: number) {
 
 function resetFilters() {
   filterName.value = ''
+  filterLabels.value = []
+  labelFilteredSamples.value = null
   currentPage.value = 1
 }
+
+// 标签筛选变化时请求后端
+watch(filterLabels, async (val) => {
+  currentPage.value = 1
+  if (!val || val.length === 0) {
+    labelFilteredSamples.value = null
+    return
+  }
+  try {
+    const data = await getSamplesByLabels(setNo.value, val)
+    labelFilteredSamples.value = data
+  } catch (e: any) {
+    ElMessage.error(e.message || '标签筛选失败')
+    labelFilteredSamples.value = []
+  }
+})
 
 // 筛选条件变化时重置页码
 watch([filterName], () => {
@@ -216,6 +241,14 @@ async function loadSamples() {
         }))
       } else {
         columns.value = []
+      }
+      // 图片类型样本集：加载标签选项
+      if (isImageSet.value) {
+        try {
+          classOptions.value = await getClasses(setNo.value)
+        } catch {
+          classOptions.value = []
+        }
       }
     }
   } catch (e: any) {
@@ -768,6 +801,12 @@ onMounted(() => {
             <label>样本名称</label>
             <el-input v-model="filterName" placeholder="输入样本名称" clearable size="default" style="width: 200px" />
           </div>
+          <div class="filter-item" v-if="isImageSet && classOptions.length > 0">
+            <label>标签</label>
+            <el-select v-model="filterLabels" placeholder="全部" clearable multiple collapse-tags collapse-tags-tooltip size="default" style="width: 200px">
+              <el-option v-for="cls in classOptions" :key="cls" :label="cls" :value="cls" />
+            </el-select>
+          </div>
           <el-button size="default" @click="resetFilters">重置</el-button>
         </div>
 
@@ -852,11 +891,12 @@ onMounted(() => {
         </div>
         <div class="upload-info-row">
           <span class="upload-info-label">允许格式：</span>
-          <span class="upload-info-value">{{ typeCode === '05' ? '图像文件（jpg/png/bmp等）' : typeCode === '02' ? '文本文件（txt/csv/doc等）' : typeCode === '03' ? '音频文件（mp3/wav等）' : typeCode === '04' ? '视频文件（mp4/avi等）' : '不限' }}</span>
+          <span class="upload-info-value">{{ typeCode === '05' ? '图像文件（jpg/png/bmp等），可附带同名txt标注和classes.txt' : typeCode === '02' ? '文本文件（txt/csv/doc等）' : typeCode === '03' ? '音频文件（mp3/wav等）' : typeCode === '04' ? '视频文件（mp4/avi等）' : '不限' }}</span>
         </div>
         <el-upload
           :accept="typeCodeToAccept[typeCode] || ''"
           :auto-upload="false"
+          :file-list="uploadDisplayList"
           :on-change="handleUploadFileChange"
           :on-remove="handleUploadFileRemove"
           multiple
@@ -867,7 +907,7 @@ onMounted(() => {
               <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M17 8l-5-5-5 5M12 3v12"/>
             </svg>
             <p>将文件拖到此处，或<em>点击上传</em></p>
-            <p class="upload-tip">仅支持该样本集对应类型的文件</p>
+            <p class="upload-tip">图片类型可同时选择图片和同名txt标注文件</p>
           </div>
         </el-upload>
       </div>

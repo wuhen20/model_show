@@ -4,7 +4,7 @@ import { useRouter, useRoute } from 'vue-router'
 import Header from '@/components/Header.vue'
 import Sidebar from '@/components/Sidebar.vue'
 import { ElMessage } from 'element-plus'
-import { VueFlow, useVueFlow, Handle, Position, type Node, type Edge, type Connection } from '@vue-flow/core'
+import { VueFlow, useVueFlow, Handle, Position, type Node, type Edge, type Connection, type EdgeChange } from '@vue-flow/core'
 import { Background } from '@vue-flow/background'
 import { Controls } from '@vue-flow/controls'
 import '@vue-flow/core/dist/style.css'
@@ -36,8 +36,11 @@ const saving = ref(false)
 // useVueFlow 不需要传入参数，通过 v-model 自动同步
 const {
   onConnect,
+  onEdgesChange,
+  onEdgeClick,
   addEdges,
   addNodes,
+  removeEdges,
   project,
   vueFlowRef,
   onNodeClick,
@@ -55,11 +58,20 @@ function genNodeId(type: string): string {
 // 选中节点
 const selectedNode = ref<Node | null>(null)
 
+// 选中连线
+const selectedEdge = ref<Edge | null>(null)
+
 // ========== 算子面板拖拽 ==========
 const operators = [
   { type: 'source', name: '数据源', icon: 'database', color: '#00d4ff' },
   { type: 'dedup', name: '去重', icon: 'filter', color: '#00ff88' },
-  { type: 'nullfill', name: '空值处理', icon: 'null', color: '#ffaa00' },
+  { type: 'nullfill', name: '空值处理(统一处理)', icon: 'null', color: '#ffaa00' },
+  { type: 'nullfill_short', name: '短期空值处理(1个点)', icon: 'null', color: '#ffcc44' },
+  { type: 'nullfill_medium', name: '中期空值处理(2~4连续点)', icon: 'null', color: '#ff9966' },
+  { type: 'nullfill_long', name: '长期空值处理(>4连续点且占比<50%)', icon: 'null', color: '#ff6600' },
+  { type: 'outlier', name: '异常值处理', icon: 'alert', color: '#ff4488' },
+  { type: 'dateformat', name: '日期格式标准化', icon: 'calendar', color: '#9b59ff' },
+  { type: 'str2num', name: '字符替换', icon: 'hash', color: '#00ccaa' },
 ]
 
 function onDragStart(event: DragEvent, opType: string) {
@@ -108,7 +120,13 @@ function addOperatorNode(opType: string, position: { x: number; y: number }) {
         ? { tableName: '' }
         : opType === 'dedup'
           ? { fields: [] }
-          : { fields: [], strategy: 'drop', fillValue: '' },
+          : opType === 'outlier'
+            ? { fields: [], checkNegative: true, absThreshold: null, strategy: 'setnull' }
+            : opType === 'dateformat'
+              ? { field: '', targetFormat: '%Y-%m-%d' }
+              : opType === 'str2num'
+                ? { fields: [], replaceFrom: '', replaceTo: '' }
+              : { fields: [], strategy: 'drop', fillValue: '', treatZeroAsNull: false },
     },
   }
   nodes.value.push(node)
@@ -126,9 +144,49 @@ onConnect((connection: Connection) => {
   edges.value.push(newEdge)
 })
 
+// 处理连线删除
+onEdgesChange((changes: EdgeChange[]) => {
+  for (const change of changes) {
+    if (change.type === 'remove') {
+      edges.value = edges.value.filter(e => e.id !== change.id)
+      if (selectedEdge.value?.id === change.id) {
+        selectedEdge.value = null
+      }
+    } else if (change.type === 'select') {
+      // 更新选中状态
+      const edge = edges.value.find(e => e.id === change.id)
+      if (edge && change.selected) {
+        selectedEdge.value = edge
+      } else if (selectedEdge.value?.id === change.id && !change.selected) {
+        selectedEdge.value = null
+      }
+    }
+  }
+})
+
+// 连线点击事件
+onEdgeClick(({ edge }) => {
+  // 清除其他边的选中状态
+  edges.value.forEach(e => {
+    e.selected = false
+  })
+  // 设置当前边为选中状态
+  const clickedEdge = edges.value.find(e => e.id === edge.id)
+  if (clickedEdge) {
+    clickedEdge.selected = true
+  }
+  selectedEdge.value = edge as Edge
+  selectedNode.value = null
+})
+
 // ========== 节点选中 ==========
 onPaneClick(() => {
   selectedNode.value = null
+  selectedEdge.value = null
+  // 清除所有边的选中状态
+  edges.value.forEach(e => {
+    e.selected = false
+  })
 })
 
 // ========== 右侧配置面板 ==========
@@ -185,10 +243,10 @@ function findUpstreamSourceNode(nodeId: string): Node | null {
   return null
 }
 
-// 当选中 dedup 或 nullfill 节点时，从上游 source 节点获取表名并加载字段
+// 当选中 dedup / nullfill / outlier / dateformat 节点时，从上游 source 节点获取表名并加载字段
 function onNodeSelectedForConfig() {
   const nodeType = selectedNode.value?.data?.nodeType
-  if (nodeType === 'dedup' || nodeType === 'nullfill') {
+  if (nodeType === 'dedup' || nodeType === 'nullfill' || nodeType === 'nullfill_short' || nodeType === 'nullfill_medium' || nodeType === 'nullfill_long' || nodeType === 'outlier' || nodeType === 'dateformat' || nodeType === 'str2num') {
     const sourceNode = findUpstreamSourceNode(selectedNode.value!.id)
     if (sourceNode?.data?.config?.tableName) {
       loadColumns(sourceNode.data.config.tableName)
@@ -203,7 +261,7 @@ function handleNodeSelect(node: Node) {
     if (tableList.value.length === 0) {
       loadTableList()
     }
-  } else if (node.data?.nodeType === 'dedup' || node.data?.nodeType === 'nullfill') {
+  } else if (node.data?.nodeType === 'dedup' || node.data?.nodeType === 'nullfill' || node.data?.nodeType === 'nullfill_short' || node.data?.nodeType === 'nullfill_medium' || node.data?.nodeType === 'nullfill_long' || node.data?.nodeType === 'outlier' || node.data?.nodeType === 'dateformat' || node.data?.nodeType === 'str2num') {
     onNodeSelectedForConfig()
   }
 }
@@ -211,12 +269,45 @@ function handleNodeSelect(node: Node) {
 // 重写 onNodeClick 以加载配置数据
 onNodeClick(({ node }) => {
   handleNodeSelect(node)
+  selectedEdge.value = null
+  // 清除所有边的选中状态
+  edges.value.forEach(e => {
+    e.selected = false
+  })
 })
+
+// 删除选中连线
+function deleteSelectedEdge() {
+  if (!selectedEdge.value) return
+  const edgeId = selectedEdge.value.id
+  edges.value = edges.value.filter(e => e.id !== edgeId)
+  selectedEdge.value = null
+  // 确保其他边的选中状态被清除
+  edges.value.forEach(e => {
+    e.selected = false
+  })
+}
+
+// 键盘删除事件处理
+function handleKeyDown(event: KeyboardEvent) {
+  if (event.key === 'Delete' || event.key === 'Backspace') {
+    // 如果有选中的连线，删除连线
+    if (selectedEdge.value) {
+      deleteSelectedEdge()
+      event.preventDefault()
+    }
+    // 如果有选中的节点，删除节点
+    else if (selectedNode.value) {
+      deleteSelectedNode()
+      event.preventDefault()
+    }
+  }
+}
 
 // 监听 selectedNode 变化，确保选中 dedup/nullfill 节点时一定触发字段加载
 // 使用 nextTick 等待 edges/nodes 的响应式更新完成后再查找上游 source 节点
 watch(selectedNode, (newNode) => {
-  if (newNode?.data?.nodeType === 'dedup' || newNode?.data?.nodeType === 'nullfill') {
+  if (newNode?.data?.nodeType === 'dedup' || newNode?.data?.nodeType === 'nullfill' || newNode?.data?.nodeType === 'nullfill_short' || newNode?.data?.nodeType === 'nullfill_medium' || newNode?.data?.nodeType === 'nullfill_long' || newNode?.data?.nodeType === 'outlier' || newNode?.data?.nodeType === 'dateformat' || newNode?.data?.nodeType === 'str2num') {
     nextTick(() => {
       if (selectedNode.value?.id === newNode.id) {
         onNodeSelectedForConfig()
@@ -323,9 +414,81 @@ function onNullFillStrategyChange(strategy: string) {
   updateSelectedNodeConfig({ strategy })
 }
 
+// 0视为空值复选框
+function onTreatZeroAsNullChange(val: boolean) {
+  updateSelectedNodeConfig({ treatZeroAsNull: val })
+}
+
 // 当 nullfill 节点的填充值变化时，更新配置
 function onNullFillValueChange(fillValue: string) {
   updateSelectedNodeConfig({ fillValue })
+}
+
+// ========== 异常值处理 ==========
+function onOutlierFieldsChange(fields: string[]) {
+  updateSelectedNodeConfig({ fields })
+}
+
+function onOutlierCheckNegativeChange(val: boolean) {
+  updateSelectedNodeConfig({ checkNegative: val })
+}
+
+function onOutlierAbsThresholdChange(val: number | null) {
+  updateSelectedNodeConfig({ absThreshold: val })
+}
+
+function onOutlierStrategyChange(strategy: string) {
+  updateSelectedNodeConfig({ strategy })
+}
+
+function onClearOutlierFields() {
+  onOutlierFieldsChange([])
+}
+
+// 异常值处理字段区间选择
+const outlierRangeStart = ref('')
+const outlierRangeEnd = ref('')
+
+function onAddOutlierRange() {
+  const startRaw = outlierRangeStart.value.trim()
+  const endRaw = outlierRangeEnd.value.trim()
+  if (!startRaw || !endRaw) {
+    ElMessage.warning('请输入起始和结束字段名')
+    return
+  }
+  const startParsed = parseFieldName(startRaw)
+  const endParsed = parseFieldName(endRaw)
+  if (!startParsed || !endParsed) {
+    ElMessage.warning('字段名必须以数字结尾（如 time0000、P0015）')
+    return
+  }
+  if (startParsed.prefix !== endParsed.prefix) {
+    ElMessage.warning(`前缀不一致："${startParsed.prefix}" 与 "${endParsed.prefix}"`)
+    return
+  }
+  let start = startParsed.num
+  let end = endParsed.num
+  if (start > end) { [start, end] = [end, start] }
+  if (columnList.value.length === 0) {
+    ElMessage.warning('请先点击"刷新字段"加载字段列表')
+    return
+  }
+  const prefix = startParsed.prefix
+  const fieldsToAdd: string[] = []
+  for (const col of columnList.value) {
+    const parsed = parseFieldName(col.fieldName)
+    if (parsed && parsed.prefix === prefix && parsed.num >= start && parsed.num <= end) {
+      fieldsToAdd.push(col.fieldName)
+    }
+  }
+  if (fieldsToAdd.length === 0) {
+    ElMessage.warning(`未找到前缀为 "${prefix}" 且数字在 ${start}~${end} 之间的字段`)
+    return
+  }
+  const currentFields = new Set(selectedNode.value?.data?.config?.fields || [])
+  fieldsToAdd.forEach(f => currentFields.add(f))
+  onOutlierFieldsChange(Array.from(currentFields))
+  ElMessage.success(`已添加 ${fieldsToAdd.length} 个字段`)
 }
 
 // nullfill 策略显示名称
@@ -343,6 +506,48 @@ const strategyNameMap: Record<string, string> = {
 }
 function nullfillStrategyName(strategy: string): string {
   return strategyNameMap[strategy] || strategy
+}
+
+// ========== 日期格式标准化 ==========
+// 日期目标格式选项
+const dateFormatOptions = [
+  { label: 'YYYY-MM-DD（2024-01-31）', value: '%Y-%m-%d' },
+  { label: 'YYYY-MM-DD HH:MM:SS（2024-01-31 12:30:45）', value: '%Y-%m-%d %H:%M:%S' },
+]
+
+function onDateFormatFieldChange(field: string) {
+  updateSelectedNodeConfig({ field })
+}
+
+function onDateTargetFormatChange(targetFormat: string) {
+  updateSelectedNodeConfig({ targetFormat })
+}
+
+// 简化格式显示（用于节点正文）
+function dateFormatShort(fmt: string): string {
+  if (!fmt) return ''
+  const map: Record<string, string> = {
+    '%Y-%m-%d': 'YYYY-MM-DD',
+    '%Y-%m-%d %H:%M:%S': 'YYYY-MM-DD HH:MM:SS',
+  }
+  return map[fmt] || fmt
+}
+
+// ========== 字符替换 ==========
+function onStr2NumFieldsChange(fields: string[]) {
+  updateSelectedNodeConfig({ fields })
+}
+
+function onStrReplaceFromChange(replaceFrom: string) {
+  updateSelectedNodeConfig({ replaceFrom })
+}
+
+function onStrReplaceToChange(replaceTo: string) {
+  updateSelectedNodeConfig({ replaceTo })
+}
+
+function onClearStr2NumFields() {
+  onStr2NumFieldsChange([])
 }
 
 // ========== 保存流程 ==========
@@ -379,14 +584,64 @@ async function handleSave() {
   }
 
   // 检查 nullfill 节点是否配置了字段
-  const nullfillNode = currentNodes.find(n => n.data?.nodeType === 'nullfill')
-  if (nullfillNode) {
-    if (!nullfillNode.data?.config?.fields || nullfillNode.data.config.fields.length === 0) {
-      ElMessage.warning('请为空值处理节点配置处理字段')
+  const nullfillTypes = ['nullfill', 'nullfill_short', 'nullfill_medium', 'nullfill_long']
+  for (const nt of nullfillTypes) {
+    const nfNode = currentNodes.find(n => n.data?.nodeType === nt)
+    if (nfNode) {
+      if (!nfNode.data?.config?.fields || nfNode.data.config.fields.length === 0) {
+        const labelMap: Record<string, string> = {
+          'nullfill': '空值处理(统一处理)',
+          'nullfill_short': '短期空值处理',
+          'nullfill_medium': '中期空值处理',
+          'nullfill_long': '长期空值处理',
+        }
+        ElMessage.warning(`请为${labelMap[nt]}节点配置处理字段`)
+        return
+      }
+      if (nfNode.data.config.strategy === 'fill' && !nfNode.data.config.fillValue && nfNode.data.config.fillValue !== 0) {
+        ElMessage.warning(`请为${labelMap[nt]}节点配置填充值`)
+        return
+      }
+    }
+  }
+
+  // 检查 outlier 节点是否配置了字段
+  const outlierNode = currentNodes.find(n => n.data?.nodeType === 'outlier')
+  if (outlierNode) {
+    if (!outlierNode.data?.config?.fields || outlierNode.data.config.fields.length === 0) {
+      ElMessage.warning('请为异常值处理节点配置处理字段')
       return
     }
-    if (nullfillNode.data.config.strategy === 'fill' && !nullfillNode.data.config.fillValue && nullfillNode.data.config.fillValue !== 0) {
-      ElMessage.warning('请为空值处理节点配置填充值')
+    const cfg = outlierNode.data.config
+    if (!cfg.checkNegative && (cfg.absThreshold === null || cfg.absThreshold === '' || cfg.absThreshold === undefined)) {
+      ElMessage.warning('请为异常值处理节点启用负值检测或设置绝对值阈值')
+      return
+    }
+  }
+
+  // 检查 dateformat 节点是否配置完整
+  const dateformatNode = currentNodes.find(n => n.data?.nodeType === 'dateformat')
+  if (dateformatNode) {
+    const cfg = dateformatNode.data.config
+    if (!cfg.field) {
+      ElMessage.warning('请为日期格式标准化节点选择日期字段')
+      return
+    }
+    if (!cfg.targetFormat) {
+      ElMessage.warning('请为日期格式标准化节点选择目标日期格式')
+      return
+    }
+  }
+
+  // 检查 str2num 节点是否配置了字段和替换字符
+  const str2numNode = currentNodes.find(n => n.data?.nodeType === 'str2num')
+  if (str2numNode) {
+    if (!str2numNode.data?.config?.fields || str2numNode.data.config.fields.length === 0) {
+      ElMessage.warning('请为字符替换节点配置处理字段')
+      return
+    }
+    if (!str2numNode.data?.config?.replaceFrom) {
+      ElMessage.warning('请为字符替换节点输入需替换字符')
       return
     }
   }
@@ -437,8 +692,26 @@ async function loadTaskDetail() {
         defaultLabel = '去重'
         defaultConfig = { fields: [] }
       } else if (n.nodeType === 'nullfill') {
-        defaultLabel = '空值处理'
-        defaultConfig = { fields: [], strategy: 'drop', fillValue: '' }
+        defaultLabel = '空值处理(统一处理)'
+        defaultConfig = { fields: [], strategy: 'drop', fillValue: '', treatZeroAsNull: false }
+      } else if (n.nodeType === 'nullfill_short') {
+        defaultLabel = '短期空值处理(1个点)'
+        defaultConfig = { fields: [], windowSize: 3, treatZeroAsNull: false }
+      } else if (n.nodeType === 'nullfill_medium') {
+        defaultLabel = '中期空值处理(2~4连续点)'
+        defaultConfig = { fields: [], treatZeroAsNull: false }
+      } else if (n.nodeType === 'nullfill_long') {
+        defaultLabel = '长期空值处理(>4连续点且占比<50%)'
+        defaultConfig = { fields: [], knnK: 5, maxNanRatio: 0.5, treatZeroAsNull: false }
+      } else if (n.nodeType === 'outlier') {
+        defaultLabel = '异常值处理'
+        defaultConfig = { fields: [], checkNegative: true, absThreshold: null, strategy: 'setnull' }
+      } else if (n.nodeType === 'dateformat') {
+        defaultLabel = '日期格式标准化'
+        defaultConfig = { field: '', targetFormat: '%Y-%m-%d' }
+      } else if (n.nodeType === 'str2num') {
+        defaultLabel = '字符替换'
+        defaultConfig = { fields: [], replaceFrom: '', replaceTo: '' }
       }
       return {
         id: n.nodeId,
@@ -559,6 +832,27 @@ onMounted(() => {
                 <svg v-else-if="op.icon === 'filter'" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                   <polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3" />
                 </svg>
+                <svg v-else-if="op.icon === 'null'" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <circle cx="12" cy="12" r="10" />
+                  <line x1="8" y1="12" x2="16" y2="12" stroke-dasharray="2 2" />
+                </svg>
+                <svg v-else-if="op.icon === 'alert'" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
+                  <line x1="12" y1="9" x2="12" y2="13" />
+                  <line x1="12" y1="17" x2="12.01" y2="17" />
+                </svg>
+                <svg v-else-if="op.icon === 'calendar'" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <rect x="3" y="4" width="18" height="18" rx="2" ry="2" />
+                  <line x1="16" y1="2" x2="16" y2="6" />
+                  <line x1="8" y1="2" x2="8" y2="6" />
+                  <line x1="3" y1="10" x2="21" y2="10" />
+                </svg>
+                <svg v-else-if="op.icon === 'hash'" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <line x1="4" y1="9" x2="20" y2="9" />
+                  <line x1="4" y1="15" x2="20" y2="15" />
+                  <line x1="10" y1="3" x2="8" y2="21" />
+                  <line x1="16" y1="3" x2="14" y2="21" />
+                </svg>
                 <svg v-else width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                   <circle cx="12" cy="12" r="10" />
                   <line x1="8" y1="12" x2="16" y2="12" stroke-dasharray="2 2" />
@@ -569,12 +863,14 @@ onMounted(() => {
           </div>
 
           <!-- 中间画布 -->
-          <div class="flow-canvas" @drop="onDrop" @dragover="onDragOver">
+          <div class="flow-canvas" tabindex="0" @drop="onDrop" @dragover="onDragOver" @keydown="handleKeyDown">
             <div v-if="loading" class="canvas-loading">加载中...</div>
             <VueFlow
               v-model:nodes="nodes"
               v-model:edges="edges"
               :default-viewport="{ zoom: 1 }"
+              :selection-on-drag="true"
+              :pan-on-drag="[0, 1, 2, 3, 4, 5, 6, 7, 8, 9]"
               fit-view-on-init
               class="vue-flow-container"
             >
@@ -629,7 +925,138 @@ onMounted(() => {
                   </div>
                   <div class="node-body">
                     <template v-if="props.data?.config?.fields?.length">
-                      {{ props.data.config.fields.length }} 个字段 · {{ nullfillStrategyName(props.data.config.strategy) }}
+                      {{ props.data.config.fields.length }} 个字段 · {{ nullfillStrategyName(props.data.config.strategy) }}{{ props.data.config.treatZeroAsNull ? ' · 0视为空值' : '' }}
+                    </template>
+                    <template v-else>未配置字段</template>
+                  </div>
+                  <Handle type="source" :position="Position.Right" />
+                </div>
+              </template>
+
+              <!-- 短期空值处理节点 -->
+              <template #node-nullfill_short="props">
+                <div class="custom-node nullfill-short-node" :class="{ selected: selectedNode?.id === props.id }">
+                  <Handle type="target" :position="Position.Left" />
+                  <div class="node-header">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#ffcc44" stroke-width="2">
+                      <circle cx="12" cy="12" r="10" />
+                      <line x1="8" y1="12" x2="16" y2="12" stroke-dasharray="2 2" />
+                    </svg>
+                    <span>短期空值处理</span>
+                  </div>
+                  <div class="node-body">
+                    <template v-if="props.data?.config?.fields?.length">
+                      {{ props.data.config.fields.length }} 个字段 · 窗口{{ props.data.config.windowSize ?? 3 }}{{ props.data.config.treatZeroAsNull ? ' · 0视为空值' : '' }}
+                    </template>
+                    <template v-else>未配置字段</template>
+                  </div>
+                  <Handle type="source" :position="Position.Right" />
+                </div>
+              </template>
+
+              <!-- 中期空值处理节点 -->
+              <template #node-nullfill_medium="props">
+                <div class="custom-node nullfill-medium-node" :class="{ selected: selectedNode?.id === props.id }">
+                  <Handle type="target" :position="Position.Left" />
+                  <div class="node-header">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#ff9966" stroke-width="2">
+                      <circle cx="12" cy="12" r="10" />
+                      <line x1="8" y1="12" x2="16" y2="12" stroke-dasharray="4 2" />
+                    </svg>
+                    <span>中期空值处理</span>
+                  </div>
+                  <div class="node-body">
+                    <template v-if="props.data?.config?.fields?.length">
+                      {{ props.data.config.fields.length }} 个字段 · 拉格朗日插值{{ props.data.config.treatZeroAsNull ? ' · 0视为空值' : '' }}
+                    </template>
+                    <template v-else>未配置字段</template>
+                  </div>
+                  <Handle type="source" :position="Position.Right" />
+                </div>
+              </template>
+
+              <!-- 长期空值处理节点 -->
+              <template #node-nullfill_long="props">
+                <div class="custom-node nullfill-long-node" :class="{ selected: selectedNode?.id === props.id }">
+                  <Handle type="target" :position="Position.Left" />
+                  <div class="node-header">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#ff6600" stroke-width="2">
+                      <circle cx="12" cy="12" r="10" />
+                      <line x1="8" y1="12" x2="16" y2="12" stroke-dasharray="6 2" />
+                    </svg>
+                    <span>长期空值处理</span>
+                  </div>
+                  <div class="node-body">
+                    <template v-if="props.data?.config?.fields?.length">
+                      {{ props.data.config.fields.length }} 个字段 · K={{ props.data.config.knnK ?? 5 }}{{ props.data.config.treatZeroAsNull ? ' · 0视为空值' : '' }}
+                    </template>
+                    <template v-else>未配置字段</template>
+                  </div>
+                  <Handle type="source" :position="Position.Right" />
+                </div>
+              </template>
+
+              <!-- 异常值处理节点 -->
+              <template #node-outlier="props">
+                <div class="custom-node outlier-node" :class="{ selected: selectedNode?.id === props.id }">
+                  <Handle type="target" :position="Position.Left" />
+                  <div class="node-header">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#ff4488" stroke-width="2">
+                      <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
+                      <line x1="12" y1="9" x2="12" y2="13" />
+                      <line x1="12" y1="17" x2="12.01" y2="17" />
+                    </svg>
+                    <span>异常值处理</span>
+                  </div>
+                  <div class="node-body">
+                    <template v-if="props.data?.config?.fields?.length">
+                      {{ props.data.config.fields.length }} 个字段 · {{ props.data.config.strategy === 'setnull' ? '置空' : props.data.config.strategy }}
+                    </template>
+                    <template v-else>未配置字段</template>
+                  </div>
+                  <Handle type="source" :position="Position.Right" />
+                </div>
+              </template>
+
+              <!-- 日期格式标准化节点 -->
+              <template #node-dateformat="props">
+                <div class="custom-node dateformat-node" :class="{ selected: selectedNode?.id === props.id }">
+                  <Handle type="target" :position="Position.Left" />
+                  <div class="node-header">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#9b59ff" stroke-width="2">
+                      <rect x="3" y="4" width="18" height="18" rx="2" ry="2" />
+                      <line x1="16" y1="2" x2="16" y2="6" />
+                      <line x1="8" y1="2" x2="8" y2="6" />
+                      <line x1="3" y1="10" x2="21" y2="10" />
+                    </svg>
+                    <span>日期格式标准化</span>
+                  </div>
+                  <div class="node-body">
+                    <template v-if="props.data?.config?.field">
+                      {{ props.data.config.field }} · {{ dateFormatShort(props.data.config.targetFormat) || '未设置格式' }}
+                    </template>
+                    <template v-else>未配置字段</template>
+                  </div>
+                  <Handle type="source" :position="Position.Right" />
+                </div>
+              </template>
+
+              <!-- 字符替换节点 -->
+              <template #node-str2num="props">
+                <div class="custom-node str2num-node" :class="{ selected: selectedNode?.id === props.id }">
+                  <Handle type="target" :position="Position.Left" />
+                  <div class="node-header">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#00ccaa" stroke-width="2">
+                      <line x1="4" y1="9" x2="20" y2="9" />
+                      <line x1="4" y1="15" x2="20" y2="15" />
+                      <line x1="10" y1="3" x2="8" y2="21" />
+                      <line x1="16" y1="3" x2="14" y2="21" />
+                    </svg>
+                    <span>字符替换</span>
+                  </div>
+                  <div class="node-body">
+                    <template v-if="props.data?.config?.fields?.length">
+                      {{ props.data.config.fields.length }} 个字段 · "{{ props.data.config.replaceFrom || '?' }}" → "{{ props.data.config.replaceTo || '' }}"
                     </template>
                     <template v-else>未配置字段</template>
                   </div>
@@ -643,7 +1070,7 @@ onMounted(() => {
           <div class="config-panel">
             <template v-if="selectedNode">
               <div class="panel-title">
-                {{ selectedNode.data?.nodeType === 'source' ? '数据源配置' : selectedNode.data?.nodeType === 'dedup' ? '去重配置' : '空值处理配置' }}
+                {{ selectedNode.data?.nodeType === 'source' ? '数据源配置' : selectedNode.data?.nodeType === 'dedup' ? '去重配置' : selectedNode.data?.nodeType === 'nullfill' ? '空值处理(统一处理)配置' : selectedNode.data?.nodeType === 'nullfill_short' ? '短期空值处理配置' : selectedNode.data?.nodeType === 'nullfill_medium' ? '中期空值处理配置' : selectedNode.data?.nodeType === 'nullfill_long' ? '长期空值处理配置' : selectedNode.data?.nodeType === 'outlier' ? '异常值处理配置' : selectedNode.data?.nodeType === 'dateformat' ? '日期格式标准化配置' : '字符替换配置' }}
               </div>
 
               <!-- 数据源配置 -->
@@ -757,6 +1184,15 @@ onMounted(() => {
                   </div>
                 </div>
                 <div class="config-item">
+                  <el-checkbox
+                    :model-value="selectedNode.data?.config?.treatZeroAsNull || false"
+                    @change="onTreatZeroAsNullChange"
+                  >
+                    0 视为空值
+                  </el-checkbox>
+                  <div class="config-tip">勾选后，数值列中的 0、0.0 等零值也将作为空值处理</div>
+                </div>
+                <div class="config-item">
                   <label>处理方式</label>
                   <el-select
                     :model-value="selectedNode.data?.config?.strategy || 'drop'"
@@ -785,6 +1221,480 @@ onMounted(() => {
                     @input="onNullFillValueChange"
                   />
                   <div class="config-tip">空值将被替换为该值</div>
+                </div>
+              </template>
+
+              <!-- 短期空值处理配置 -->
+              <template v-if="selectedNode.data?.nodeType === 'nullfill_short'">
+                <div class="config-item">
+                  <label>处理字段（多选）</label>
+                  <div class="field-select-header">
+                    <el-button size="small" :loading="columnLoading" @click="onNodeSelectedForConfig">
+                      刷新字段
+                    </el-button>
+                    <span v-if="columnList.length === 0 && !columnLoading" class="field-tip">
+                      请先配置上游数据源并连线
+                    </span>
+                  </div>
+                  <div class="range-selector">
+                    <div class="range-selector-row">
+                      <el-input v-model="nullFillRangeStart" size="small" placeholder="起始字段名" style="width: 140px" />
+                      <span class="range-separator">~</span>
+                      <el-input v-model="nullFillRangeEnd" size="small" placeholder="结束字段名" style="width: 140px" />
+                      <el-button size="small" type="primary" @click="onAddNullFillRange">添加区间</el-button>
+                    </div>
+                    <div class="config-tip">输入起止字段名（如 time0000 ~ time2300），自动勾选同前缀+数字区间内所有字段</div>
+                  </div>
+                  <el-select
+                    :model-value="selectedNode.data?.config?.fields || []"
+                    placeholder="请选择需要处理空值的字段"
+                    multiple filterable
+                    :collapse-tags="(selectedNode.data?.config?.fields || []).length > 5"
+                    collapse-tags-tooltip
+                    :loading="columnLoading"
+                    style="width: 100%"
+                    @change="onNullFillFieldsChange"
+                  >
+                    <el-option v-for="col in columnList" :key="col.fieldName" :label="`${col.fieldName} (${col.fieldType})`" :value="col.fieldName" />
+                  </el-select>
+                  <div v-if="(selectedNode.data?.config?.fields || []).length > 0" class="field-count-bar">
+                    <span>已选 {{ (selectedNode.data?.config?.fields || []).length }} 个字段</span>
+                    <el-button size="small" link type="danger" @click="onClearNullFillFields">清空</el-button>
+                  </div>
+                </div>
+                <div class="config-item">
+                  <el-checkbox :model-value="selectedNode.data?.config?.treatZeroAsNull || false" @change="onTreatZeroAsNullChange">
+                    0 视为空值
+                  </el-checkbox>
+                  <div class="config-tip">勾选后，数值列中的 0、0.0 等零值也将作为空值处理</div>
+                </div>
+                <div class="config-item">
+                  <label>处理方式</label>
+                  <el-select
+                    :model-value="selectedNode.data?.config?.strategy || 'sliding_window'"
+                    placeholder="请选择处理方式"
+                    style="width: 100%"
+                    @change="onNullFillStrategyChange"
+                  >
+                    <el-option value="drop" label="删除空值行" />
+                    <el-option value="fill" label="填充固定值" />
+                    <el-option value="ffill" label="前向填充（用上一行同字段值）" />
+                    <el-option value="bfill" label="后向填充（用下一行同字段值）" />
+                    <el-option value="interpolate" label="线性插值（上下行插值）" />
+                    <el-option value="mean" label="均值填充" />
+                    <el-option value="median" label="中位数填充" />
+                    <el-option value="hfill_forward" label="横向向前填充（用同一行前一字段值）" />
+                    <el-option value="hfill_backward" label="横向向后填充（用同一行后一字段值）" />
+                    <el-option value="hinterpolate" label="横向插值（同一行前后字段插值）" />
+                    <el-option value="sliding_window" label="滑动窗口均值" />
+                  </el-select>
+                </div>
+                <div v-if="selectedNode.data?.config?.strategy === 'fill'" class="config-item">
+                  <label>填充值</label>
+                  <el-input
+                    :model-value="selectedNode.data?.config?.fillValue || ''"
+                    placeholder="请输入填充值"
+                    style="width: 100%"
+                    @input="onNullFillValueChange"
+                  />
+                  <div class="config-tip">空值将被替换为该值</div>
+                </div>
+                <div v-if="selectedNode.data?.config?.strategy === 'sliding_window' || !selectedNode.data?.config?.strategy" class="config-item">
+                  <label>滑动窗口大小</label>
+                  <el-input-number
+                    :model-value="selectedNode.data?.config?.windowSize ?? 3"
+                    :min="1" :max="20" size="small"
+                    @change="(val: number) => updateSelectedNodeConfig({ windowSize: val })"
+                  />
+                  <div class="config-tip">窗口大小决定前后取均值的数据范围（默认3，即前后各取3个点计算均值）</div>
+                </div>
+              </template>
+
+              <!-- 中期空值处理配置 -->
+              <template v-if="selectedNode.data?.nodeType === 'nullfill_medium'">
+                <div class="config-item">
+                  <label>处理字段（多选）</label>
+                  <div class="field-select-header">
+                    <el-button size="small" :loading="columnLoading" @click="onNodeSelectedForConfig">
+                      刷新字段
+                    </el-button>
+                    <span v-if="columnList.length === 0 && !columnLoading" class="field-tip">
+                      请先配置上游数据源并连线
+                    </span>
+                  </div>
+                  <div class="range-selector">
+                    <div class="range-selector-row">
+                      <el-input v-model="nullFillRangeStart" size="small" placeholder="起始字段名" style="width: 140px" />
+                      <span class="range-separator">~</span>
+                      <el-input v-model="nullFillRangeEnd" size="small" placeholder="结束字段名" style="width: 140px" />
+                      <el-button size="small" type="primary" @click="onAddNullFillRange">添加区间</el-button>
+                    </div>
+                    <div class="config-tip">输入起止字段名（如 time0000 ~ time2300），自动勾选同前缀+数字区间内所有字段</div>
+                  </div>
+                  <el-select
+                    :model-value="selectedNode.data?.config?.fields || []"
+                    placeholder="请选择需要处理空值的字段"
+                    multiple filterable
+                    :collapse-tags="(selectedNode.data?.config?.fields || []).length > 5"
+                    collapse-tags-tooltip
+                    :loading="columnLoading"
+                    style="width: 100%"
+                    @change="onNullFillFieldsChange"
+                  >
+                    <el-option v-for="col in columnList" :key="col.fieldName" :label="`${col.fieldName} (${col.fieldType})`" :value="col.fieldName" />
+                  </el-select>
+                  <div v-if="(selectedNode.data?.config?.fields || []).length > 0" class="field-count-bar">
+                    <span>已选 {{ (selectedNode.data?.config?.fields || []).length }} 个字段</span>
+                    <el-button size="small" link type="danger" @click="onClearNullFillFields">清空</el-button>
+                  </div>
+                </div>
+                <div class="config-item">
+                  <el-checkbox :model-value="selectedNode.data?.config?.treatZeroAsNull || false" @change="onTreatZeroAsNullChange">
+                    0 视为空值
+                  </el-checkbox>
+                  <div class="config-tip">勾选后，数值列中的 0、0.0 等零值也将作为空值处理</div>
+                </div>
+                <div class="config-item">
+                  <label>处理方式</label>
+                  <el-select
+                    :model-value="selectedNode.data?.config?.strategy || 'lagrange'"
+                    placeholder="请选择处理方式"
+                    style="width: 100%"
+                    @change="onNullFillStrategyChange"
+                  >
+                    <el-option value="drop" label="删除空值行" />
+                    <el-option value="fill" label="填充固定值" />
+                    <el-option value="ffill" label="前向填充（用上一行同字段值）" />
+                    <el-option value="bfill" label="后向填充（用下一行同字段值）" />
+                    <el-option value="interpolate" label="线性插值（上下行插值）" />
+                    <el-option value="mean" label="均值填充" />
+                    <el-option value="median" label="中位数填充" />
+                    <el-option value="hfill_forward" label="横向向前填充（用同一行前一字段值）" />
+                    <el-option value="hfill_backward" label="横向向后填充（用同一行后一字段值）" />
+                    <el-option value="hinterpolate" label="横向插值（同一行前后字段插值）" />
+                    <el-option value="lagrange" label="拉格朗日插值" />
+                  </el-select>
+                </div>
+                <div v-if="selectedNode.data?.config?.strategy === 'fill'" class="config-item">
+                  <label>填充值</label>
+                  <el-input
+                    :model-value="selectedNode.data?.config?.fillValue || ''"
+                    placeholder="请输入填充值"
+                    style="width: 100%"
+                    @input="onNullFillValueChange"
+                  />
+                  <div class="config-tip">空值将被替换为该值</div>
+                </div>
+                <div v-if="selectedNode.data?.config?.strategy === 'lagrange' || !selectedNode.data?.config?.strategy" class="config-item">
+                  <div class="config-tip" style="padding: 8px 12px; background: rgba(255,153,102,0.1); border-radius: 4px; border-left: 3px solid #ff9966;">
+                    使用拉格朗日插值法补全连续 2~4 个点的缺失值，自动选取缺失段附近最近的 6 个有效点作为参考，失败时回退为线性插值
+                  </div>
+                </div>
+              </template>
+
+              <!-- 长期空值处理配置 -->
+              <template v-if="selectedNode.data?.nodeType === 'nullfill_long'">
+                <div class="config-item">
+                  <label>处理字段（多选）</label>
+                  <div class="field-select-header">
+                    <el-button size="small" :loading="columnLoading" @click="onNodeSelectedForConfig">
+                      刷新字段
+                    </el-button>
+                    <span v-if="columnList.length === 0 && !columnLoading" class="field-tip">
+                      请先配置上游数据源并连线
+                    </span>
+                  </div>
+                  <div class="range-selector">
+                    <div class="range-selector-row">
+                      <el-input v-model="nullFillRangeStart" size="small" placeholder="起始字段名" style="width: 140px" />
+                      <span class="range-separator">~</span>
+                      <el-input v-model="nullFillRangeEnd" size="small" placeholder="结束字段名" style="width: 140px" />
+                      <el-button size="small" type="primary" @click="onAddNullFillRange">添加区间</el-button>
+                    </div>
+                    <div class="config-tip">输入起止字段名（如 time0000 ~ time2300），自动勾选同前缀+数字区间内所有字段</div>
+                  </div>
+                  <el-select
+                    :model-value="selectedNode.data?.config?.fields || []"
+                    placeholder="请选择需要处理空值的字段"
+                    multiple filterable
+                    :collapse-tags="(selectedNode.data?.config?.fields || []).length > 5"
+                    collapse-tags-tooltip
+                    :loading="columnLoading"
+                    style="width: 100%"
+                    @change="onNullFillFieldsChange"
+                  >
+                    <el-option v-for="col in columnList" :key="col.fieldName" :label="`${col.fieldName} (${col.fieldType})`" :value="col.fieldName" />
+                  </el-select>
+                  <div v-if="(selectedNode.data?.config?.fields || []).length > 0" class="field-count-bar">
+                    <span>已选 {{ (selectedNode.data?.config?.fields || []).length }} 个字段</span>
+                    <el-button size="small" link type="danger" @click="onClearNullFillFields">清空</el-button>
+                  </div>
+                </div>
+                <div class="config-item">
+                  <el-checkbox :model-value="selectedNode.data?.config?.treatZeroAsNull || false" @change="onTreatZeroAsNullChange">
+                    0 视为空值
+                  </el-checkbox>
+                  <div class="config-tip">勾选后，数值列中的 0、0.0 等零值也将作为空值处理</div>
+                </div>
+                <div class="config-item">
+                  <label>处理方式</label>
+                  <el-select
+                    :model-value="selectedNode.data?.config?.strategy || 'knn'"
+                    placeholder="请选择处理方式"
+                    style="width: 100%"
+                    @change="onNullFillStrategyChange"
+                  >
+                    <el-option value="drop" label="删除空值行" />
+                    <el-option value="fill" label="填充固定值" />
+                    <el-option value="ffill" label="前向填充（用上一行同字段值）" />
+                    <el-option value="bfill" label="后向填充（用下一行同字段值）" />
+                    <el-option value="interpolate" label="线性插值（上下行插值）" />
+                    <el-option value="mean" label="均值填充" />
+                    <el-option value="median" label="中位数填充" />
+                    <el-option value="hfill_forward" label="横向向前填充（用同一行前一字段值）" />
+                    <el-option value="hfill_backward" label="横向向后填充（用同一行后一字段值）" />
+                    <el-option value="hinterpolate" label="横向插值（同一行前后字段插值）" />
+                    <el-option value="knn" label="KNN 补全" />
+                  </el-select>
+                </div>
+                <div v-if="selectedNode.data?.config?.strategy === 'fill'" class="config-item">
+                  <label>填充值</label>
+                  <el-input
+                    :model-value="selectedNode.data?.config?.fillValue || ''"
+                    placeholder="请输入填充值"
+                    style="width: 100%"
+                    @input="onNullFillValueChange"
+                  />
+                  <div class="config-tip">空值将被替换为该值</div>
+                </div>
+                <div v-if="selectedNode.data?.config?.strategy === 'knn' || !selectedNode.data?.config?.strategy" class="config-item">
+                  <label>KNN 邻居数 (K)</label>
+                  <el-input-number
+                    :model-value="selectedNode.data?.config?.knnK ?? 5"
+                    :min="1" :max="20" size="small"
+                    @change="(val: number) => updateSelectedNodeConfig({ knnK: val })"
+                  />
+                  <div class="config-tip">KNN 补全时参考的最近邻居数量（默认5）</div>
+                </div>
+                <div v-if="selectedNode.data?.config?.strategy === 'knn' || !selectedNode.data?.config?.strategy" class="config-item">
+                  <label>最大缺失占比</label>
+                  <el-input-number
+                    :model-value="selectedNode.data?.config?.maxNanRatio ?? 0.5"
+                    :min="0.1" :max="0.9" :step="0.05" size="small"
+                    @change="(val: number) => updateSelectedNodeConfig({ maxNanRatio: val })"
+                  />
+                  <div class="config-tip">连续缺失段占比超过此阈值时跳过补全（默认0.5，即50%）</div>
+                </div>
+                <div v-if="selectedNode.data?.config?.strategy === 'knn' || !selectedNode.data?.config?.strategy" class="config-item">
+                  <div class="config-tip" style="padding: 8px 12px; background: rgba(255,102,0,0.1); border-radius: 4px; border-left: 3px solid #ff6600;">
+                    使用 KNN 算法补全连续 >4 个点且占比 &lt;50% 的缺失值，利用数据集中所有数值列作为特征进行最近邻插补
+                  </div>
+                </div>
+              </template>
+
+              <!-- 异常值处理配置 -->
+              <template v-if="selectedNode.data?.nodeType === 'outlier'">
+                <div class="config-item">
+                  <label>处理字段（多选）</label>
+                  <div class="field-select-header">
+                    <el-button size="small" :loading="columnLoading" @click="onNodeSelectedForConfig">
+                      刷新字段
+                    </el-button>
+                    <span v-if="columnList.length === 0 && !columnLoading" class="field-tip">
+                      请先配置上游数据源并连线
+                    </span>
+                  </div>
+                  <!-- 字段区间选择器 -->
+                  <div class="range-selector">
+                    <div class="range-selector-row">
+                      <el-input
+                        v-model="outlierRangeStart"
+                        size="small"
+                        placeholder="起始字段名"
+                        style="width: 140px"
+                      />
+                      <span class="range-separator">~</span>
+                      <el-input
+                        v-model="outlierRangeEnd"
+                        size="small"
+                        placeholder="结束字段名"
+                        style="width: 140px"
+                      />
+                      <el-button size="small" type="primary" @click="onAddOutlierRange">
+                        添加区间
+                      </el-button>
+                    </div>
+                    <div class="config-tip">
+                      输入起止字段名（如 time0000 ~ time2300），自动勾选同前缀+数字区间内所有字段
+                    </div>
+                  </div>
+                  <el-select
+                    :model-value="selectedNode.data?.config?.fields || []"
+                    placeholder="请选择需要处理异常值的字段"
+                    multiple
+                    filterable
+                    :collapse-tags="(selectedNode.data?.config?.fields || []).length > 5"
+                    collapse-tags-tooltip
+                    :loading="columnLoading"
+                    style="width: 100%"
+                    @change="onOutlierFieldsChange"
+                  >
+                    <el-option
+                      v-for="col in columnList"
+                      :key="col.fieldName"
+                      :label="`${col.fieldName} (${col.fieldType})`"
+                      :value="col.fieldName"
+                    />
+                  </el-select>
+                  <div v-if="(selectedNode.data?.config?.fields || []).length > 0" class="field-count-bar">
+                    <span>已选 {{ (selectedNode.data?.config?.fields || []).length }} 个字段</span>
+                    <el-button size="small" link type="danger" @click="onClearOutlierFields">清空</el-button>
+                  </div>
+                </div>
+                <div class="config-item">
+                  <label>检测条件</label>
+                  <div class="outlier-condition">
+                    <el-checkbox
+                      :model-value="selectedNode.data?.config?.checkNegative !== false"
+                      @change="onOutlierCheckNegativeChange"
+                    >检测负值</el-checkbox>
+                  </div>
+                  <div class="outlier-condition" style="margin-top: 8px;">
+                    <el-checkbox
+                      :model-value="selectedNode.data?.config?.absThreshold !== null && selectedNode.data?.config?.absThreshold !== '' && selectedNode.data?.config?.absThreshold !== undefined"
+                      @change="(val: boolean) => onOutlierAbsThresholdChange(val ? 0 : null)"
+                    >绝对值超过阈值</el-checkbox>
+                    <el-input-number
+                      v-if="selectedNode.data?.config?.absThreshold !== null && selectedNode.data?.config?.absThreshold !== '' && selectedNode.data?.config?.absThreshold !== undefined"
+                      :model-value="selectedNode.data?.config?.absThreshold"
+                      :min="0"
+                      :precision="2"
+                      :step="1"
+                      size="small"
+                      style="width: 140px; margin-left: 8px;"
+                      @change="onOutlierAbsThresholdChange"
+                    />
+                  </div>
+                  <div class="config-tip">勾选需要检测的异常条件，满足任一条件的值将被处理</div>
+                </div>
+                <div class="config-item">
+                  <label>处理方式</label>
+                  <el-select
+                    :model-value="selectedNode.data?.config?.strategy || 'setnull'"
+                    placeholder="请选择处理方式"
+                    style="width: 100%"
+                    @change="onOutlierStrategyChange"
+                  >
+                    <el-option value="setnull" label="置空" />
+                  </el-select>
+                  <div class="config-tip">异常值将被置为空值（null）</div>
+                </div>
+              </template>
+
+              <!-- 日期格式标准化配置 -->
+              <template v-if="selectedNode.data?.nodeType === 'dateformat'">
+                <div class="config-item">
+                  <label>日期字段（单选）</label>
+                  <div class="field-select-header">
+                    <el-button size="small" :loading="columnLoading" @click="onNodeSelectedForConfig">
+                      刷新字段
+                    </el-button>
+                    <span v-if="columnList.length === 0 && !columnLoading" class="field-tip">
+                      请先配置上游数据源并连线
+                    </span>
+                  </div>
+                  <el-select
+                    :model-value="selectedNode.data?.config?.field || ''"
+                    placeholder="请选择日期字段"
+                    filterable
+                    clearable
+                    :loading="columnLoading"
+                    style="width: 100%"
+                    @change="onDateFormatFieldChange"
+                  >
+                    <el-option
+                      v-for="col in columnList"
+                      :key="col.fieldName"
+                      :label="`${col.fieldName} (${col.fieldType})`"
+                      :value="col.fieldName"
+                    />
+                  </el-select>
+                  <div class="config-tip">选择数据表中存储日期的字段（支持 varchar 类型）</div>
+                </div>
+                <div class="config-item">
+                  <label>目标日期格式</label>
+                  <el-select
+                    :model-value="selectedNode.data?.config?.targetFormat || '%Y-%m-%d'"
+                    placeholder="请选择目标格式"
+                    style="width: 100%"
+                    @change="onDateTargetFormatChange"
+                  >
+                    <el-option
+                      v-for="opt in dateFormatOptions"
+                      :key="opt.value"
+                      :label="opt.label"
+                      :value="opt.value"
+                    />
+                  </el-select>
+                  <div class="config-tip">标准化后输出的日期格式</div>
+                </div>
+              </template>
+
+              <!-- 字符替换配置 -->
+              <template v-if="selectedNode.data?.nodeType === 'str2num'">
+                <div class="config-item">
+                  <label>处理字段（多选）</label>
+                  <div class="field-select-header">
+                    <el-button size="small" :loading="columnLoading" @click="onNodeSelectedForConfig">
+                      刷新字段
+                    </el-button>
+                    <span v-if="columnList.length === 0 && !columnLoading" class="field-tip">
+                      请先配置上游数据源并连线
+                    </span>
+                  </div>
+                  <el-select
+                    :model-value="selectedNode.data?.config?.fields || []"
+                    placeholder="请选择需要替换的字段"
+                    multiple
+                    filterable
+                    :collapse-tags="(selectedNode.data?.config?.fields || []).length > 5"
+                    collapse-tags-tooltip
+                    :loading="columnLoading"
+                    style="width: 100%"
+                    @change="onStr2NumFieldsChange"
+                  >
+                    <el-option
+                      v-for="col in columnList"
+                      :key="col.fieldName"
+                      :label="`${col.fieldName} (${col.fieldType})`"
+                      :value="col.fieldName"
+                    />
+                  </el-select>
+                  <div v-if="(selectedNode.data?.config?.fields || []).length > 0" class="field-count-bar">
+                    <span>已选 {{ (selectedNode.data?.config?.fields || []).length }} 个字段</span>
+                    <el-button size="small" link type="danger" @click="onClearStr2NumFields">清空</el-button>
+                  </div>
+                </div>
+                <div class="config-item">
+                  <label>需替换字符</label>
+                  <el-input
+                    :model-value="selectedNode.data?.config?.replaceFrom || ''"
+                    placeholder="输入需替换的字符，如 °、%、$ 等"
+                    clearable
+                    style="width: 100%"
+                    @input="onStrReplaceFromChange"
+                  />
+                </div>
+                <div class="config-item">
+                  <label>替换后字符</label>
+                  <el-input
+                    :model-value="selectedNode.data?.config?.replaceTo || ''"
+                    placeholder="可为空，表示直接删除该字符"
+                    clearable
+                    style="width: 100%"
+                    @input="onStrReplaceToChange"
+                  />
+                  <div class="config-tip">将字段值中的"需替换字符"替换为"替换后字符"，替换后字符为空则直接删除</div>
                 </div>
               </template>
 
@@ -921,6 +1831,8 @@ onMounted(() => {
   display: flex;
   flex-direction: column;
   gap: 12px;
+  overflow-y: auto;
+  max-height: 100%;
 }
 
 .palette-title {
@@ -976,6 +1888,11 @@ onMounted(() => {
   position: relative;
   background: #0a0e14;
   overflow: hidden;
+  outline: none;
+
+  &:focus {
+    outline: none;
+  }
 }
 
 .vue-flow-container {
@@ -1001,6 +1918,8 @@ onMounted(() => {
   padding: 16px;
   display: flex;
   flex-direction: column;
+  overflow-y: auto;
+  max-height: 100%;
 }
 
 .panel-title {
@@ -1079,6 +1998,12 @@ onMounted(() => {
   color: rgba(255, 255, 255, 0.6);
 }
 
+.outlier-condition {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
 .panel-footer {
   margin-top: auto;
   padding-top: 16px;
@@ -1143,6 +2068,30 @@ onMounted(() => {
   border-color: #ffaa00;
 }
 
+.nullfill-short-node {
+  border-color: #ffcc44;
+}
+
+.nullfill-medium-node {
+  border-color: #ff9966;
+}
+
+.nullfill-long-node {
+  border-color: #ff6600;
+}
+
+.outlier-node {
+  border-color: #ff4488;
+}
+
+.dateformat-node {
+  border-color: #9b59ff;
+}
+
+.str2num-node {
+  border-color: #00ccaa;
+}
+
 .node-header {
   display: flex;
   align-items: center;
@@ -1165,6 +2114,36 @@ onMounted(() => {
     background: rgba(255, 170, 0, 0.15);
     color: #ffaa00;
   }
+
+  .nullfill-short-node & {
+    background: rgba(255, 204, 68, 0.15);
+    color: #ffcc44;
+  }
+
+  .nullfill-medium-node & {
+    background: rgba(255, 153, 102, 0.15);
+    color: #ff9966;
+  }
+
+  .nullfill-long-node & {
+    background: rgba(255, 102, 0, 0.15);
+    color: #ff6600;
+  }
+
+  .outlier-node & {
+    background: rgba(255, 68, 136, 0.15);
+    color: #ff4488;
+  }
+
+  .dateformat-node & {
+    background: rgba(155, 89, 255, 0.15);
+    color: #9b59ff;
+  }
+
+  .str2num-node & {
+    background: rgba(0, 204, 170, 0.15);
+    color: #00ccaa;
+  }
 }
 
 .node-body {
@@ -1181,6 +2160,11 @@ onMounted(() => {
 .vue-flow__edge-path {
   stroke: #00d4ff;
   stroke-width: 2;
+}
+
+.vue-flow__edge.selected .vue-flow__edge-path {
+  stroke: #ff4488;
+  stroke-width: 3;
 }
 
 .vue-flow__edge.animated .vue-flow__edge-path {

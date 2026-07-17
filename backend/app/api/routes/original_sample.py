@@ -6,6 +6,7 @@ from app.core.database import (
     save_original_sample_set, insert_original_sample_info,
     update_original_sample_score, update_original_label_think, query_audio_text,
     generate_sample_set_no, query_time_series_data_by_set_no,
+    get_original_sample_set_path,
 )
 import os
 import io
@@ -102,6 +103,113 @@ def get_samples_api(setNo: str = Query(..., description="样本集编号")):
     except Exception as e:
         logger.exception("接口异常")
         return {"code": 1, "message": f"查询失败: {str(e)}"}
+
+
+@router.get("/get-classes")
+def get_classes_api(setNo: str = Query(..., description="样本集编号")):
+    """读取样本集目录下的 classes.txt，返回标签列表"""
+    try:
+        row = get_original_sample_set_path(setNo)
+        if not row:
+            return {"code": 0, "data": []}
+        set_path = row.get("set_path")
+        if not set_path:
+            return {"code": 0, "data": []}
+        classes_file = os.path.join(set_path, "classes.txt")
+        if not os.path.isfile(classes_file):
+            return {"code": 0, "data": []}
+        classes = []
+        with open(classes_file, "r", encoding="utf-8") as f:
+            for line in f:
+                name = line.strip()
+                if name:
+                    classes.append(name)
+        return {"code": 0, "data": classes}
+    except Exception as e:
+        logger.exception("接口异常")
+        return {"code": 1, "message": f"读取标签失败: {str(e)}"}
+
+
+@router.get("/get-samples-by-labels")
+def get_samples_by_labels_api(
+    setNo: str = Query(..., description="样本集编号"),
+    labels: str = Query("", description="标签列表，逗号分隔"),
+):
+    """根据标签筛选样本：读取样本集目录下的 classes.txt 和每张图片同名 .txt 标注，
+    返回包含指定标签的样本列表"""
+    try:
+        if not labels:
+            return {"code": 0, "data": []}
+
+        selected_labels = set(lab.strip() for lab in labels.split(",") if lab.strip())
+        if not selected_labels:
+            return {"code": 0, "data": []}
+
+        row = get_original_sample_set_path(setNo)
+        if not row:
+            return {"code": 0, "data": []}
+        set_path = row.get("set_path")
+        if not set_path:
+            return {"code": 0, "data": []}
+
+        # 读取 classes.txt 构建 class_id -> class_name 映射
+        classes_file = os.path.join(set_path, "classes.txt")
+        class_map = {}
+        if os.path.isfile(classes_file):
+            with open(classes_file, "r", encoding="utf-8") as f:
+                for idx, line in enumerate(f):
+                    name = line.strip()
+                    if name:
+                        class_map[idx] = name
+
+        # 找出选中标签对应的 class_id 集合
+        selected_ids = {cid for cid, cname in class_map.items() if cname in selected_labels}
+
+        # 遍历目录下所有 .txt 标注文件（排除 classes.txt），检查是否包含选中标签的 class_id
+        matched_filenames = set()
+        IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".bmp", ".gif", ".webp", ".tif", ".tiff"}
+        for fname in os.listdir(set_path):
+            if fname.lower() == "classes.txt" or not fname.lower().endswith(".txt"):
+                continue
+            txt_path = os.path.join(set_path, fname)
+            if not os.path.isfile(txt_path):
+                continue
+            base_name = os.path.splitext(fname)[0]
+            has_image = any(os.path.isfile(os.path.join(set_path, base_name + ext)) for ext in IMAGE_EXTS)
+            if not has_image:
+                continue
+            try:
+                with open(txt_path, "r", encoding="utf-8") as f:
+                    for line in f:
+                        parts = line.strip().split()
+                        if parts:
+                            try:
+                                cid = int(parts[0])
+                                if cid in selected_ids:
+                                    for ext in IMAGE_EXTS:
+                                        img_name = base_name + ext
+                                        if os.path.isfile(os.path.join(set_path, img_name)):
+                                            matched_filenames.add(img_name)
+                                    break
+                            except ValueError:
+                                continue
+            except Exception:
+                continue
+
+        if not matched_filenames:
+            return {"code": 0, "data": []}
+
+        # 从全部样本中筛选出匹配的样本
+        rows = query_original_sample_info(setNo)
+        data = []
+        for r in rows:
+            sample_name = r.get("sample_name", "")
+            if sample_name in matched_filenames:
+                data.append(_row_to_camel(r))
+        return {"code": 0, "data": data}
+    except Exception as e:
+        logger.exception("接口异常")
+        return {"code": 1, "message": f"标签筛选失败: {str(e)}"}
 
 
 @router.get("/query-time-series-data")
@@ -289,29 +397,44 @@ async def upload_samples(
 ):
     """上传原始样本文件：保存到 sample_upload_dir/setName/ 目录，并写入 s_original_sample_info 表"""
     from app.core.config import settings
+    from app.services.sample_import_service import _get_unique_filename
 
     target_dir = os.path.join(settings.sample_upload_dir, setName)
     os.makedirs(target_dir, exist_ok=True)
 
     success_count = 0
     errors = []
+    used_names = set()  # 本次上传已使用的文件名
+
+    # 图片类型：预扫描本次上传的文件名，构建"哪些图片有同名txt标注"的集合
+    labeled_images = set()
+    if typeCode == '05':
+        all_filenames = [f.filename for f in files if f.filename]
+        txt_basenames = {os.path.splitext(fn)[0] for fn in all_filenames if os.path.splitext(fn)[1].lower() == '.txt'}
+        labeled_images = {fn for fn in all_filenames if os.path.splitext(fn)[1].lower() != '.txt' and os.path.splitext(fn)[0] in txt_basenames}
 
     for file in files:
         if not file.filename:
             continue
         ext = os.path.splitext(file.filename)[1].lower()
-        file_path = os.path.join(target_dir, file.filename)
+        # 生成唯一文件名（避免与磁盘已有文件及本次已上传文件重名）
+        unique_name = _get_unique_filename(target_dir, file.filename, used_names)
+        used_names.add(unique_name)
+        file_path = os.path.join(target_dir, unique_name)
         try:
             content = await file.read()
             with open(file_path, "wb") as f:
                 f.write(content)
+            # 图片类型：检测是否有同名txt标注文件
+            label_flag = 1 if (typeCode == '05' and file.filename in labeled_images) else 0
             insert_original_sample_info(
                 set_no=setNo,
-                sample_name=file.filename,
+                sample_name=unique_name,
                 suffix=ext,
                 type_code=typeCode,
                 file_path=file_path,
                 file_size=len(content),
+                label_flag=label_flag,
             )
             success_count += 1
         except Exception as e:

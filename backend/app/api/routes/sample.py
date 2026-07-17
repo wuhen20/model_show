@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Query, UploadFile, File, Form
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
-from app.core.database import query_code_dict, query_sample_set, query_sample_info, save_sample_set, sample_statistic, sample_trend, query_audio_text, update_sample_score, insert_sample_info, update_label_think, generate_task_no, generate_sample_set_no, generate_sample_no, query_data_collect_task, save_data_collect_task, save_data_collect_task_det, query_data_collect_task_det, update_data_collect_task_det, get_task_det_raw, update_task_status, insert_collect_log, append_collect_log, finish_collect_log, query_collect_log, query_all_scheduled_tasks, get_task_execute_type, update_task_execute_type, delete_data_collect_task, execute_source_sql, save_query_result_to_desktop, query_target_table_columns, query_col_map, save_col_map, write_to_target_table, query_original_sample_set_by_type
+from app.core.database import query_code_dict, query_sample_set, query_sample_info, save_sample_set, sample_statistic, sample_trend, query_audio_text, update_sample_score, insert_sample_info, update_label_think, generate_task_no, generate_sample_set_no, generate_sample_no, query_data_collect_task, save_data_collect_task, save_data_collect_task_det, query_data_collect_task_det, update_data_collect_task_det, get_task_det_raw, update_task_status, insert_collect_log, append_collect_log, finish_collect_log, query_collect_log, query_all_scheduled_tasks, get_task_execute_type, update_task_execute_type, delete_data_collect_task, execute_source_sql, save_query_result_to_desktop, query_target_table_columns, query_col_map, save_col_map, write_to_target_table, query_original_sample_set_by_type, apply_sample_set_version_change, get_sample_set_path
 import os
 import io
 import json
@@ -96,6 +96,117 @@ def get_samples_api(setNo: str = Query(..., description="样本集编号")):
         return {"code": 1, "message": f"查询失败: {str(e)}"}
 
 
+@router.get("/get-classes")
+def get_classes_api(setNo: str = Query(..., description="样本集编号")):
+    """读取样本集目录下的 classes.txt，返回标签列表"""
+    try:
+        set_path = get_sample_set_path(setNo)
+        if not set_path:
+            return {"code": 0, "data": []}
+        classes_file = os.path.join(set_path, "classes.txt")
+        if not os.path.isfile(classes_file):
+            return {"code": 0, "data": []}
+        classes = []
+        with open(classes_file, "r", encoding="utf-8") as f:
+            for line in f:
+                name = line.strip()
+                if name:
+                    classes.append(name)
+        return {"code": 0, "data": classes}
+    except Exception as e:
+        logger.exception("接口异常")
+        return {"code": 1, "message": f"读取标签失败: {str(e)}"}
+
+
+@router.get("/get-samples-by-labels")
+def get_samples_by_labels_api(
+    setNo: str = Query(..., description="样本集编号"),
+    labels: str = Query("", description="标签列表，逗号分隔"),
+):
+    """根据标签筛选样本：读取样本集目录下的 classes.txt 和每张图片同名 .txt 标注，
+    返回包含指定标签的样本列表"""
+    try:
+        if not labels:
+            return {"code": 0, "data": []}
+
+        selected_labels = set(lab.strip() for lab in labels.split(",") if lab.strip())
+        if not selected_labels:
+            return {"code": 0, "data": []}
+
+        set_path = get_sample_set_path(setNo)
+        if not set_path:
+            return {"code": 0, "data": []}
+
+        # 读取 classes.txt 构建 class_id -> class_name 映射
+        classes_file = os.path.join(set_path, "classes.txt")
+        class_map = {}
+        if os.path.isfile(classes_file):
+            with open(classes_file, "r", encoding="utf-8") as f:
+                for idx, line in enumerate(f):
+                    name = line.strip()
+                    if name:
+                        class_map[idx] = name
+
+        # 找出选中标签对应的 class_id 集合
+        selected_ids = {cid for cid, cname in class_map.items() if cname in selected_labels}
+
+        # 遍历目录下所有 .txt 标注文件（排除 classes.txt），检查是否包含选中标签的 class_id
+        matched_filenames = set()
+        IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".bmp", ".gif", ".webp", ".tif", ".tiff"}
+        for fname in os.listdir(set_path):
+            if fname.lower() == "classes.txt" or not fname.lower().endswith(".txt"):
+                continue
+            txt_path = os.path.join(set_path, fname)
+            if not os.path.isfile(txt_path):
+                continue
+            # 检查是否有对应图片文件
+            base_name = os.path.splitext(fname)[0]
+            has_image = any(os.path.isfile(os.path.join(set_path, base_name + ext)) for ext in IMAGE_EXTS)
+            if not has_image:
+                continue
+            # 读取标注文件中的 class_id
+            try:
+                with open(txt_path, "r", encoding="utf-8") as f:
+                    for line in f:
+                        parts = line.strip().split()
+                        if parts:
+                            try:
+                                cid = int(parts[0])
+                                if cid in selected_ids:
+                                    # 找到对应图片的实际文件名
+                                    for ext in IMAGE_EXTS:
+                                        img_name = base_name + ext
+                                        if os.path.isfile(os.path.join(set_path, img_name)):
+                                            matched_filenames.add(img_name)
+                                    break
+                            except ValueError:
+                                continue
+            except Exception:
+                continue
+
+        if not matched_filenames:
+            return {"code": 0, "data": []}
+
+        # 从全部样本中筛选出匹配的样本
+        rows = query_sample_info(setNo)
+        data = []
+        for row in rows:
+            sample_name = row.get("sample_name", "")
+            if sample_name in matched_filenames:
+                item = {}
+                for k, v in row.items():
+                    parts = k.split("_")
+                    camel = parts[0] + "".join(p.capitalize() for p in parts[1:])
+                    if hasattr(v, "isoformat"):
+                        v = v.isoformat()
+                    item[camel] = v
+                data.append(item)
+        return {"code": 0, "data": data}
+    except Exception as e:
+        logger.exception("接口异常")
+        return {"code": 1, "message": f"标签筛选失败: {str(e)}"}
+
+
 class SaveSampleSetRequest(BaseModel):
     setName: str
     description: str = ""
@@ -115,7 +226,11 @@ class UpdateSampleScoreRequest(BaseModel):
 @router.post("/save-sample-set")
 def save_sample_set_api(req: SaveSampleSetRequest):
     try:
+        from app.core.config import settings
         set_no = generate_sample_set_no()
+        # 生成以样本集名称命名的文件夹，路径写入 set_path
+        set_path = os.path.join(settings.sample_upload_dir, req.setName)
+        os.makedirs(set_path, exist_ok=True)
         # 只保留 SQL 需要的字段，避免 Oracle 报错多余的参数
         data = {
             'setCode': set_no,
@@ -124,6 +239,7 @@ def save_sample_set_api(req: SaveSampleSetRequest):
             'businessSystem': req.businessSystem,
             'sampleTypeCode': req.sampleTypeCode,
             'sampleFieldCode': req.sampleFieldCode,
+            'setPath': set_path,
         }
         rowcount = save_sample_set(data)
         return {"code": 0, "message": "保存成功", "data": {"rowcount": rowcount, "setNo": set_no}}
@@ -466,6 +582,7 @@ async def upload_samples(
 ):
     """上传样本文件：保存到 sample_upload_dir/setName/ 目录，并写入 s_sample_info 表"""
     from app.core.config import settings
+    from app.services.sample_import_service import _get_unique_filename
 
     # 目标目录：配置路径 / 样本集名称
     target_dir = os.path.join(settings.sample_upload_dir, setName)
@@ -473,13 +590,24 @@ async def upload_samples(
 
     success_count = 0
     errors = []
+    used_names = set()  # 本次上传已使用的文件名
+
+    # 图片类型：预扫描本次上传的文件名，构建"哪些图片有同名txt标注"的集合
+    labeled_images = set()
+    if typeCode == '05':
+        all_filenames = [f.filename for f in files if f.filename]
+        txt_basenames = {os.path.splitext(fn)[0] for fn in all_filenames if os.path.splitext(fn)[1].lower() == '.txt'}
+        labeled_images = {fn for fn in all_filenames if os.path.splitext(fn)[1].lower() != '.txt' and os.path.splitext(fn)[0] in txt_basenames}
 
     for file in files:
         if not file.filename:
             continue
         ext = os.path.splitext(file.filename)[1].lower()
+        # 生成唯一文件名（避免与磁盘已有文件及本次已上传文件重名）
+        unique_name = _get_unique_filename(target_dir, file.filename, used_names)
+        used_names.add(unique_name)
         # 保存文件
-        file_path = os.path.join(target_dir, file.filename)
+        file_path = os.path.join(target_dir, unique_name)
         try:
             content = await file.read()
             with open(file_path, "wb") as f:
@@ -487,14 +615,17 @@ async def upload_samples(
             # 图片类型的 .txt 标注文件只保存，不写样本信息表
             if typeCode == '05' and ext == '.txt':
                 continue
+            # 图片类型：检测是否有同名txt标注文件
+            label_flag = 1 if (typeCode == '05' and file.filename in labeled_images) else 0
             # 写入数据库
             insert_sample_info(
                 set_no=setNo,
-                sample_name=file.filename,
+                sample_name=unique_name,
                 suffix=ext,
                 type_code=typeCode,
                 file_path=file_path,
                 file_size=len(content),
+                label_flag=label_flag,
             )
             success_count += 1
         except Exception as e:
@@ -503,6 +634,20 @@ async def upload_samples(
     msg = f"成功上传 {success_count} 个文件"
     if errors:
         msg += f"，失败 {len(errors)} 个: {'; '.join(errors[:5])}"
+
+    # 图片类型：自动记录版本变更（仅当有成功新增的样本时）
+    if typeCode == '05' and success_count > 0:
+        try:
+            ver = apply_sample_set_version_change(
+                set_no=setNo,
+                set_name=setName,
+                added_count=success_count,
+            )
+            msg += f"，版本 {ver['pre_version']} → {ver['next_version']}"
+        except Exception as e:
+            logger.exception("版本变更记录写入失败")
+            msg += f"（版本变更记录写入失败: {e}）"
+
     return {"code": 0, "message": msg}
 
 
@@ -512,13 +657,26 @@ async def upload_samples_batch(
     setName: str = Form(...),
     typeCode: str = Form(...),
     file: UploadFile = File(...),
+    majorVersionChange: str = Form("false"),
+    versionRemark: str = Form(""),
 ):
-    """批量导入：上传单个 ZIP，解压图片到 sample_upload_dir/setName/，写入 s_sample_info"""
+    """批量导入：上传单个 ZIP，解压图片到 sample_upload_dir/setName/，写入 s_sample_info
+
+    支持手动大版本变更：majorVersionChange=true 时无论增量多少大版本号 +1、小版本号归 0，
+    versionRemark 为可选变更说明（最多 150 字）。
+    """
     from app.core.config import settings
     from app.services.sample_import_service import extract_zip_and_import
 
     if typeCode != "05":
         return {"code": 1, "message": "批量导入仅支持图片类型（05）样本集"}
+
+    # 解析手动大版本变更标识
+    manual_major = (majorVersionChange or "").strip().lower() in ("true", "1", "on", "yes")
+    # 变更说明长度校验
+    version_remark = (versionRemark or "").strip()
+    if len(version_remark) > 150:
+        return {"code": 1, "message": "变更说明不能超过 150 个字"}
 
     content = await file.read()
     if not zipfile.is_zipfile(io.BytesIO(content)):
@@ -538,6 +696,22 @@ async def upload_samples_batch(
                f"跳过 {result['skipped_count']} 个文件")
         if result["errors"]:
             msg += f"，失败 {len(result['errors'])} 个: {'; '.join(result['errors'][:5])}"
+
+        # 记录版本变更（仅当有成功新增的图片时）
+        if result["image_count"] > 0:
+            try:
+                ver = apply_sample_set_version_change(
+                    set_no=setNo,
+                    set_name=setName,
+                    added_count=result["image_count"],
+                    manual_major=manual_major,
+                    manual_remark=version_remark,
+                )
+                msg += f"，版本 {ver['pre_version']} → {ver['next_version']}"
+            except Exception as e:
+                logger.exception("版本变更记录写入失败")
+                msg += f"（版本变更记录写入失败: {e}）"
+
         return {"code": 0, "message": msg}
     except Exception as e:
         logger.exception("批量导入异常")

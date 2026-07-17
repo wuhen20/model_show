@@ -168,6 +168,14 @@ function formatScale(n: number): string {
   return n.toLocaleString()
 }
 
+function formatVersion(v: string): string {
+  if (!v) return ''
+  const s = String(v).trim()
+  if (!s) return ''
+  // 已带 V/v 前缀则统一为大写 V，否则补 V 前缀
+  return /^[vV]/i.test(s) ? 'V' + s.slice(1) : 'V' + s
+}
+
 function toggleSort(field: SortField) {
   if (sortField.value === field) {
     sortOrder.value = sortOrder.value === 'desc' ? 'asc' : 'desc'
@@ -432,7 +440,7 @@ const typeCodeToExtensions: Record<string, string[]> = {
 
 // 样本类型编码 → 允许的 accept 值
 const typeCodeToAccept: Record<string, string> = {
-  '05': 'image/*',
+  '05': 'image/*,.txt',
   '02': '.txt,.csv,.json,.xml,.doc,.docx,.pdf',
   '03': 'audio/*',
   '04': 'video/*',
@@ -460,11 +468,13 @@ async function handleUploadConfirm() {
   }
   const typeCode = uploadTarget.value.modality[0] || ''
 
-  // 前端校验文件类型
+  // 前端校验文件类型（图片类型允许额外附带 .txt 标注文件）
   const allowedExts = typeCodeToExtensions[typeCode]
   if (allowedExts) {
+    const isImageType = typeCode === '05'
     const invalidFiles = uploadFileList.value.filter(f => {
       const ext = '.' + f.name.split('.').pop()?.toLowerCase()
+      if (isImageType && ext === '.txt') return false
       return !allowedExts.includes(ext)
     })
     if (invalidFiles.length > 0) {
@@ -497,6 +507,9 @@ const batchDialogVisible = ref(false)
 const batchSaving = ref(false)
 const batchTarget = ref<SampleSet | null>(null)
 const batchFile = ref<File | null>(null)
+const batchMajorVersion = ref(false)
+const batchVersionRemark = ref('')
+const batchUploadRef = ref()
 
 function openBatchDialog(item: SampleSet) {
   if (item.modality[0] !== '05') {
@@ -505,7 +518,13 @@ function openBatchDialog(item: SampleSet) {
   }
   batchTarget.value = item
   batchFile.value = null
+  batchMajorVersion.value = false
+  batchVersionRemark.value = ''
   batchDialogVisible.value = true
+  // 清空 el-upload 内部文件列表
+  setTimeout(() => {
+    batchUploadRef.value?.clearFiles()
+  }, 0)
 }
 
 function handleBatchFileChange(file: any) {
@@ -527,6 +546,10 @@ async function handleBatchConfirm() {
     ElMessage.warning('仅支持 ZIP 文件')
     return
   }
+  if (batchVersionRemark.value.length > 150) {
+    ElMessage.warning('变更说明不能超过 150 个字')
+    return
+  }
   const typeCode = batchTarget.value.modality[0] || ''
   batchSaving.value = true
   try {
@@ -534,7 +557,9 @@ async function handleBatchConfirm() {
       batchTarget.value.setNo,
       batchTarget.value.name,
       typeCode,
-      batchFile.value
+      batchFile.value,
+      batchMajorVersion.value,
+      batchVersionRemark.value.trim()
     )
     ElMessage.success(msg)
     batchDialogVisible.value = false
@@ -674,7 +699,7 @@ async function handleBatchConfirm() {
                 </div>
                 <div class="meta-item">
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 7v10c0 .55.45 1 1 1h14c.55 0 1-.45 1-1V7c0-.55-.45-1-1-1H5c-.55 0-1 .45-1 1zm0 0l9 6 9-6"/></svg>
-                  <span>{{ item.version }}</span>
+                  <span>{{ formatVersion(item.version) }}</span>
                 </div>
                 <div class="meta-item">
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>
@@ -731,7 +756,7 @@ async function handleBatchConfirm() {
             <span class="col col-quality">
               <span class="quality-badge-sm" :style="{ color: qualityColor[item.qualityLevel], borderColor: qualityColor[item.qualityLevel] }">{{ qualityLabel[item.qualityLevel] }}</span>
             </span>
-            <span class="col col-version">{{ item.version }}</span>
+            <span class="col col-version">{{ formatVersion(item.version) }}</span>
             <span class="col col-popularity">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#ff5555" stroke-width="2"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>
               {{ item.popularity }}
@@ -795,7 +820,7 @@ async function handleBatchConfirm() {
         </div>
         <div class="upload-info-row">
           <span class="upload-info-label">允许格式：</span>
-          <span class="upload-info-value">{{ uploadTarget.modality[0] === '01' ? '图片文件（jpg/png/bmp等）' : uploadTarget.modality[0] === '02' ? '文本文件（txt/csv/doc等）' : uploadTarget.modality[0] === '03' ? '音频文件（mp3/wav等）' : uploadTarget.modality[0] === '04' ? '视频文件（mp4/avi等）' : '不限' }}</span>
+          <span class="upload-info-value">{{ uploadTarget.modality[0] === '05' ? '图像文件（jpg/png/bmp等），可附带同名txt标注和classes.txt' : uploadTarget.modality[0] === '02' ? '文本文件（txt/csv/doc等）' : uploadTarget.modality[0] === '03' ? '音频文件（mp3/wav等）' : uploadTarget.modality[0] === '04' ? '视频文件（mp4/avi等）' : '不限' }}</span>
         </div>
         <el-upload
           :accept="typeCodeToAccept[uploadTarget.modality[0]] || ''"
@@ -810,7 +835,7 @@ async function handleBatchConfirm() {
               <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M17 8l-5-5-5 5M12 3v12"/>
             </svg>
             <p>将文件拖到此处，或<em>点击上传</em></p>
-            <p class="upload-tip">仅支持该样本集对应类型的文件</p>
+            <p class="upload-tip">图片类型可同时选择图片和同名txt标注文件</p>
           </div>
         </el-upload>
       </div>
@@ -831,6 +856,7 @@ async function handleBatchConfirm() {
           <span class="upload-info-value">上传 ZIP，自动解压图片与同名 .txt 标注、classes.txt 到样本集目录</span>
         </div>
         <el-upload
+          ref="batchUploadRef"
           accept=".zip"
           :auto-upload="false"
           :limit="1"
@@ -846,6 +872,20 @@ async function handleBatchConfirm() {
             <p class="upload-tip">仅支持单个 ZIP，图片类型样本集</p>
           </div>
         </el-upload>
+        <div class="batch-version-row">
+          <el-checkbox v-model="batchMajorVersion">大版本变更</el-checkbox>
+        </div>
+        <div v-if="batchMajorVersion" class="batch-remark-row">
+          <div class="batch-remark-label">变更说明<span class="batch-remark-tip">（非必填，最多 150 字）</span></div>
+          <el-input
+            v-model="batchVersionRemark"
+            type="textarea"
+            :rows="3"
+            placeholder="请输入变更说明，留空则自动生成"
+            maxlength="150"
+            show-word-limit
+          />
+        </div>
       </div>
       <template #footer>
         <el-button type="primary" :loading="batchSaving" @click="handleBatchConfirm">确认导入</el-button>
@@ -1409,6 +1449,25 @@ async function handleBatchConfirm() {
       font-size: 12px;
       color: rgba(255, 255, 255, 0.3);
     }
+  }
+  .batch-version-row {
+    margin-top: 14px;
+    :deep(.el-checkbox__label) {
+      color: rgba(255, 255, 255, 0.85);
+    }
+  }
+  .batch-remark-row {
+    margin-top: 10px;
+  }
+  .batch-remark-label {
+    font-size: 13px;
+    color: rgba(255, 255, 255, 0.7);
+    margin-bottom: 6px;
+  }
+  .batch-remark-tip {
+    font-size: 12px;
+    color: rgba(255, 255, 255, 0.35);
+    margin-left: 4px;
   }
 }
 </style>

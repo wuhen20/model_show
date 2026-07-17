@@ -262,6 +262,8 @@ async function loadCodeDict() {
               <span class="col col-no">任务编号</span>
               <span class="col col-name">任务名称</span>
               <span class="col col-remark">任务说明</span>
+              <span class="col col-set-no">原始样本集编号</span>
+              <span class="col col-set-name">原始样本集名称</span>
               <span class="col col-create">创建时间</span>
               <span class="col col-exec">最近执行时间</span>
               <span class="col col-result">执行结果</span>
@@ -284,6 +286,8 @@ async function loadCodeDict() {
               <span class="col col-no link-col" @click="goToDetail(item)">{{ item.taskNo }}</span>
               <span class="col col-name link-col" @click="goToDetail(item)">{{ item.taskName }}</span>
               <span class="col col-remark">{{ item.remark || '-' }}</span>
+              <span class="col col-set-no">{{ item.sampleSetNo || '-' }}</span>
+              <span class="col col-set-name">{{ item.sampleSetName || '-' }}</span>
               <span class="col col-create">{{ item.createTime || '-' }}</span>
               <span class="col col-exec">{{ item.lastExecuteTime || '-' }}</span>
               <span class="col col-result">
@@ -558,6 +562,8 @@ async function loadCodeDict() {
 .col-no { width: 130px; flex-shrink: 0; color: #00d4ff; }
 .col-name { width: 200px; flex-shrink: 0; }
 .col-remark { width: 150px; flex-shrink: 0; color: rgba(255, 255, 255, 0.6); }
+.col-set-no { width: 140px; flex-shrink: 0; color: rgba(255, 255, 255, 0.6); font-size: 12px; }
+.col-set-name { width: 140px; flex-shrink: 0; color: rgba(255, 255, 255, 0.6); }
 .col-create { width: 160px; flex-shrink: 0; color: rgba(255, 255, 255, 0.6); }
 .col-exec { width: 160px; flex-shrink: 0; color: rgba(255, 255, 255, 0.6); }
 .col-result { width: 90px; flex-shrink: 0; text-align: center; }

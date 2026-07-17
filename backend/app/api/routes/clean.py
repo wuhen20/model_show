@@ -279,9 +279,11 @@ def _execute_image_clean_task(task: dict, task_no: str):
     try:
         init_log = f"开始执行图像清洗任务：{task.get('task_name', task_no)}"
         log_id = insert_clean_log(task_no, init_log)
+        logger.info(init_log)
 
         # 2. 查询清洗类型字典，将编码映射到 cleanvision issue 类型
         append_clean_log(log_id, "正在加载清洗类型配置...")
+        logger.info("正在加载清洗类型配置...")
         dict_rows = query_pic_clean_type_dict()
         code_to_issue = {}  # {清洗类型编码: {spare1, code_name}}
         for row in dict_rows:
@@ -295,10 +297,13 @@ def _execute_image_clean_task(task: dict, task_no: str):
             raise ValueError("配置的清洗类型在字典中未找到对应记录")
 
         configured_issues = {info["spare1"] for info in code_to_issue.values()}
-        append_clean_log(log_id, f"配置的检测类型：{', '.join(info['code_name'] for info in code_to_issue.values())}")
+        type_names = ', '.join(info['code_name'] for info in code_to_issue.values())
+        append_clean_log(log_id, f"配置的检测类型：{type_names}")
+        logger.info(f"配置的检测类型：{type_names}")
 
         # 3. 查询原始样本文件路径
         append_clean_log(log_id, "正在查询样本文件路径...")
+        logger.info("正在查询样本文件路径...")
         file_rows = query_original_sample_file_paths(set_no)
         file_paths = []
         # 构建 规范化绝对路径 → 数据库存储 file_path 的映射，用于移动后精确删除原始样本记录
@@ -314,6 +319,7 @@ def _execute_image_clean_task(task: dict, task_no: str):
 
         total_count = len(file_paths)
         append_clean_log(log_id, f"共 {total_count} 个样本文件")
+        logger.info(f"共 {total_count} 个样本文件")
 
         # 4. 提取公共目录作为 data_path
         abs_paths = [os.path.abspath(fp) for fp in file_paths]
@@ -326,9 +332,11 @@ def _execute_image_clean_task(task: dict, task_no: str):
             raise ValueError(f"计算得到的图片目录不存在：{data_path}")
 
         append_clean_log(log_id, f"图片目录：{data_path}")
+        logger.info(f"图片目录：{data_path}")
 
         # 5. 使用 cleanvision 检测问题图片
         append_clean_log(log_id, "正在检测图片质量问题，请稍候...")
+        logger.info("正在检测图片质量问题，请稍候...")
         from cleanvision import Imagelab
 
         imagelab = Imagelab(data_path=data_path)
@@ -338,7 +346,14 @@ def _execute_image_clean_task(task: dict, task_no: str):
         # 模糊类型设置自定义阈值
         if "blurry" in issue_types:
             issue_types["blurry"] = {"threshold": 0.45}
+        # 过亮类型设置自定义阈值
+        if "light" in issue_types:
+            issue_types["light"] = {"threshold": 0.47}
+        # 异常大小类型设置自定义阈值
+        if "odd_size" in issue_types:
+            issue_types["odd_size"] = {"threshold": 0.84}
         append_clean_log(log_id, f"检测类型参数：{issue_types}")
+        logger.info(f"检测类型参数：{issue_types}")
 
         # 禁用 tqdm 输出
         os.environ['TQDM_DISABLE'] = '1'
@@ -346,12 +361,14 @@ def _execute_image_clean_task(task: dict, task_no: str):
         try:
             sys.stderr = open(os.devnull, 'w')
             try:
-                imagelab.find_issues(issue_types=issue_types, verbose=False, n_jobs=2)
+                imagelab.find_issues(issue_types=issue_types, verbose=False, n_jobs=1)
             except Exception as e_issue:
                 # 某些类型不兼容单独指定，降级为全量检测后过滤
-                append_clean_log(log_id, f"指定类型检测失败({e_issue})，降级为全量检测...")
+                msg = f"指定类型检测失败({e_issue})，降级为全量检测..."
+                append_clean_log(log_id, msg)
+                logger.warning(msg)
                 imagelab = Imagelab(data_path=data_path)
-                imagelab.find_issues(verbose=False, n_jobs=2)
+                imagelab.find_issues(verbose=False, n_jobs=1)
         finally:
             if sys.stderr:
                 sys.stderr.close()
@@ -360,6 +377,7 @@ def _execute_image_clean_task(task: dict, task_no: str):
                 del os.environ['TQDM_DISABLE']
 
         append_clean_log(log_id, "检测完成，正在整理结果...")
+        logger.info("检测完成，正在整理结果...")
 
         # 6. 从 issues DataFrame 提取问题图片
         issues_df = imagelab.issues
@@ -390,6 +408,7 @@ def _execute_image_clean_task(task: dict, task_no: str):
                 issue_info = imagelab_info.get(spare1, {}) or {}
                 sets = issue_info.get("sets", []) or []
                 append_clean_log(log_id, f"重复类型 [{spare1}] 检测到 {len(sets)} 个重复组")
+                logger.info(f"重复类型 [{spare1}] 检测到 {len(sets)} 个重复组")
                 for group in sets:
                     if not group or len(group) < 2:
                         continue
@@ -404,14 +423,15 @@ def _execute_image_clean_task(task: dict, task_no: str):
                         if not issue_list:
                             del problem_images[keep_image]
             if kept_for_duplicate > 0:
-                append_clean_log(
-                    log_id,
-                    f"重复图片处理：每组保留 1 张，共保留 {kept_for_duplicate} 张重复图片不移动"
-                )
+                msg = f"重复图片处理：每组保留 1 张，共保留 {kept_for_duplicate} 张重复图片不移动"
+                append_clean_log(log_id, msg)
+                logger.info(msg)
 
         removed_count = len(problem_images)
         result_count = total_count - removed_count
-        append_clean_log(log_id, f"发现 {removed_count} 张问题图片，剩余 {result_count} 张正常图片")
+        msg = f"发现 {removed_count} 张问题图片，剩余 {result_count} 张正常图片"
+        append_clean_log(log_id, msg)
+        logger.info(msg)
 
         # 7. 创建目标目录并移动问题图片
         from app.core.config import settings
@@ -422,6 +442,7 @@ def _execute_image_clean_task(task: dict, task_no: str):
         os.makedirs(target_dir, exist_ok=True)
 
         append_clean_log(log_id, f"正在移动问题图片到：{target_dir}")
+        logger.info(f"正在移动问题图片到：{target_dir}")
 
         moved_count = 0
         deleted_info_count = 0
@@ -433,7 +454,9 @@ def _execute_image_clean_task(task: dict, task_no: str):
                 src_path = image_name
 
             if not os.path.exists(src_path):
-                append_clean_log(log_id, f"警告：文件不存在，跳过：{image_name}")
+                warn_msg = f"警告：文件不存在，跳过：{image_name}"
+                append_clean_log(log_id, warn_msg)
+                logger.warning(warn_msg)
                 continue
 
             dst_path = os.path.join(target_dir, os.path.basename(image_name))
@@ -446,20 +469,27 @@ def _execute_image_clean_task(task: dict, task_no: str):
             try:
                 shutil.move(src_path, dst_path)
                 moved_count += 1
-                # 对每种问题类型插入一条记录
-                for code_val in issue_codes:
-                    insert_clean_pic_record(task_no, code_val, os.path.basename(image_name), dst_path)
+                # 一张图片只插入一条记录，多个问题类型逗号分隔
+                clean_type_str = ",".join(issue_codes)
+                insert_clean_pic_record(task_no, clean_type_str, os.path.basename(image_name), dst_path)
+                logger.debug(f"移动文件：{image_name} -> {dst_path}")
                 # 删除 s_original_sample_info 中对应的原始样本记录
                 stored_fp = norm_path_to_stored.get(os.path.normpath(os.path.abspath(src_path)))
                 if stored_fp:
                     try:
                         deleted_info_count += delete_original_sample_info_by_path(stored_fp)
                     except Exception as e_del:
-                        append_clean_log(log_id, f"警告：删除原始样本记录失败：{image_name}，{e_del}")
+                        warn_msg = f"警告：删除原始样本记录失败：{image_name}，{e_del}"
+                        append_clean_log(log_id, warn_msg)
+                        logger.warning(warn_msg)
             except Exception as e_move:
-                append_clean_log(log_id, f"警告：移动文件失败：{image_name}，{e_move}")
+                warn_msg = f"警告：移动文件失败：{image_name}，{e_move}"
+                append_clean_log(log_id, warn_msg)
+                logger.warning(warn_msg)
 
-        append_clean_log(log_id, f"成功移动 {moved_count} 张问题图片，删除 {deleted_info_count} 条原始样本记录")
+        msg = f"成功移动 {moved_count} 张问题图片，删除 {deleted_info_count} 条原始样本记录"
+        append_clean_log(log_id, msg)
+        logger.info(msg)
 
         # 8. 完成执行记录
         finish_clean_log(
@@ -471,6 +501,7 @@ def _execute_image_clean_task(task: dict, task_no: str):
             log_content="图像清洗执行完成，问题图片已移至隔离目录",
         )
         update_clean_task_status(task_no, "03", last_execute_flag=1)
+        logger.info(f"图像清洗任务 {task_no} 执行完成")
 
         return {
             "code": 0,
@@ -498,7 +529,7 @@ def _execute_image_clean_task(task: dict, task_no: str):
 
 @router.post("/execute-clean-task")
 def execute_clean_task_api(req: ExecuteCleanTaskRequest):
-    """执行清洗任务：按流程编排读取数据→去重→导出 Excel 下载"""
+    """执行清洗任务：图片类型走专用流程；时序类型按画布连线顺序执行算子管道"""
     task_no = req.taskNo.strip()
     if not task_no:
         return {"code": 1, "message": "任务编号不能为空"}
@@ -512,358 +543,9 @@ def execute_clean_task_api(req: ExecuteCleanTaskRequest):
     if sample_type == "05":
         return _execute_image_clean_task(task, task_no)
 
-    nodes = task.get("nodes", [])
-    if not nodes:
-        return {"code": 1, "message": "任务未配置流程节点"}
-
-    # 解析节点配置
-    source_node = None
-    dedup_node = None
-    nullfill_node = None
-    for node in nodes:
-        config_str = node.get("node_config") or "{}"
-        try:
-            config = json.loads(config_str)
-        except (json.JSONDecodeError, TypeError):
-            config = {}
-        node["_config"] = config
-        if node["node_type"] == "source" and source_node is None:
-            source_node = node
-        elif node["node_type"] == "dedup" and dedup_node is None:
-            dedup_node = node
-        elif node["node_type"] == "nullfill" and nullfill_node is None:
-            nullfill_node = node
-
-    if not source_node:
-        return {"code": 1, "message": "流程中缺少数据源节点"}
-
-    table_name = source_node["_config"].get("tableName")
-    if not table_name:
-        return {"code": 1, "message": "数据源节点未配置表名"}
-
-    update_clean_task_status(task_no, "02")
-
-    log_id = None
-    total_count = 0
-    removed_count = 0
-    result_count = 0
-
-    try:
-        # 创建执行记录，直接写入初始日志
-        init_log = f"开始执行清理任务：{task.get('task_name', task_no)}\n数据源表：{table_name}"
-        log_id = insert_clean_log(task_no, init_log)
-
-        # 读取表数据
-        append_clean_log(log_id, "正在读取表数据...")
-        conn = get_connection()
-        try:
-            with conn.cursor() as cursor:
-                _execute(cursor, _select_all_from(table_name))
-                # Oracle rowfactory 将列名统一转小写，columns 也需对应
-                from app.core.database import _is_oracle
-                if _is_oracle():
-                    columns = [desc[0].lower() for desc in cursor.description]
-                else:
-                    columns = [desc[0] for desc in cursor.description]
-                rows = cursor.fetchall()
-        finally:
-            conn.close()
-
-        total_count = len(rows)
-        append_clean_log(log_id, f"读取完成，共 {total_count} 条数据")
-
-        # 执行去重
-        if dedup_node:
-            dedup_fields = dedup_node["_config"].get("fields", [])
-            if dedup_fields:
-                append_clean_log(log_id, f"执行去重，判定字段：{', '.join(dedup_fields)}")
-                seen = set()
-                deduped = []
-                for row in rows:
-                    key = tuple(str(row.get(f, "")) for f in dedup_fields)
-                    if key not in seen:
-                        seen.add(key)
-                        deduped.append(row)
-                removed_count = total_count - len(deduped)
-                rows = deduped
-                append_clean_log(log_id, f"去重完成，移除 {removed_count} 条重复数据，剩余 {len(rows)} 条")
-            else:
-                removed_count = 0
-                append_clean_log(log_id, "未配置去重字段，跳过去重")
-        else:
-            removed_count = 0
-            append_clean_log(log_id, "无去重节点，跳过去重")
-
-        # 生成 DataFrame（空值处理需要在 DataFrame 上进行）
-        append_clean_log(log_id, "正在构建数据帧...")
-        import pandas as pd
-        # rows 是 _CiDict 列表，转成普通 dict 列表避免大小写匹配问题
-        df = pd.DataFrame([dict(r) for r in rows], columns=columns)
-        # 构建列名大小写映射：小写 → 原始列名，用于将配置中的字段名映射到 DataFrame 的实际列名
-        col_lower_map = {c.lower(): c for c in df.columns}
-
-        # 执行空值处理
-        if nullfill_node:
-            nullfill_fields_raw = nullfill_node["_config"].get("fields", [])
-            # 将配置字段名映射到 DataFrame 实际列名（忽略大小写）
-            nullfill_fields = [col_lower_map[f.lower()] for f in nullfill_fields_raw if f.lower() in col_lower_map]
-            strategy = nullfill_node["_config"].get("strategy", "drop")
-            fill_value = nullfill_node["_config"].get("fillValue", "")
-            strategy_names = {
-                "drop": "删除空值行",
-                "fill": f"填充固定值「{fill_value}」",
-                "ffill": "前向填充",
-                "bfill": "后向填充",
-                "interpolate": "线性插值",
-                "mean": "均值填充",
-                "median": "中位数填充",
-                "hfill_forward": "横向向前填充",
-                "hfill_backward": "横向向后填充",
-                "hinterpolate": "横向插值",
-            }
-            if nullfill_fields:
-                # 统计处理前空值数
-                null_count_before = int(df[nullfill_fields].isnull().sum().sum())
-                append_clean_log(
-                    log_id,
-                    f"执行空值处理，方式：{strategy_names.get(strategy, strategy)}，字段：{', '.join(nullfill_fields)}，共 {null_count_before} 处空值"
-                )
-
-                if strategy == "drop":
-                    before_rows = len(df)
-                    df = df.dropna(subset=nullfill_fields)
-                    removed_by_null = before_rows - len(df)
-                    append_clean_log(log_id, f"空值处理完成，移除 {removed_by_null} 条含空值数据，剩余 {len(df)} 条")
-                elif strategy == "fill":
-                    df[nullfill_fields] = df[nullfill_fields].fillna(fill_value)
-                    append_clean_log(log_id, f"空值处理完成，共填充 {null_count_before} 处空值")
-                elif strategy == "ffill":
-                    # 前向填充：支持字符串，无需数值转换
-                    df[nullfill_fields] = df[nullfill_fields].ffill()
-                    remaining_null = int(df[nullfill_fields].isnull().sum().sum())
-                    filled_count = null_count_before - remaining_null
-                    if remaining_null > 0:
-                        append_clean_log(
-                            log_id,
-                            f"空值处理完成，填充 {filled_count} 处空值，剩余 {remaining_null} 处无法填充（首行无前置值）"
-                        )
-                    else:
-                        append_clean_log(log_id, f"空值处理完成，填充 {filled_count} 处空值")
-                elif strategy == "bfill":
-                    # 后向填充：支持字符串，无需数值转换
-                    df[nullfill_fields] = df[nullfill_fields].bfill()
-                    remaining_null = int(df[nullfill_fields].isnull().sum().sum())
-                    filled_count = null_count_before - remaining_null
-                    if remaining_null > 0:
-                        append_clean_log(
-                            log_id,
-                            f"空值处理完成，填充 {filled_count} 处空值，剩余 {remaining_null} 处无法填充（末行无后置值）"
-                        )
-                    else:
-                        append_clean_log(log_id, f"空值处理完成，填充 {filled_count} 处空值")
-                elif strategy == "hfill_forward":
-                    # 横向向前填充：在选定的空值处理字段范围内，用同一行中前一个字段的值填充
-                    nullfill_ordered = [f for f in nullfill_fields if f in columns]
-                    for pos, f in enumerate(nullfill_ordered):
-                        if pos > 0:
-                            prev_col = nullfill_ordered[pos - 1]
-                            mask = df[f].isnull() & df[prev_col].notnull()
-                            df.loc[mask, f] = df.loc[mask, prev_col]
-                    remaining_null = int(df[nullfill_fields].isnull().sum().sum())
-                    filled_count = null_count_before - remaining_null
-                    if remaining_null > 0:
-                        append_clean_log(
-                            log_id,
-                            f"空值处理完成，填充 {filled_count} 处空值，剩余 {remaining_null} 处无法填充（前一字段也为空）"
-                        )
-                    else:
-                        append_clean_log(log_id, f"空值处理完成，填充 {filled_count} 处空值")
-                elif strategy == "hfill_backward":
-                    # 横向向后填充：在选定的空值处理字段范围内，用同一行中后一个字段的值填充
-                    nullfill_ordered = [f for f in nullfill_fields if f in columns]
-                    for pos, f in enumerate(nullfill_ordered):
-                        if pos < len(nullfill_ordered) - 1:
-                            next_col = nullfill_ordered[pos + 1]
-                            mask = df[f].isnull() & df[next_col].notnull()
-                            df.loc[mask, f] = df.loc[mask, next_col]
-                    remaining_null = int(df[nullfill_fields].isnull().sum().sum())
-                    filled_count = null_count_before - remaining_null
-                    if remaining_null > 0:
-                        append_clean_log(
-                            log_id,
-                            f"空值处理完成，填充 {filled_count} 处空值，剩余 {remaining_null} 处无法填充（后一字段也为空）"
-                        )
-                    else:
-                        append_clean_log(log_id, f"空值处理完成，填充 {filled_count} 处空值")
-                elif strategy == "hinterpolate":
-                    # 横向插值：在选定的空值处理字段范围内，用同一行中前后字段的值做线性插值
-                    for f in nullfill_fields:
-                        if f not in columns:
-                            continue
-                        df[f] = pd.to_numeric(df[f], errors="coerce")
-                    # 建立空值处理字段在 columns 中的位置映射，用于确定插值方向
-                    nullfill_indices = [(columns.index(f), f) for f in nullfill_fields if f in columns]
-                    nullfill_indices.sort(key=lambda x: x[0])
-                    for i in df.index:
-                        for pos, (col_pos, col_name) in enumerate(nullfill_indices):
-                            if pd.notna(df.at[i, col_name]):
-                                continue
-                            # 在 nullfill_fields 范围内向前找最近的有效数值
-                            prev_val = None
-                            prev_pos = None
-                            for k in range(pos - 1, -1, -1):
-                                val = df.at[i, nullfill_indices[k][1]]
-                                if pd.notna(val):
-                                    prev_val = float(val)
-                                    prev_pos = nullfill_indices[k][0]
-                                    break
-                            # 在 nullfill_fields 范围内向后找最近的有效数值
-                            next_val = None
-                            next_pos = None
-                            for k in range(pos + 1, len(nullfill_indices)):
-                                val = df.at[i, nullfill_indices[k][1]]
-                                if pd.notna(val):
-                                    next_val = float(val)
-                                    next_pos = nullfill_indices[k][0]
-                                    break
-                            # 按列位置做线性插值
-                            if prev_val is not None and next_val is not None:
-                                interpolated = prev_val + (next_val - prev_val) * (col_pos - prev_pos) / (next_pos - prev_pos)
-                                df.at[i, col_name] = round(interpolated, 6)
-                            elif prev_val is not None:
-                                df.at[i, col_name] = prev_val
-                            elif next_val is not None:
-                                df.at[i, col_name] = next_val
-                    remaining_null = int(df[nullfill_fields].isnull().sum().sum())
-                    filled_count = null_count_before - remaining_null
-                    if remaining_null > 0:
-                        append_clean_log(
-                            log_id,
-                            f"空值处理完成，填充 {filled_count} 处空值，剩余 {remaining_null} 处无法填充（前后均无有效值）"
-                        )
-                    else:
-                        append_clean_log(log_id, f"空值处理完成，填充 {filled_count} 处空值")
-                else:
-                    # 数值型策略：先尝试转为数值类型
-                    for f in nullfill_fields:
-                        df[f] = pd.to_numeric(df[f], errors="coerce")
-                    # 重新统计转换后的空值数（可能有非数字字符串被转为 NaN）
-                    null_count_after_convert = int(df[nullfill_fields].isnull().sum().sum())
-                    if null_count_after_convert > null_count_before:
-                        append_clean_log(
-                            log_id,
-                            f"注意：{null_count_after_convert - null_count_before} 处非数值数据被转为空值"
-                        )
-
-                    if strategy == "interpolate":
-                        df[nullfill_fields] = df[nullfill_fields].interpolate()
-                    elif strategy == "mean":
-                        for f in nullfill_fields:
-                            mean_val = df[f].mean()
-                            df[f] = df[f].fillna(round(mean_val, 6) if pd.notna(mean_val) else 0)
-                    elif strategy == "median":
-                        for f in nullfill_fields:
-                            median_val = df[f].median()
-                            df[f] = df[f].fillna(round(median_val, 6) if pd.notna(median_val) else 0)
-
-                    remaining_null = int(df[nullfill_fields].isnull().sum().sum())
-                    filled_count = null_count_after_convert - remaining_null
-                    if remaining_null > 0:
-                        append_clean_log(
-                            log_id,
-                            f"空值处理完成，填充 {filled_count} 处空值，剩余 {remaining_null} 处无法填充（无有效值可参考）"
-                        )
-                    else:
-                        append_clean_log(log_id, f"空值处理完成，填充 {filled_count} 处空值")
-            else:
-                append_clean_log(log_id, "未配置空值处理字段，跳过空值处理")
-        else:
-            append_clean_log(log_id, "无空值处理节点，跳过空值处理")
-
-        # 生成 JSON 文件并保存到本地
-        append_clean_log(log_id, "正在生成清洗结果 JSON 文件...")
-
-        result_count = len(df)
-
-        # 构造 JSON 数据
-        # 将 DataFrame 转为记录列表，处理 NaN 和 Timestamp
-        records = []
-        for _, row in df.iterrows():
-            record = {}
-            for col in df.columns:
-                val = row[col]
-                # 处理 pandas NaN
-                if pd.isna(val):
-                    record[col] = None
-                elif hasattr(val, "isoformat"):
-                    record[col] = val.isoformat()
-                else:
-                    record[col] = val
-            records.append(record)
-
-        result_data = {
-            "taskNo": task_no,
-            "taskName": task.get("task_name", task_no),
-            "executeTime": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            "totalCount": total_count,
-            "removedCount": removed_count,
-            "resultCount": result_count,
-            "columns": list(df.columns),
-            "rows": records,
-        }
-
-        # 确定保存目录：SAMPLE_UPLOAD_DIR 下的 clean_result 文件夹
-        from app.core.config import settings
-        base_dir = getattr(settings, "sample_upload_dir", "")
-        if not base_dir:
-            base_dir = os.path.abspath("uploads")
-        clean_result_dir = os.path.join(base_dir, "clean_result")
-        os.makedirs(clean_result_dir, exist_ok=True)
-
-        # 文件命名：清洗任务编号_时间戳.json
-        timestamp_str = datetime.now().strftime("%Y%m%d_%H%M%S")
-        file_name = f"{task_no}_{timestamp_str}.json"
-        file_path = os.path.join(clean_result_dir, file_name)
-
-        # 写入文件（UTF-8 编码，ensure_ascii=False 保留中文）
-        with open(file_path, "w", encoding="utf-8") as f:
-            json.dump(result_data, f, ensure_ascii=False, indent=2, default=str)
-
-        append_clean_log(log_id, f"清洗结果已保存到：{file_path}")
-
-        # 完成执行记录（带文件名和路径）
-        finish_clean_log(
-            log_id,
-            execute_status="03",
-            total_count=total_count,
-            removed_count=removed_count,
-            result_count=result_count,
-            log_content="执行完成，清洗结果已保存为 JSON 文件",
-            file_name=file_name,
-            file_path=file_path,
-        )
-
-        # 更新任务状态为已完成
-        update_clean_task_status(task_no, "03", last_execute_flag=1)
-
-        return {"code": 0, "message": "执行成功，清洗结果已保存", "data": {"fileName": file_name, "filePath": file_path, "resultCount": result_count}}
-    except Exception as e:
-        # 失败时追加错误日志并更新执行记录
-        if log_id:
-            try:
-                finish_clean_log(
-                    log_id,
-                    execute_status="04",
-                    total_count=total_count,
-                    removed_count=removed_count,
-                    result_count=result_count,
-                    log_content=f"执行失败：{str(e)}"
-                )
-            except Exception:
-                pass
-        # 任务状态设为 04-失败，确保用户可以重新执行
-        update_clean_task_status(task_no, "04", last_execute_flag=2)
-        return {"code": 1, "message": f"执行失败: {str(e)}"}
+    # 时序类型：交给管道执行器，按画布连线顺序执行各算子
+    from app.services.clean_operators.pipeline import execute_clean_pipeline
+    return execute_clean_pipeline(task, task_no)
 
 
 @router.get("/query-clean-log")

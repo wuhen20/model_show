@@ -115,6 +115,20 @@ export async function getAnnotations(filePath: string): Promise<AnnotationData> 
   return json.data
 }
 
+export async function getClasses(setNo: string): Promise<string[]> {
+  const res = await fetch(`${BASE_URL}/get-classes?setNo=${encodeURIComponent(setNo)}`)
+  const json = await res.json()
+  if (json.code !== 0) throw new Error(json.message || '获取标签列表失败')
+  return json.data || []
+}
+
+export async function getSamplesByLabels(setNo: string, labels: string[]): Promise<SampleInfoRow[]> {
+  const res = await fetch(`${BASE_URL}/get-samples-by-labels?setNo=${encodeURIComponent(setNo)}&labels=${encodeURIComponent(labels.join(','))}`)
+  const json = await res.json()
+  if (json.code !== 0) throw new Error(json.message || '标签筛选失败')
+  return json.data || []
+}
+
 export async function getAudioText(sampleNo: string, sampleName: string): Promise<string | null> {
   const res = await fetch(`${BASE_URL}/get-audio-text?sampleNo=${encodeURIComponent(sampleNo)}&sampleName=${encodeURIComponent(sampleName)}`)
   const json = await res.json()

@@ -358,6 +358,7 @@ def query_sample_set():
                         scd.code_value = s.quality_level
                         and scd.sort_no = 'QUALITY_LEVEL') as quality_level_name,
                     s.business_system,
+                    s.set_path,
                     {_date_format('s.update_time')} as update_time,
                     {_date_format('s.create_time')} as create_time,
                     s.version,
@@ -424,12 +425,25 @@ def save_sample_set(data: dict):
     try:
         with conn.cursor() as cursor:
             sql = """
-                INSERT INTO s_sample_set (set_no, set_name, set_description, business_system, type_code, sample_field)
-                VALUES (%(setCode)s, %(setName)s, %(description)s, %(businessSystem)s, %(sampleTypeCode)s, %(sampleFieldCode)s)
+                INSERT INTO s_sample_set (set_no, set_name, set_description, business_system, type_code, sample_field, set_path)
+                VALUES (%(setCode)s, %(setName)s, %(description)s, %(businessSystem)s, %(sampleTypeCode)s, %(sampleFieldCode)s, %(setPath)s)
             """
             _execute(cursor, sql, data)
         conn.commit()
         return cursor.rowcount
+    finally:
+        conn.close()
+
+
+def get_sample_set_path(set_no: str):
+    """查询样本集的 set_path"""
+    conn = get_connection()
+    try:
+        with conn.cursor() as cursor:
+            sql = "SELECT set_path FROM s_sample_set WHERE set_no = %s"
+            _execute(cursor, sql, (set_no,))
+            row = cursor.fetchone()
+            return row["set_path"] if row else None
     finally:
         conn.close()
 
@@ -594,16 +608,18 @@ def query_audio_text(sample_no: str, sample_name: str):
         conn.close()
 
 
-def insert_sample_info(set_no: str, sample_name: str, suffix: str, type_code: str, file_path: str, file_size: int):
-    """插入样本信息到 s_sample_info 表"""
+def insert_sample_info(set_no: str, sample_name: str, suffix: str, type_code: str, file_path: str, file_size: int, label_flag: int = 0):
+    """插入样本信息到 s_sample_info 表
+    label_flag: 0-未标注, 1-已标注（图片有同名txt标注文件时为1）
+    """
     conn = get_connection()
     try:
         with conn.cursor() as cursor:
             sql = """
                 INSERT INTO s_sample_info (set_no, sample_name, suffix, type_code, file_path, file_size, label_flag)
-                VALUES (%s, %s, %s, %s, %s, %s, 0)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
             """
-            _execute(cursor, sql, (set_no, sample_name, suffix, type_code, file_path, file_size))
+            _execute(cursor, sql, (set_no, sample_name, suffix, type_code, file_path, file_size, label_flag))
         conn.commit()
         return cursor.rowcount
     finally:
@@ -852,17 +868,19 @@ def query_time_series_data_by_set_no(set_no: str, page: int = 1, page_size: int 
         conn.close()
 
 
-def insert_original_sample_info(set_no: str, sample_name: str, suffix: str, type_code: str, file_path: str, file_size: int):
-    """插入原始样本信息，自动生成 sample_no"""
+def insert_original_sample_info(set_no: str, sample_name: str, suffix: str, type_code: str, file_path: str, file_size: int, label_flag: int = 0):
+    """插入原始样本信息，自动生成 sample_no
+    label_flag: 0-未标注, 1-已标注（图片有同名txt标注文件时为1）
+    """
     sample_no = generate_sample_no()
     conn = get_connection()
     try:
         with conn.cursor() as cursor:
             sql = """
                 INSERT INTO s_original_sample_info (sample_no, set_no, sample_name, suffix, type_code, file_path, file_size, label_flag)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, 0)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
             """
-            _execute(cursor, sql, (sample_no, set_no, sample_name, suffix, type_code, file_path, file_size))
+            _execute(cursor, sql, (sample_no, set_no, sample_name, suffix, type_code, file_path, file_size, label_flag))
         conn.commit()
         return cursor.rowcount
     finally:
@@ -1039,8 +1057,10 @@ def query_data_collect_task():
                     END as execute_type_name,
                     s.cron_formula as cron_formula,
                     s.sample_type as sample_type_code,
-                    s.original_sample_set_no as sample_set_no
+                    s.original_sample_set_no as sample_set_no,
+                    oss.set_name as sample_set_name
                 FROM s_data_collect_task s
+                LEFT JOIN s_original_sample_set oss ON oss.set_no = s.original_sample_set_no
                 ORDER BY s.create_time DESC
             """
             _execute(cursor, sql, ())
@@ -1670,6 +1690,132 @@ def query_clean_results():
         conn.close()
 
 
+def _parse_version(version_str) -> tuple[int, int]:
+    """解析版本号字符串 'major.minor' → (major_int, minor_int)。
+
+    空值或异常时回退为 (1, 0)。小版本号按字符串解析，支持任意位数（如 1.555）。
+    """
+    try:
+        s = str(version_str).strip()
+        if not s:
+            return 1, 0
+        # 去掉可能的前缀 V/v
+        if s[:1] in ("v", "V"):
+            s = s[1:]
+        parts = s.split(".")
+        major = int(parts[0]) if parts[0].lstrip("-").isdigit() else 1
+        if len(parts) > 1 and parts[1].isdigit():
+            minor = int(parts[1])
+        else:
+            minor = 0
+        return major, minor
+    except Exception:
+        return 1, 0
+
+
+def apply_sample_set_version_change(
+    set_no: str,
+    set_name: str,
+    added_count: int,
+    manual_major: bool = False,
+    manual_remark: str = "",
+):
+    """计算并记录样本集版本变更，写入 s_sample_version_record 并更新 s_sample_set.version。
+
+    仅对图片类型样本集调用。added_count 为本次成功新增的图片数量。
+    版本号以字符串 "major.minor" 形式存储，小版本号每次 +1，可任意位数（1.10、1.555）。
+
+    规则：
+    - 自动变更（manual_major=False）：若 (next_num // 阈值) - (pre_num // 阈值) >= 1，
+      则大版本号 +1、小版本号归 0；否则小版本号 +1。
+    - 手动变更（manual_major=True）：无论增量多少，大版本号 +1、小版本号归 0。
+      manual_remark 非空则用其作为 remark，否则生成默认说明。
+
+    返回: {pre_num, next_num, pre_version, next_version, remark, change_flag}
+    """
+    from app.core.config import settings
+
+    threshold = getattr(settings, "sample_major_version_threshold", 100) or 100
+    if threshold <= 0:
+        threshold = 100
+
+    conn = get_connection()
+    try:
+        with conn.cursor() as cursor:
+            # 1. 查询当前版本号
+            _execute(cursor, "SELECT version FROM s_sample_set WHERE set_no = %s", (set_no,))
+            row = cursor.fetchone()
+            pre_version_raw = (row.get("version") if row else None)
+            if isinstance(pre_version_raw, bytes):
+                pre_version_raw = pre_version_raw.decode("utf-8")
+            pre_version_str = str(pre_version_raw).strip() if pre_version_raw else ""
+            if not pre_version_str:
+                pre_version_str = "1.0"
+
+            major, minor = _parse_version(pre_version_str)
+
+            # 2. 查询当前样本总数（本次上传后的实际总量）
+            _execute(cursor, "SELECT COUNT(*) AS cnt FROM s_sample_info WHERE set_no = %s", (set_no,))
+            cnt_row = cursor.fetchone()
+            next_num = int(cnt_row.get("cnt", 0)) if cnt_row else 0
+            pre_num = next_num - added_count
+            if pre_num < 0:
+                pre_num = 0
+
+            # 3. 计算新版本号与变更说明
+            if manual_major:
+                new_major = major + 1
+                new_minor = 0
+                change_flag = 1
+                remark = (manual_remark or "").strip()
+                if not remark:
+                    remark = f"本次新增图片{added_count}张，总数{next_num}张，手动变更大版本"
+            else:
+                change_flag = 0
+                crossed = (next_num // threshold) - (pre_num // threshold)
+                if crossed >= 1:
+                    new_major = major + 1
+                    new_minor = 0
+                    remark = f"本次新增图片{added_count}张，总数{next_num}张，达到了大版本变更阈值，大版本号+1"
+                else:
+                    new_major = major
+                    new_minor = minor + 1
+                    remark = f"本次新增图片{added_count}张，小版本号加1"
+
+            next_version_str = f"{new_major}.{new_minor}"
+
+            # 4. 插入版本变更记录
+            sql_insert = """
+                INSERT INTO s_sample_version_record
+                    (sample_set_no, sample_set_name, change_flag, pre_num, next_num,
+                     pre_version, next_version, remark)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            """
+            _execute(cursor, sql_insert, (
+                set_no, set_name, change_flag, pre_num, next_num,
+                pre_version_str, next_version_str, remark,
+            ))
+
+            # 5. 更新样本集版本号
+            _execute(cursor, "UPDATE s_sample_set SET version = %s WHERE set_no = %s",
+                     (next_version_str, set_no))
+        conn.commit()
+
+        return {
+            "pre_num": pre_num,
+            "next_num": next_num,
+            "pre_version": pre_version_str,
+            "next_version": next_version_str,
+            "remark": remark,
+            "change_flag": change_flag,
+        }
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
 def query_sample_set_options(type_code: str = ""):
     """查询样本集下拉选项（仅返回编号、名称、类型编码），可按类型过滤"""
     conn = get_connection()
@@ -2077,26 +2223,63 @@ def insert_clean_pic_record(task_no: str, clean_type: str, file_name: str, file_
 
 
 def query_clean_pic_records(task_no: str):
-    """查询图像清洗任务的被清洗图片记录，关联字典获取清洗类型名称"""
+    """查询图像清洗任务的被清洗图片记录，将逗号分隔的编码转换为中文名称"""
     conn = get_connection()
     try:
         with conn.cursor() as cursor:
-            sql = """
+            # 1. 查询图片记录
+            sql1 = """
                 SELECT
-                    p.record_id,
-                    p.task_no,
-                    p.clean_type,
-                    d.CODE_NAME as clean_type_name,
-                    p.file_name,
-                    p.file_path
-                FROM s_data_clean_pic p
-                LEFT JOIN sys_code_dict d
-                    ON d.SORT_NO = 'PIC_CLEAN_TYPE' AND d.CODE_VALUE = p.clean_type
-                WHERE p.task_no = %s
-                ORDER BY p.record_id
+                    record_id,
+                    task_no,
+                    clean_type,
+                    file_name,
+                    file_path
+                FROM s_data_clean_pic
+                WHERE task_no = %s
+                ORDER BY record_id
             """
-            _execute(cursor, sql, (task_no,))
-            return cursor.fetchall()
+            _execute(cursor, sql1, (task_no,))
+            records = cursor.fetchall()
+
+            # 2. 查询 PIC_CLEAN_TYPE 字典
+            sql2 = """
+                SELECT CODE_VALUE, CODE_NAME
+                FROM sys_code_dict
+                WHERE SORT_NO = 'PIC_CLEAN_TYPE'
+            """
+            _execute(cursor, sql2)
+            dict_rows = cursor.fetchall()
+
+            # 3. 构建编码→名称映射
+            code_map = {}
+            for row in dict_rows:
+                code_map[row.get("CODE_VALUE", "")] = row.get("CODE_NAME", "")
+
+            # 4. 转换编码为中文名称
+            result = []
+            for row in records:
+                clean_type = row.get("clean_type", "")
+                # 将逗号分隔的编码转换为逗号分隔的中文名称
+                type_names = []
+                for code in clean_type.split(","):
+                    code = code.strip()
+                    if code and code in code_map:
+                        type_names.append(code_map[code])
+                    elif code:
+                        type_names.append(code)  # 未找到映射则保留原编码
+                clean_type_name = ",".join(type_names)
+
+                result.append({
+                    "record_id": row.get("record_id"),
+                    "task_no": row.get("task_no", ""),
+                    "clean_type": clean_type,
+                    "clean_type_name": clean_type_name,
+                    "file_name": row.get("file_name", ""),
+                    "file_path": row.get("file_path", ""),
+                })
+
+            return result
     finally:
         conn.close()
 

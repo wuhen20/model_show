@@ -20,6 +20,21 @@ const sampleTypeOptions = ref<{ value: string; label: string }[]>([])
 const picCleanTypes = ref<PicCleanType[]>([])
 const originalSampleSetOptions = ref<OriginalSampleSetOption[]>([])
 
+// 清洗类型全选相关
+const isAllCleanTypesSelected = computed({
+  get: () => picCleanTypes.value.length > 0 && dialogForm.value.cleanTypes.length === picCleanTypes.value.length,
+  set: (val: boolean) => {
+    dialogForm.value.cleanTypes = val ? picCleanTypes.value.map(ct => ct.codeValue) : []
+  }
+})
+const isCleanTypesIndeterminate = computed(() => {
+  const len = dialogForm.value.cleanTypes.length
+  return len > 0 && len < picCleanTypes.value.length
+})
+function handleAllCleanTypesChange(val: boolean) {
+  dialogForm.value.cleanTypes = val ? picCleanTypes.value.map(ct => ct.codeValue) : []
+}
+
 const filterName = ref('')
 
 const filteredList = computed(() => {
@@ -422,9 +437,16 @@ async function loadOriginalSampleSetOptions() {
             </el-select>
           </el-form-item>
           <el-form-item label="清洗类型" required>
-            <el-select v-model="dialogForm.cleanTypes" placeholder="请选择清洗类型" multiple collapse-tags collapse-tags-tooltip style="width: 100%">
-              <el-option v-for="ct in picCleanTypes" :key="ct.codeValue" :label="ct.codeName" :value="ct.codeValue" />
-            </el-select>
+            <div class="clean-type-checkbox-group">
+              <el-checkbox
+                v-model="isAllCleanTypesSelected"
+                :indeterminate="isCleanTypesIndeterminate"
+                @change="handleAllCleanTypesChange"
+              >全选</el-checkbox>
+              <el-checkbox-group v-model="dialogForm.cleanTypes">
+                <el-checkbox v-for="ct in picCleanTypes" :key="ct.codeValue" :label="ct.codeValue">{{ ct.codeName }}</el-checkbox>
+              </el-checkbox-group>
+            </div>
           </el-form-item>
         </template>
         <el-form-item label="任务说明">
@@ -826,6 +848,19 @@ async function loadOriginalSampleSetOptions() {
 
   &:hover {
     background: rgba(0, 212, 255, 0.25) !important;
+  }
+}
+
+.clean-type-checkbox-group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+
+  .el-checkbox-group {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px 20px;
   }
 }
 </style>

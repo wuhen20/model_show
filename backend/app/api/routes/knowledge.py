@@ -152,7 +152,7 @@ def _infer_source(name: str, sub_name: str, cat_name: str) -> str:
     return '内部文档'
 
 
-_load_data()
+# _load_data()  # 暂时注释，避免启动时因缺少 parsed_data.json 而报错
 
 
 # ---------------------------------------------------------------------------

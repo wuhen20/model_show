@@ -571,13 +571,13 @@ onMounted(() => {
 }
 
 .col-no { width: 130px; flex-shrink: 0; color: #00d4ff; }
-.col-name { width: 200px; flex-shrink: 0; }
+.col-name { width: 150px; flex-shrink: 0; }
 .col-type { width: 100px; flex-shrink: 0; text-align: center; }
 .col-start { width: 170px; flex-shrink: 0; color: rgba(255, 255, 255, 0.6); }
 .col-end { width: 170px; flex-shrink: 0; color: rgba(255, 255, 255, 0.6); }
 .col-count { width: 100px; flex-shrink: 0; text-align: center; color: #00ff88; }
-.col-file { width: 260px; flex-shrink: 0; color: rgba(255, 255, 255, 0.6); }
-.col-path { width: 360px; flex-shrink: 0; color: rgba(255, 255, 255, 0.4); font-size: 12px; }
+.col-file { width: 240px; flex-shrink: 0; color: rgba(255, 255, 255, 0.6); }
+.col-path { width: 280px; flex-shrink: 0; color: rgba(255, 255, 255, 0.4); font-size: 12px; }
 .col-action { width: 220px; flex-grow: 1; flex-shrink: 0; display: flex; align-items: center; gap: 6px; }
 
 .loading-state,
@@ -666,7 +666,7 @@ onMounted(() => {
   }
 
   th {
-    background: rgba(0, 212, 255, 0.12);
+    background: #172638;
     color: rgba(255, 255, 255, 0.7);
     font-weight: 600;
     position: sticky;

@@ -407,7 +407,7 @@ const typeCodeToExtensions: Record<string, string[]> = {
 
 // 样本类型编码 → 允许的 accept 值
 const typeCodeToAccept: Record<string, string> = {
-  '05': 'image/*',
+  '05': 'image/*,.txt',
   '02': '.txt,.csv,.json,.xml,.doc,.docx,.pdf',
   '03': 'audio/*',
   '04': 'video/*',
@@ -435,11 +435,13 @@ async function handleUploadConfirm() {
   }
   const typeCode = uploadTarget.value.modality[0] || ''
 
-  // 前端校验文件类型
+  // 前端校验文件类型（图片类型允许额外附带 .txt 标注文件）
   const allowedExts = typeCodeToExtensions[typeCode]
   if (allowedExts) {
+    const isImageType = typeCode === '05'
     const invalidFiles = uploadFileList.value.filter(f => {
       const ext = '.' + f.name.split('.').pop()?.toLowerCase()
+      if (isImageType && ext === '.txt') return false
       return !allowedExts.includes(ext)
     })
     if (invalidFiles.length > 0) {
@@ -770,7 +772,7 @@ async function handleBatchConfirm() {
         </div>
         <div class="upload-info-row">
           <span class="upload-info-label">允许格式：</span>
-          <span class="upload-info-value">{{ uploadTarget.modality[0] === '01' ? '图片文件（jpg/png/bmp等）' : uploadTarget.modality[0] === '02' ? '文本文件（txt/csv/doc等）' : uploadTarget.modality[0] === '03' ? '音频文件（mp3/wav等）' : uploadTarget.modality[0] === '04' ? '视频文件（mp4/avi等）' : '不限' }}</span>
+          <span class="upload-info-value">{{ uploadTarget.modality[0] === '01' ? '图片文件（jpg/png/bmp等），可附带同名txt标注和classes.txt' : uploadTarget.modality[0] === '02' ? '文本文件（txt/csv/doc等）' : uploadTarget.modality[0] === '03' ? '音频文件（mp3/wav等）' : uploadTarget.modality[0] === '04' ? '视频文件（mp4/avi等）' : '不限' }}</span>
         </div>
         <el-upload
           :accept="typeCodeToAccept[uploadTarget.modality[0]] || ''"
@@ -785,7 +787,7 @@ async function handleBatchConfirm() {
               <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M17 8l-5-5-5 5M12 3v12"/>
             </svg>
             <p>将文件拖到此处，或<em>点击上传</em></p>
-            <p class="upload-tip">仅支持该样本集对应类型的文件</p>
+            <p class="upload-tip">图片类型可同时选择图片和同名txt标注文件</p>
           </div>
         </el-upload>
       </div>

@@ -89,6 +89,20 @@ export async function getAnnotations(filePath: string): Promise<AnnotationData> 
   return json.data
 }
 
+export async function getClasses(setNo: string): Promise<string[]> {
+  const res = await fetch(`${BASE_URL}/get-classes?setNo=${encodeURIComponent(setNo)}`)
+  const json = await res.json()
+  if (json.code !== 0) throw new Error(json.message || '获取标签列表失败')
+  return json.data || []
+}
+
+export async function getSamplesByLabels(setNo: string, labels: string[]): Promise<SampleInfoRow[]> {
+  const res = await fetch(`${BASE_URL}/get-samples-by-labels?setNo=${encodeURIComponent(setNo)}&labels=${encodeURIComponent(labels.join(','))}`)
+  const json = await res.json()
+  if (json.code !== 0) throw new Error(json.message || '标签筛选失败')
+  return json.data || []
+}
+
 export async function getAudioText(sampleNo: string, sampleName: string): Promise<string | null> {
   const res = await fetch(`${BASE_URL}/get-audio-text?sampleNo=${encodeURIComponent(sampleNo)}&sampleName=${encodeURIComponent(sampleName)}`)
   const json = await res.json()
@@ -162,12 +176,21 @@ export async function uploadSamples(setNo: string, setName: string, typeCode: st
   return json.message
 }
 
-export async function uploadSamplesBatch(setNo: string, setName: string, typeCode: string, file: File): Promise<string> {
+export async function uploadSamplesBatch(
+  setNo: string,
+  setName: string,
+  typeCode: string,
+  file: File,
+  majorVersionChange: boolean = false,
+  versionRemark: string = ''
+): Promise<string> {
   const formData = new FormData()
   formData.append('setNo', setNo)
   formData.append('setName', setName)
   formData.append('typeCode', typeCode)
   formData.append('file', file)
+  formData.append('majorVersionChange', String(majorVersionChange))
+  formData.append('versionRemark', versionRemark)
   const res = await fetch(`${BASE_URL}/upload-samples-batch`, { method: 'POST', body: formData })
   const json = await res.json()
   if (json.code !== 0) throw new Error(json.message || '批量导入失败')

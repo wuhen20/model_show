@@ -54,6 +54,10 @@ class Settings(BaseSettings):
     db_mode: str = ""  # Oracle 连接模式：sysdba / sysoper / 空（普通用户不需要填）
     sample_upload_dir: str = "E:\人工智能\现场作业专家系统"
 
+    # ---- 样本集版本管理 ----
+    # 大版本变更阈值：样本总量每达到该阈值的下一个整数倍，大版本号 +1，小版本号归 0
+    sample_major_version_threshold: int = 100
+
     # ---- Ceph 对象存储配置（图像采集使用） ----
     ceph_endpoint: str = ""          # 如 http://192.168.1.100:8080
     ceph_access_key: str = ""
