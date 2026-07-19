@@ -41,6 +41,7 @@ from app.core.database import (
     delete_clean_pic_records,
     query_original_sample_file_paths,
     query_original_sample_set_by_type,
+    apply_sample_set_version_change,
 )
 
 router = APIRouter()
@@ -928,12 +929,23 @@ class ImportToSampleRequest(BaseModel):
     recordId: int
     setNo: str
     sampleName: str = ""
+    majorVersionChange: bool = False
+    versionRemark: str = ""
 
 
 @router.post("/import-to-sample")
 def import_to_sample_api(req: ImportToSampleRequest):
-    """将清洗结果入库到样本信息表"""
+    """将清洗结果入库到样本信息表
+
+    支持手动大版本变更：majorVersionChange=True 时大版本号 +1、小版本号归 0；
+    否则小版本号 +1。versionRemark 为可选变更说明（最多 150 字）。
+    """
     try:
+        # 变更说明长度校验
+        version_remark = (req.versionRemark or "").strip()
+        if len(version_remark) > 150:
+            return {"code": 1, "message": "变更说明不能超过 150 个字"}
+
         # 1. 获取清洗记录
         conn = get_connection()
         try:
@@ -1021,7 +1033,42 @@ def import_to_sample_api(req: ImportToSampleRequest):
         }
 
         batch_insert_sample_info([record])
-        return {"code": 0, "message": "入库成功", "data": {"count": 1, "sampleNo": sample_no}}
+
+        # 6. 记录版本变更（入库视为新增 1 条样本）
+        #    时序清洗结果入库不使用 SAMPLE_MAJOR_VERSION_THRESHOLD 阈值：
+        #    - 未勾选大版本变更：仅小版本号 +1
+        #    - 勾选大版本变更：大版本号 +1、小版本号归 0
+        ver_info = {"pre_version": "", "next_version": ""}
+        try:
+            ver = apply_sample_set_version_change(
+                set_no=req.setNo,
+                set_name=set_row.get("set_name") or "",
+                added_count=1,
+                manual_major=bool(req.majorVersionChange),
+                manual_remark=version_remark,
+                apply_threshold=False,
+                sample_label="样本",
+            )
+            ver_info["pre_version"] = ver.get("pre_version", "")
+            ver_info["next_version"] = ver.get("next_version", "")
+        except Exception as ve:
+            logger.exception("入库版本变更记录写入失败")
+            # 版本变更失败不影响入库结果，仅记录异常
+
+        msg = "入库成功"
+        if ver_info["pre_version"] and ver_info["next_version"]:
+            msg += f"，版本 {ver_info['pre_version']} → {ver_info['next_version']}"
+
+        return {
+            "code": 0,
+            "message": msg,
+            "data": {
+                "count": 1,
+                "sampleNo": sample_no,
+                "preVersion": ver_info["pre_version"],
+                "nextVersion": ver_info["next_version"],
+            },
+        }
     except Exception as e:
         logger.exception("清洗结果入库异常")
         return {"code": 1, "message": f"入库失败: {str(e)}"}

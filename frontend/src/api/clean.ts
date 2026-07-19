@@ -217,15 +217,33 @@ export async function getSampleSetOptions(typeCode: string = ''): Promise<Sample
   return json.data || []
 }
 
-export async function importToSample(recordId: number, setNo: string, sampleName: string = ''): Promise<number> {
+export interface ImportToSampleResult {
+  count: number
+  sampleNo: string
+  preVersion?: string
+  nextVersion?: string
+}
+
+export async function importToSample(
+  recordId: number,
+  setNo: string,
+  sampleName: string = '',
+  majorVersionChange: boolean = false,
+  versionRemark: string = ''
+): Promise<ImportToSampleResult> {
   const res = await fetch(`${BASE_URL}/import-to-sample`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ recordId, setNo, sampleName })
+    body: JSON.stringify({ recordId, setNo, sampleName, majorVersionChange, versionRemark })
   })
   const json = await res.json()
   if (json.code !== 0) throw new Error(json.message || '入库失败')
-  return json.data.count
+  return {
+    count: json.data?.count ?? 0,
+    sampleNo: json.data?.sampleNo ?? '',
+    preVersion: json.data?.preVersion,
+    nextVersion: json.data?.nextVersion
+  }
 }
 
 // ========== 图像样本清洗 ==========

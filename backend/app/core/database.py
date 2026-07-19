@@ -1718,17 +1718,23 @@ def apply_sample_set_version_change(
     added_count: int,
     manual_major: bool = False,
     manual_remark: str = "",
+    apply_threshold: bool = True,
+    sample_label: str = "图片",
 ):
     """计算并记录样本集版本变更，写入 s_sample_version_record 并更新 s_sample_set.version。
 
-    仅对图片类型样本集调用。added_count 为本次成功新增的图片数量。
+    added_count 为本次成功新增的样本数量。
     版本号以字符串 "major.minor" 形式存储，小版本号每次 +1，可任意位数（1.10、1.555）。
 
     规则：
-    - 自动变更（manual_major=False）：若 (next_num // 阈值) - (pre_num // 阈值) >= 1，
-      则大版本号 +1、小版本号归 0；否则小版本号 +1。
     - 手动变更（manual_major=True）：无论增量多少，大版本号 +1、小版本号归 0。
       manual_remark 非空则用其作为 remark，否则生成默认说明。
+    - 自动变更（manual_major=False）：
+      * apply_threshold=True（默认，图片批量导入场景）：若 (next_num // 阈值) - (pre_num // 阈值) >= 1，
+        则大版本号 +1、小版本号归 0；否则小版本号 +1。阈值取自 SAMPLE_MAJOR_VERSION_THRESHOLD。
+      * apply_threshold=False（时序清洗结果入库等场景）：不参考阈值，直接小版本号 +1。
+
+    sample_label 用于生成默认 remark 中的样本计量单位文案（如"图片"/"样本"）。
 
     返回: {pre_num, next_num, pre_version, next_version, remark, change_flag}
     """
@@ -1768,18 +1774,18 @@ def apply_sample_set_version_change(
                 change_flag = 1
                 remark = (manual_remark or "").strip()
                 if not remark:
-                    remark = f"本次新增图片{added_count}张，总数{next_num}张，手动变更大版本"
+                    remark = f"本次新增{sample_label}{added_count}条，总数{next_num}条，手动变更大版本"
             else:
                 change_flag = 0
-                crossed = (next_num // threshold) - (pre_num // threshold)
+                crossed = ((next_num // threshold) - (pre_num // threshold)) if apply_threshold else 0
                 if crossed >= 1:
                     new_major = major + 1
                     new_minor = 0
-                    remark = f"本次新增图片{added_count}张，总数{next_num}张，达到了大版本变更阈值，大版本号+1"
+                    remark = f"本次新增{sample_label}{added_count}条，总数{next_num}条，达到了大版本变更阈值，大版本号+1"
                 else:
                     new_major = major
                     new_minor = minor + 1
-                    remark = f"本次新增图片{added_count}张，小版本号加1"
+                    remark = f"本次新增{sample_label}{added_count}条，小版本号加1"
 
             next_version_str = f"{new_major}.{new_minor}"
 

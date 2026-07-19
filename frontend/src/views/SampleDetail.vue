@@ -864,7 +864,7 @@ onMounted(() => {
         <div class="page-header">
           <div class="page-title">
             <h2>
-              <span class="back-btn" @click="goBack" title="返回样本集管理">
+              <span class="back-btn" @click="goBack" title="返回高质量样本集管理">
                 <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 18l-6-6 6-6"/></svg>
               </span>
               {{ setName || setNo }}

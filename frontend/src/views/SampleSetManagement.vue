@@ -574,14 +574,14 @@ async function handleBatchConfirm() {
 
 <template>
   <div class="app-layout">
-    <Header title="模型能力展示与体验工作台" subtitle="样本集管理" />
+    <Header title="模型能力展示与体验工作台" subtitle="高质量样本集管理" />
     <div class="main-content">
       <Sidebar />
       <main class="content-area">
         <div class="page-header">
           <div class="page-title">
-            <h2>样本集管理</h2>
-            <p>管理和浏览全部样本集，支持多维度筛选与排序</p>
+            <h2>高质量样本集管理</h2>
+            <p>管理和浏览全部高质量样本集，支持多维度筛选与排序</p>
           </div>
           <div class="page-actions">
             <el-button type="primary" @click="openCreateDialog">新建样本集</el-button>

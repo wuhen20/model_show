@@ -195,6 +195,8 @@ const importVisible = ref(false)
 const importItem = ref<CleanResult | null>(null)
 const importSetNo = ref('')
 const importSampleName = ref('')
+const importMajorVersion = ref(false)
+const importVersionRemark = ref('')
 const importSaving = ref(false)
 const sampleSetOptions = ref<SampleSetOption[]>([])
 
@@ -204,6 +206,8 @@ async function handleImport(item: CleanResult) {
   // 默认样本名称为文件名（去掉.json后缀）
   const fileName = item.fileName || ''
   importSampleName.value = fileName.endsWith('.json') ? fileName.replace('.json', '') : fileName
+  importMajorVersion.value = false
+  importVersionRemark.value = ''
   importVisible.value = true
   // 加载样本集选项，按当前数据的类型过滤
   try {
@@ -218,11 +222,25 @@ async function confirmImport() {
     ElMessage.warning('请选择目标样本集')
     return
   }
+  if (importVersionRemark.value.length > 150) {
+    ElMessage.warning('变更说明不能超过 150 个字')
+    return
+  }
   if (!importItem.value) return
   importSaving.value = true
   try {
-    await importToSample(importItem.value.recordId, importSetNo.value, importSampleName.value)
-    ElMessage.success('入库成功')
+    const result = await importToSample(
+      importItem.value.recordId,
+      importSetNo.value,
+      importSampleName.value,
+      importMajorVersion.value,
+      importVersionRemark.value.trim()
+    )
+    let msg = '入库成功'
+    if (result?.preVersion && result?.nextVersion) {
+      msg += `，版本 ${result.preVersion} → ${result.nextVersion}`
+    }
+    ElMessage.success(msg)
     importVisible.value = false
   } catch (e: any) {
     ElMessage.error(e.message || '入库失败')
@@ -410,7 +428,7 @@ onMounted(() => {
     </el-dialog>
 
     <!-- 入库弹框 -->
-    <el-dialog v-model="importVisible" title="清洗结果入库" width="480px" :close-on-click-modal="false" class="download-dialog">
+    <el-dialog v-model="importVisible" title="清洗结果入库" width="520px" :close-on-click-modal="false" class="download-dialog">
       <div class="download-form">
         <div class="download-label">样本名称：</div>
         <el-input v-model="importSampleName" placeholder="请输入样本名称" style="width: 100%" size="default" />
@@ -419,6 +437,24 @@ onMounted(() => {
           <el-option v-for="opt in sampleSetOptions" :key="opt.setNo" :label="`${opt.setName}（${opt.setNo}）`" :value="opt.setNo" />
         </el-select>
         <div class="import-hint" v-if="importItem">将清洗结果文件 <b>{{ importItem.fileName }}</b> 入库到所选样本集</div>
+        <div class="import-version-row">
+          <el-checkbox v-model="importMajorVersion">大版本变更</el-checkbox>
+        </div>
+        <div v-if="importMajorVersion" class="import-remark-row">
+          <div class="download-label" style="margin-bottom: 6px;">变更说明<span class="import-remark-tip">（非必填，最多 150 字）</span></div>
+          <el-input
+            v-model="importVersionRemark"
+            type="textarea"
+            :rows="3"
+            placeholder="请输入变更说明，留空则自动生成"
+            maxlength="150"
+            show-word-limit
+          />
+        </div>
+        <div class="import-version-tip">
+          <span v-if="!importMajorVersion">未勾选：入库后小版本号 +1</span>
+          <span v-else>已勾选：入库后大版本号 +1，小版本号归 0</span>
+        </div>
       </div>
       <template #footer>
         <el-button @click="importVisible = false">取消</el-button>
@@ -843,6 +879,30 @@ onMounted(() => {
   }
 }
 
+.import-version-row {
+  margin-top: 16px;
+
+  :deep(.el-checkbox__label) {
+    color: rgba(255, 255, 255, 0.85);
+  }
+}
+
+.import-remark-row {
+  margin-top: 10px;
+}
+
+.import-remark-tip {
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.35);
+  margin-left: 4px;
+}
+
+.import-version-tip {
+  margin-top: 12px;
+  font-size: 12px;
+  color: rgba(0, 212, 255, 0.7);
+}
+
 // ========== Element Plus 深色主题覆盖 ==========
 :deep(.el-input__wrapper) {
   background: rgba(0, 0, 0, 0.3);
@@ -921,6 +981,36 @@ onMounted(() => {
 
 :deep(.el-radio__input.is-checked + .el-radio__label) {
   color: #00d4ff;
+}
+
+:deep(.el-checkbox__input.is-checked .el-checkbox__inner) {
+  background: #00d4ff;
+  border-color: #00d4ff;
+}
+
+:deep(.el-checkbox__input.is-checked + .el-checkbox__label) {
+  color: #00d4ff;
+}
+
+:deep(.el-textarea__inner) {
+  background: rgba(0, 0, 0, 0.3);
+  border: 1px solid rgba(0, 212, 255, 0.2);
+  box-shadow: none;
+  color: #e6edf3;
+
+  &:hover,
+  &:focus {
+    border-color: rgba(0, 212, 255, 0.5);
+  }
+
+  &::placeholder {
+    color: rgba(255, 255, 255, 0.3);
+  }
+}
+
+:deep(.el-input__count) {
+  background: transparent;
+  color: rgba(255, 255, 255, 0.4);
 }
 
 :deep(.el-pager li) {

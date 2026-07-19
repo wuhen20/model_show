@@ -34,7 +34,7 @@ const menuItems: MenuItem[] = [
   { id: 'center', name: '样本中心', icon: 'database', path: '/sample' },
   {
     id: 'sampleset', name: '样本集管理', icon: 'folder', children: [
-      { id: 'sampleset-base', name: '样本集管理', path: '/sample-set' },
+      { id: 'sampleset-base', name: '高质量样本集管理', path: '/sample-set' },
       { id: 'sampleset-original', name: '原始样本管理', path: '/original-sample-set' },
       { id: 'sampleset-ts', name: '时序样本集管理', path: '/timeseries/sample-set' },
       { id: 'sampleset-collect', name: '数据采集任务', path: '/collect-task' },

@@ -393,7 +393,7 @@ onUnmounted(() => {
             <p>构建高质量训练样本体系，支撑模型训练与业务应用</p>
           </div>
           <div class="page-actions">
-            <el-button type="primary" @click="router.push('/sample-set')">样本集管理</el-button>
+            <el-button type="primary" @click="router.push('/sample-set')">高质量样本集管理</el-button>
           </div>
         </div>
 
