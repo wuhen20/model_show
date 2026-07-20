@@ -72,17 +72,24 @@ const viewLoading = ref(false)
 const viewData = ref<CleanResultData | null>(null)
 const viewCurrentPage = ref(1)
 const viewPageSize = 20
+// 当前查看的记录ID，翻页时复用
+const viewCurrentRecordId = ref<number>(0)
+// 总条数（来自后端，避免依赖 viewData.rows.length）
+const viewTotal = ref(0)
 
-const viewPagedRows = computed(() => {
-  if (!viewData.value?.rows) return []
-  const start = (viewCurrentPage.value - 1) * viewPageSize
-  return viewData.value.rows.slice(start, start + viewPageSize)
-})
-
-const viewTotalPages = computed(() => {
-  if (!viewData.value?.rows) return 0
-  return Math.ceil(viewData.value.rows.length / viewPageSize)
-})
+// 翻页时请求后端对应页数据
+async function handleViewPageChange(page: number) {
+  if (!viewCurrentRecordId.value || page === viewCurrentPage.value) return
+  viewCurrentPage.value = page
+  viewLoading.value = true
+  try {
+    viewData.value = await viewCleanResult(viewCurrentRecordId.value, page, viewPageSize)
+  } catch (e: any) {
+    ElMessage.error(e.message || '加载失败')
+  } finally {
+    viewLoading.value = false
+  }
+}
 
 async function handleView(item: CleanResult) {
   // 图片类型清洗结果：查询被清洗的图片记录并展示
@@ -90,13 +97,17 @@ async function handleView(item: CleanResult) {
     await handleViewImageResult(item)
     return
   }
-  // 时序/结构化类型：查看 JSON 结果文件
+  // 时序/结构化类型：查看 JSON 结果文件（服务端分页）
   viewVisible.value = true
   viewLoading.value = true
   viewData.value = null
   viewCurrentPage.value = 1
+  viewCurrentRecordId.value = item.recordId
+  viewTotal.value = 0
   try {
-    viewData.value = await viewCleanResult(item.recordId)
+    const res = await viewCleanResult(item.recordId, 1, viewPageSize)
+    viewData.value = res
+    viewTotal.value = res.total || 0
   } catch (e: any) {
     ElMessage.error(e.message || '查看失败')
   } finally {
@@ -352,23 +363,24 @@ onMounted(() => {
               </tr>
             </thead>
             <tbody>
-              <tr v-for="(row, idx) in viewPagedRows" :key="idx">
+              <tr v-for="(row, idx) in viewData.rows" :key="idx">
                 <td class="td-index">{{ (viewCurrentPage - 1) * viewPageSize + idx + 1 }}</td>
                 <td v-for="col in viewData.columns" :key="col" :title="String(row[col] ?? '')">{{ row[col] ?? '' }}</td>
               </tr>
-              <tr v-if="viewPagedRows.length === 0">
+              <tr v-if="viewData.rows.length === 0">
                 <td :colspan="viewData.columns.length + 1" class="td-empty">暂无数据</td>
               </tr>
             </tbody>
           </table>
         </div>
-        <div class="view-pagination" v-if="viewData.rows.length > viewPageSize">
+        <div class="view-pagination" v-if="viewTotal > viewPageSize">
           <el-pagination
             v-model:current-page="viewCurrentPage"
             :page-size="viewPageSize"
-            :total="viewData.rows.length"
-            layout="prev, pager, next"
+            :total="viewTotal"
+            layout="prev, pager, next, total"
             background
+            @current-change="handleViewPageChange"
           />
         </div>
       </div>

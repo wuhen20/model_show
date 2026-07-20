@@ -39,6 +39,24 @@ export async function saveSampleSet(params: SaveSampleSetParams): Promise<void> 
   if (json.code !== 0) throw new Error(json.message || '保存失败')
 }
 
+export interface UpdateSampleSetParams {
+  setNo: string
+  description: string
+  businessSystem: string
+  sampleFieldCode: string
+  sampleFieldName: string
+}
+
+export async function updateSampleSet(params: UpdateSampleSetParams): Promise<void> {
+  const res = await fetch(`${BASE_URL}/update-sample-set`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(params)
+  })
+  const json = await res.json()
+  if (json.code !== 0) throw new Error(json.message || '更新失败')
+}
+
 export interface SampleSetRow {
   [key: string]: any
 }
@@ -108,8 +126,8 @@ export interface AnnotationData {
   boxes: AnnotationBox[]
 }
 
-export async function getAnnotations(filePath: string): Promise<AnnotationData> {
-  const res = await fetch(`${BASE_URL}/get-annotations?filePath=${encodeURIComponent(filePath)}`)
+export async function getAnnotations(sampleNo: string): Promise<AnnotationData> {
+  const res = await fetch(`${BASE_URL}/get-annotations?sampleNo=${encodeURIComponent(sampleNo)}`)
   const json = await res.json()
   if (json.code !== 0) throw new Error(json.message || '获取标注信息失败')
   return json.data

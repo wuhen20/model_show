@@ -362,6 +362,7 @@ def query_sample_set():
                     {_date_format('s.update_time')} as update_time,
                     {_date_format('s.create_time')} as create_time,
                     s.version,
+                    s.sample_labels,
                     s.sample_field as sample_field_code,
                     (
                     select
@@ -407,7 +408,8 @@ def query_sample_info(set_no: str):
                     s.label_flag as label_flag_code,
 	                case s.label_flag when 1 then '已标注' else '未标注' end as label_flag,
                     s.sample_score,
-                    s.label_think
+                    s.label_think,
+                    s.label_content
                 from
                     s_sample_info s
                 where
@@ -425,12 +427,69 @@ def save_sample_set(data: dict):
     try:
         with conn.cursor() as cursor:
             sql = """
-                INSERT INTO s_sample_set (set_no, set_name, set_description, business_system, type_code, sample_field, set_path)
-                VALUES (%(setCode)s, %(setName)s, %(description)s, %(businessSystem)s, %(sampleTypeCode)s, %(sampleFieldCode)s, %(setPath)s)
+                INSERT INTO s_sample_set (set_no, set_name, set_description, business_system, type_code, sample_field, set_path, sample_labels)
+                VALUES (%(setCode)s, %(setName)s, %(description)s, %(businessSystem)s, %(sampleTypeCode)s, %(sampleFieldCode)s, %(setPath)s, %(sampleLabels)s)
             """
             _execute(cursor, sql, data)
         conn.commit()
         return cursor.rowcount
+    finally:
+        conn.close()
+
+
+def update_sample_set(data: dict):
+    """更新样本集（不允许修改 set_name 和 type_code，不更新 version）
+
+    可修改字段：set_description, business_system, sample_field, sample_labels
+    """
+    conn = get_connection()
+    try:
+        with conn.cursor() as cursor:
+            sql = """
+                UPDATE s_sample_set
+                SET set_description = %(description)s,
+                    business_system = %(businessSystem)s,
+                    sample_field = %(sampleFieldCode)s,
+                    sample_labels = %(sampleLabels)s
+                WHERE set_no = %(setNo)s
+            """
+            _execute(cursor, sql, data)
+        conn.commit()
+        return cursor.rowcount
+    finally:
+        conn.close()
+
+
+def update_sample_set_labels(set_no: str, sample_labels: str):
+    """仅更新样本集的 sample_labels 字段（上传 classes.txt 时调用）"""
+    conn = get_connection()
+    try:
+        with conn.cursor() as cursor:
+            sql = "UPDATE s_sample_set SET sample_labels = %s WHERE set_no = %s"
+            _execute(cursor, sql, (sample_labels, set_no))
+        conn.commit()
+        return cursor.rowcount
+    finally:
+        conn.close()
+
+
+def get_annotation_by_sample_no(sample_no: str):
+    """通过 sample_no 查询样本的标注信息：返回 {label_content, sample_labels}
+
+    用于 /get-annotations 接口：从 DB 读取 label_content（图片同名 txt 内容）
+    和 sample_labels（classes.txt 内容），替代原磁盘读取逻辑。
+    """
+    conn = get_connection()
+    try:
+        with conn.cursor() as cursor:
+            sql = """
+                SELECT s.label_content, ss.sample_labels
+                FROM s_sample_info s
+                JOIN s_sample_set ss ON s.set_no = ss.set_no
+                WHERE s.sample_no = %s
+            """
+            _execute(cursor, sql, (sample_no,))
+            return cursor.fetchone()
     finally:
         conn.close()
 
@@ -440,10 +499,9 @@ def get_sample_set_path(set_no: str):
     conn = get_connection()
     try:
         with conn.cursor() as cursor:
-            sql = "SELECT set_path FROM s_sample_set WHERE set_no = %s"
+            sql = "SELECT set_path, set_name, sample_labels FROM s_sample_set WHERE set_no = %s"
             _execute(cursor, sql, (set_no,))
-            row = cursor.fetchone()
-            return row["set_path"] if row else None
+            return cursor.fetchone()
     finally:
         conn.close()
 
@@ -608,18 +666,24 @@ def query_audio_text(sample_no: str, sample_name: str):
         conn.close()
 
 
-def insert_sample_info(set_no: str, sample_name: str, suffix: str, type_code: str, file_path: str, file_size: int, label_flag: int = 0):
-    """插入样本信息到 s_sample_info 表
+def insert_sample_info(set_no: str, sample_name: str, suffix: str, type_code: str, file_path: str, file_size: int, label_flag: int = 0, label_content: str = ""):
+    """插入样本信息到 s_sample_info 表，自动生成 sample_no（set_no + 5位序列号）
+
     label_flag: 0-未标注, 1-已标注（图片有同名txt标注文件时为1）
+    label_content: 图片同名 txt 标注文件的原始内容（仅图片类型，保持原内容不变形）
     """
+    # 生成 sample_no: set_no + 5位序列号
+    seq = _get_next_sequence(f'SAMPLE_NO_{set_no}', set_no)
+    sample_no = f"{set_no}{seq:05d}"
+
     conn = get_connection()
     try:
         with conn.cursor() as cursor:
             sql = """
-                INSERT INTO s_sample_info (set_no, sample_name, suffix, type_code, file_path, file_size, label_flag)
-                VALUES (%s, %s, %s, %s, %s, %s, %s)
+                INSERT INTO s_sample_info (sample_no, set_no, sample_name, suffix, type_code, file_path, file_size, label_flag, label_content)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
             """
-            _execute(cursor, sql, (set_no, sample_name, suffix, type_code, file_path, file_size, label_flag))
+            _execute(cursor, sql, (sample_no, set_no, sample_name, suffix, type_code, file_path, file_size, label_flag, label_content))
         conn.commit()
         return cursor.rowcount
     finally:
@@ -748,6 +812,28 @@ def save_original_sample_set(data: dict):
         conn.close()
 
 
+def update_original_sample_set(data: dict):
+    """更新原始样本集（不允许修改 set_name 和 type_code，不更新 version）
+
+    可修改字段：set_description, business_system, sample_field
+    """
+    conn = get_connection()
+    try:
+        with conn.cursor() as cursor:
+            sql = """
+                UPDATE s_original_sample_set
+                SET set_description = %(description)s,
+                    business_system = %(businessSystem)s,
+                    sample_field = %(sampleFieldCode)s
+                WHERE set_no = %(setNo)s
+            """
+            _execute(cursor, sql, data)
+        conn.commit()
+        return cursor.rowcount
+    finally:
+        conn.close()
+
+
 def query_original_sample_info(set_no: str):
     """查询原始样本集下的样本列表"""
     conn = get_connection()
@@ -868,11 +954,16 @@ def query_time_series_data_by_set_no(set_no: str, page: int = 1, page_size: int 
         conn.close()
 
 
-def insert_original_sample_info(set_no: str, sample_name: str, suffix: str, type_code: str, file_path: str, file_size: int, label_flag: int = 0):
-    """插入原始样本信息，自动生成 sample_no
+def insert_original_sample_info(set_no: str, sample_name: str, suffix: str, type_code: str, file_path: str, file_size: int, label_flag: int = 0, label_content: str = ""):
+    """插入原始样本信息，自动生成 sample_no（set_no + 5位序列号）
+
     label_flag: 0-未标注, 1-已标注（图片有同名txt标注文件时为1）
+    label_content: 接受该参数以与 insert_sample_info 保持一致的回调签名，但原始样本不写标注内容，直接忽略。
     """
-    sample_no = generate_sample_no()
+    # 生成 sample_no: set_no + 5位序列号
+    seq = _get_next_sequence(f'SAMPLE_NO_{set_no}', set_no)
+    sample_no = f"{set_no}{seq:05d}"
+
     conn = get_connection()
     try:
         with conn.cursor() as cursor:

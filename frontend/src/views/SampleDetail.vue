@@ -381,7 +381,7 @@ function handleDownloadTimeSeries(row: SampleInfoRow) {
 
 // 隐藏的字段（不需要在表格中展示）
 const hiddenColumns = computed(() => {
-  const base = new Set(['recordId', 'sampleNo', 'typeCode', 'filePath', 'fileName', 'labelFlagCode', 'sampleScore', 'labelThink'])
+  const base = new Set(['recordId', 'sampleNo', 'typeCode', 'filePath', 'fileName', 'labelFlagCode', 'sampleScore', 'labelThink', 'labelContent'])
   if (isTimeSeriesSet.value) {
     base.add('labelFlag')
   }
@@ -612,7 +612,7 @@ async function openPreview(row: SampleInfoRow) {
     thinkCollapsed.value = !thinkText  // 有值则展开，无值则最小化
 
     try {
-      const ann = await getAnnotations(filePath)
+      const ann = await getAnnotations(String(row.sampleNo || ''))
       annotationData.value = ann
     } catch {
       annotationData.value = null
@@ -653,14 +653,14 @@ function drawAnnotations(highlightIndex?: number | null) {
     const nw = img.naturalWidth
     const nh = img.naturalHeight
 
-    // 分栏布局下，左侧图片区约占 65% 宽度
-    const containerW = Math.round(window.innerWidth * 0.9 * 0.65)
-    const containerH = Math.round(window.innerHeight * 0.82)
+    // 使用 canvas 容器的实际尺寸来计算缩放
+    const scrollContainer = canvas.parentElement
+    const containerW = scrollContainer ? scrollContainer.clientWidth : Math.round(window.innerWidth * 0.9 * 0.65)
+    const containerH = scrollContainer ? scrollContainer.clientHeight : Math.round(window.innerHeight * 0.82)
 
     const scaleByW = containerW / nw
     const scaleByH = containerH / nh
-    const baseScale = Math.min(scaleByW, scaleByH)
-    const scale = Math.min(baseScale * 1.2, 2)
+    const scale = Math.min(scaleByW, scaleByH)
 
     const displayW = Math.round(nw * scale)
     const displayH = Math.round(nh * scale)
@@ -864,7 +864,7 @@ onMounted(() => {
         <div class="page-header">
           <div class="page-title">
             <h2>
-              <span class="back-btn" @click="goBack" title="返回高质量样本集管理">
+              <span class="back-btn" @click="goBack" title="返回高质量样本管理">
                 <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 18l-6-6 6-6"/></svg>
               </span>
               {{ setName || setNo }}
@@ -1015,7 +1015,7 @@ onMounted(() => {
         </div>
         <div class="upload-info-row">
           <span class="upload-info-label">允许格式：</span>
-          <span class="upload-info-value">{{ typeCode === '05' ? '图像文件（jpg/png/bmp等），可附带同名txt标注和classes.txt' : typeCode === '02' ? '文本文件（txt/csv/doc等）' : typeCode === '03' ? '音频文件（mp3/wav等）' : typeCode === '04' ? '视频文件（mp4/avi等）' : '不限' }}</span>
+          <span class="upload-info-value">{{ typeCode === '05' ? '图像文件（jpg/png/bmp等）' : typeCode === '02' ? '文本文件（txt/csv/doc等）' : typeCode === '03' ? '音频文件（mp3/wav等）' : typeCode === '04' ? '视频文件（mp4/avi等）' : '不限' }}</span>
         </div>
         <el-upload
           :accept="typeCodeToAccept[typeCode] || ''"
@@ -1050,7 +1050,7 @@ onMounted(() => {
         </div>
         <div class="upload-info-row">
           <span class="upload-info-label">说明：</span>
-          <span class="upload-info-value">上传 ZIP，自动解压图片与同名 .txt 标注、classes.txt 到样本集目录</span>
+          <span class="upload-info-value">上传 ZIP，自动解压图片；同名 .txt 标注和 classes.txt 内容将写入数据库</span>
         </div>
         <el-upload
           ref="batchUploadRef"

@@ -56,6 +56,17 @@ class Settings(BaseSettings):
     # 上传临时文件目录，用于批量导入大 ZIP 文件的临时存储；为空则使用系统临时目录（C:\Users\...\AppData\Local\Temp）
     upload_tmp_dir: str = ""
 
+    # ---- 样本文件存储类型 ----
+    # 01-本地路径（默认，沿用 sample_upload_dir），02-minio 对象存储
+    storage_type: str = "01"
+    # MinIO 连接配置（storage_type=02 时生效）
+    minio_endpoint: str = "localhost:9000"
+    minio_access_key: str = ""
+    minio_secret_key: str = ""
+    minio_secure: bool = False
+    # 桶名称：新建样本集时在该桶下以 setNo 作为前缀创建路径
+    minio_bucket: str = "samples"
+
     # ---- 样本集版本管理 ----
     # 大版本变更阈值：样本总量每达到该阈值的下一个整数倍，大版本号 +1，小版本号归 0
     sample_major_version_threshold: int = 100

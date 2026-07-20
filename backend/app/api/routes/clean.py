@@ -585,9 +585,52 @@ def query_clean_results_api():
         return {"code": 1, "message": f"查询失败: {str(e)}"}
 
 
+# 清洗结果文件内存缓存：{record_id: {"mtime": float, "data": dict, "loaded_at": float}}
+# 同一文件首次访问时全量解析，后续分页请求直接从缓存切片，避免重复IO和解析
+_clean_result_cache: dict = {}
+_CLEAN_CACHE_MAX = 10  # 最多缓存10个文件，防止内存占用过大
+import time as _time
+
+
+def _load_clean_result_with_cache(record_id: int, file_path: str) -> dict:
+    """加载清洗结果JSON，带文件mtime校验的内存缓存。
+    文件未变更时直接返回缓存，变更后重新加载。"""
+    try:
+        mtime = os.path.getmtime(file_path)
+    except OSError:
+        mtime = 0
+
+    cached = _clean_result_cache.get(record_id)
+    if cached and cached.get("mtime") == mtime:
+        return cached["data"]
+
+    with open(file_path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+
+    # 缓存淘汰：超过上限时移除最早加载的项
+    if len(_clean_result_cache) >= _CLEAN_CACHE_MAX:
+        oldest_key = min(
+            _clean_result_cache.keys(),
+            key=lambda k: _clean_result_cache[k].get("loaded_at", 0),
+        )
+        _clean_result_cache.pop(oldest_key, None)
+
+    _clean_result_cache[record_id] = {
+        "mtime": mtime,
+        "data": data,
+        "loaded_at": _time.time(),
+    }
+    return data
+
+
 @router.get("/view-clean-result")
-def view_clean_result_api(recordId: int = Query(..., description="记录ID")):
-    """查看清洗结果 JSON 文件内容"""
+def view_clean_result_api(
+    recordId: int = Query(..., description="记录ID"),
+    page: int = Query(1, ge=1, description="页码，从1开始"),
+    pageSize: int = Query(20, ge=1, le=500, description="每页条数，最大500"),
+):
+    """查看清洗结果 JSON 文件内容（分页返回）。
+    首次请求加载并缓存整个文件，后续分页请求从缓存切片返回。"""
     try:
         conn = get_connection()
         try:
@@ -605,10 +648,32 @@ def view_clean_result_api(recordId: int = Query(..., description="记录ID")):
         if not os.path.exists(file_path):
             return {"code": 1, "message": f"文件不存在：{file_path}"}
 
-        with open(file_path, "r", encoding="utf-8") as f:
-            data = json.load(f)
+        # 带缓存加载
+        data = _load_clean_result_with_cache(recordId, file_path)
 
-        return {"code": 0, "data": data}
+        all_rows = data.get("rows", []) or []
+        total = len(all_rows)
+        # 切片当前页
+        start = (page - 1) * pageSize
+        end = start + pageSize
+        page_rows = all_rows[start:end]
+
+        return {
+            "code": 0,
+            "data": {
+                "taskNo": data.get("taskNo", ""),
+                "taskName": data.get("taskName", ""),
+                "executeTime": data.get("executeTime", ""),
+                "totalCount": data.get("totalCount", 0),
+                "removedCount": data.get("removedCount", 0),
+                "resultCount": data.get("resultCount", total),
+                "columns": data.get("columns", []),
+                "rows": page_rows,
+                "total": total,
+                "page": page,
+                "pageSize": pageSize,
+            },
+        }
     except Exception as e:
         logger.exception("查看清洗结果异常")
         return {"code": 1, "message": f"查看失败: {str(e)}"}

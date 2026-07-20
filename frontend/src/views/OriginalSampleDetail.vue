@@ -49,7 +49,7 @@ const typeCodeToExtensions: Record<string, string[]> = {
 
 // 样本类型编码 → 允许的 accept 值
 const typeCodeToAccept: Record<string, string> = {
-  '05': 'image/*,.txt',
+  '05': 'image/*',
   '02': '.txt,.csv,.json,.xml,.doc,.docx,.pdf',
   '03': 'audio/*',
   '04': 'video/*',
@@ -75,13 +75,11 @@ async function handleUploadConfirm() {
     return
   }
 
-  // 前端校验文件类型（图片类型允许额外附带 .txt 标注文件）
+  // 前端校验文件类型（原始样本仅上传图片，不支持 txt 标注文件）
   const allowedExts = typeCodeToExtensions[typeCode.value]
   if (allowedExts) {
-    const isImageType = typeCode.value === '05'
     const invalidFiles = uploadFileList.value.filter(f => {
       const ext = '.' + f.name.split('.').pop()?.toLowerCase()
-      if (isImageType && ext === '.txt') return false
       return !allowedExts.includes(ext)
     })
     if (invalidFiles.length > 0) {
@@ -294,7 +292,7 @@ function goBack() {
 }
 
 // 隐藏的字段（不需要在表格中展示）
-const hiddenColumns = new Set(['recordId', 'sampleNo', 'typeCode', 'filePath', 'fileName', 'labelFlagCode', 'sampleScore', 'labelThink'])
+const hiddenColumns = new Set(['recordId', 'sampleNo', 'typeCode', 'filePath', 'fileName', 'labelFlagCode', 'sampleScore', 'labelThink', 'labelContent'])
 
 // ========== 文件预览 ==========
 const imageExtSet = new Set(['jpg', 'jpeg', 'png', 'bmp', 'gif', 'webp', 'tif', 'tiff'])
@@ -520,7 +518,7 @@ async function openPreview(row: SampleInfoRow) {
     thinkCollapsed.value = !thinkText  // 有值则展开，无值则最小化
 
     try {
-      const ann = await getAnnotations(filePath)
+      const ann = await getAnnotations(String(row.sampleNo || ''))
       annotationData.value = ann
     } catch {
       annotationData.value = null
@@ -891,7 +889,7 @@ onMounted(() => {
         </div>
         <div class="upload-info-row">
           <span class="upload-info-label">允许格式：</span>
-          <span class="upload-info-value">{{ typeCode === '05' ? '图像文件（jpg/png/bmp等），可附带同名txt标注和classes.txt' : typeCode === '02' ? '文本文件（txt/csv/doc等）' : typeCode === '03' ? '音频文件（mp3/wav等）' : typeCode === '04' ? '视频文件（mp4/avi等）' : '不限' }}</span>
+          <span class="upload-info-value">{{ typeCode === '05' ? '图像文件（jpg/png/bmp等）' : typeCode === '02' ? '文本文件（txt/csv/doc等）' : typeCode === '03' ? '音频文件（mp3/wav等）' : typeCode === '04' ? '视频文件（mp4/avi等）' : '不限' }}</span>
         </div>
         <el-upload
           :accept="typeCodeToAccept[typeCode] || ''"
@@ -907,7 +905,7 @@ onMounted(() => {
               <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M17 8l-5-5-5 5M12 3v12"/>
             </svg>
             <p>将文件拖到此处，或<em>点击上传</em></p>
-            <p class="upload-tip">图片类型可同时选择图片和同名txt标注文件</p>
+            <p class="upload-tip">原始样本仅上传图片，不支持 txt 标注文件</p>
           </div>
         </el-upload>
       </div>
@@ -926,7 +924,7 @@ onMounted(() => {
         </div>
         <div class="upload-info-row">
           <span class="upload-info-label">说明：</span>
-          <span class="upload-info-value">上传 ZIP，自动解压图片与同名 .txt 标注、classes.txt 到样本集目录</span>
+          <span class="upload-info-value">上传 ZIP，自动解压图片到样本集目录；原始样本仅导入图片</span>
         </div>
         <el-upload
           accept=".zip"

@@ -3,10 +3,17 @@ from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 from app.core.database import (
     query_code_dict, query_original_sample_set, query_original_sample_info,
-    save_original_sample_set, insert_original_sample_info,
+    save_original_sample_set, update_original_sample_set, insert_original_sample_info,
     update_original_sample_score, update_original_label_think, query_audio_text,
     generate_sample_set_no, query_time_series_data_by_set_no,
     get_original_sample_set_path,
+)
+from app.services.sample_minio_service import (
+    is_minio_enabled, is_minio_path,
+    upload_image as minio_upload_image,
+    download_image as minio_download_image,
+    build_set_path as minio_build_set_path,
+    list_object_names as minio_list_object_names,
 )
 import os
 import io
@@ -69,14 +76,27 @@ class SaveSampleSetRequest(BaseModel):
     sampleFieldName: str = ""
 
 
+class UpdateSampleSetRequest(BaseModel):
+    """更新原始样本集请求（不允许修改 set_name 和 type_code）"""
+    setNo: str
+    description: str = ""
+    businessSystem: str = ""
+    sampleFieldCode: str = ""
+    sampleFieldName: str = ""
+
+
 @router.post("/save-sample-set")
 def save_sample_set_api(req: SaveSampleSetRequest):
     try:
         from app.core.config import settings
         set_no = generate_sample_set_no()
-        # 生成以样本集名称命名的文件夹，路径写入 set_path
-        set_path = os.path.join(settings.sample_upload_dir, req.setName)
-        os.makedirs(set_path, exist_ok=True)
+        # 根据存储类型生成 set_path
+        if is_minio_enabled():
+            set_path = minio_build_set_path(set_no)
+        else:
+            # 本地模式：生成以样本集名称命名的文件夹
+            set_path = os.path.join(settings.sample_upload_dir, req.setName)
+            os.makedirs(set_path, exist_ok=True)
         # 只保留 SQL 需要的字段，避免 Oracle 报错多余的参数
         data = {
             'setCode': set_no,
@@ -92,6 +112,27 @@ def save_sample_set_api(req: SaveSampleSetRequest):
     except Exception as e:
         logger.exception("接口异常")
         return {"code": 1, "message": f"保存失败: {str(e)}"}
+
+
+@router.post("/update-sample-set")
+def update_sample_set_api(req: UpdateSampleSetRequest):
+    """更新原始样本集（不允许修改 set_name 和 type_code，不更新 version）"""
+    try:
+        if not req.setNo:
+            return {"code": 1, "message": "样本集编号不能为空"}
+        data = {
+            'setNo': req.setNo,
+            'description': req.description,
+            'businessSystem': req.businessSystem,
+            'sampleFieldCode': req.sampleFieldCode,
+        }
+        rowcount = update_original_sample_set(data)
+        if rowcount == 0:
+            return {"code": 1, "message": "未找到对应样本集"}
+        return {"code": 0, "message": "更新成功"}
+    except Exception as e:
+        logger.exception("接口异常")
+        return {"code": 1, "message": f"更新失败: {str(e)}"}
 
 
 @router.get("/get-samples")
@@ -246,6 +287,26 @@ def query_time_series_data_api(
 @router.get("/serve-image")
 def serve_image(filePath: str = Query(..., description="图片文件路径")):
     """读取并返回图片文件"""
+    # MinIO 路径：从 MinIO 下载后返回
+    if is_minio_path(filePath):
+        try:
+            content = minio_download_image(filePath)
+        except Exception as e:
+            logger.exception("MinIO 下载失败")
+            return {"code": 1, "message": f"图片文件不存在: {filePath}, 错误: {e}"}
+        ext = os.path.splitext(filePath)[1].lower()
+        content_types = {
+            ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png",
+            ".bmp": "image/bmp", ".gif": "image/gif", ".webp": "image/webp",
+            ".tif": "image/tiff", ".tiff": "image/tiff",
+            ".mp3": "audio/mpeg", ".wav": "audio/wav", ".ogg": "audio/ogg",
+            ".flac": "audio/flac", ".aac": "audio/aac", ".wma": "audio/x-ms-wma",
+            ".m4a": "audio/mp4",
+        }
+        media_type = content_types.get(ext, "application/octet-stream")
+        return StreamingResponse(io.BytesIO(content), media_type=media_type)
+
+    # 本地路径
     filePath = os.path.normpath(filePath)
     if not os.path.isfile(filePath):
         return {"code": 1, "message": f"图片文件不存在: {filePath}"}
@@ -263,53 +324,9 @@ def serve_image(filePath: str = Query(..., description="图片文件路径")):
 
 
 @router.get("/get-annotations")
-def get_annotations(filePath: str = Query(..., description="图片文件路径")):
-    """获取 YOLO 标注信息：读取同目录下 class.txt 和同名 .txt 标注文件"""
-    filePath = os.path.normpath(filePath)
-    dir_path = os.path.dirname(filePath)
-    base_name = os.path.splitext(os.path.basename(filePath))[0]
-    ext = os.path.splitext(filePath)[1].lower()
-
-    image_exts = {".jpg", ".jpeg", ".png", ".bmp", ".gif", ".webp", ".tif", ".tiff"}
-    if ext not in image_exts:
-        return {"code": 0, "data": {"hasAnnotations": False}}
-
-    class_file = os.path.normpath(os.path.join(dir_path, "classes.txt"))
-    label_file = os.path.normpath(os.path.join(dir_path, base_name + ".txt"))
-
-    if not os.path.isfile(class_file) or not os.path.isfile(label_file):
-        return {"code": 0, "data": {"hasAnnotations": False}}
-
-    try:
-        with open(class_file, "r", encoding="utf-8") as f:
-            class_names = [line.strip() for line in f.readlines() if line.strip()]
-    except Exception:
-        class_names = []
-
-    boxes = []
-    try:
-        with open(label_file, "r", encoding="utf-8") as f:
-            for line in f:
-                parts = line.strip().split()
-                if len(parts) >= 5:
-                    class_id = int(parts[0])
-                    cx, cy, w, h = float(parts[1]), float(parts[2]), float(parts[3]), float(parts[4])
-                    boxes.append({
-                        "classId": class_id,
-                        "className": class_names[class_id] if class_id < len(class_names) else str(class_id),
-                        "cx": cx, "cy": cy, "w": w, "h": h,
-                    })
-    except Exception:
-        pass
-
-    return {
-        "code": 0,
-        "data": {
-            "hasAnnotations": len(boxes) > 0,
-            "classNames": class_names,
-            "boxes": boxes,
-        },
-    }
+def get_annotations(sampleNo: str = Query(..., description="样本编号")):
+    """获取 YOLO 标注信息：原始样本不涉及标注，直接返回无标注"""
+    return {"code": 0, "data": {"hasAnnotations": False}}
 
 
 @router.get("/get-audio-text")
@@ -325,7 +342,12 @@ def get_audio_text_api(sampleNo: str = Query(...), sampleName: str = Query(...))
 
 @router.get("/download-sample-set")
 def download_sample_set(setNo: str = Query(...), fileName: str = Query(...)):
-    """下载原始样本集：查询样本集下所有样本文件，打成 zip 压缩包返回"""
+    """下载原始样本集：查询样本集下所有样本文件，打成 zip 压缩包返回
+
+    原始样本管理不涉及标注 txt / classes.txt，仅下载图片文件。
+    - 本地模式：直接读取磁盘文件
+    - MinIO 模式：从 MinIO 下载图片二进制
+    """
     from urllib.parse import quote
 
     try:
@@ -344,9 +366,21 @@ def download_sample_set(setNo: str = Query(...), fileName: str = Query(...)):
             file_path = row.get("file_path")
             if not file_path:
                 continue
-            file_path = os.path.normpath(file_path)
-            if not os.path.isfile(file_path):
-                continue
+
+            # 获取图片二进制内容
+            image_bytes = None
+            if is_minio_path(file_path):
+                try:
+                    image_bytes = minio_download_image(file_path)
+                except Exception as e:
+                    logger.warning(f"MinIO 下载失败: {file_path}, error: {e}")
+                    continue
+            else:
+                file_path = os.path.normpath(file_path)
+                if not os.path.isfile(file_path):
+                    continue
+                with open(file_path, "rb") as f:
+                    image_bytes = f.read()
 
             arc_name = os.path.basename(file_path)
             if arc_name in added_names:
@@ -356,27 +390,7 @@ def download_sample_set(setNo: str = Query(...), fileName: str = Query(...)):
                     idx += 1
                 arc_name = f"{base}_{idx}{ext}"
             added_names.add(arc_name)
-            zf.write(file_path, arc_name)
-
-            dir_path = os.path.dirname(file_path)
-            base_name = os.path.splitext(os.path.basename(file_path))[0]
-            ext = os.path.splitext(file_path)[1].lower()
-            image_exts = {".jpg", ".jpeg", ".png", ".bmp", ".gif", ".webp", ".tif", ".tiff"}
-            if ext in image_exts:
-                label_file = os.path.join(dir_path, base_name + ".txt")
-                if os.path.isfile(label_file):
-                    lbl_name = os.path.basename(label_file)
-                    if lbl_name not in added_names:
-                        added_names.add(lbl_name)
-                        zf.write(label_file, lbl_name)
-                classes_file = os.path.join(dir_path, "classes.txt")
-                if not os.path.isfile(classes_file):
-                    classes_file = os.path.join(dir_path, "class.txt")
-                if os.path.isfile(classes_file):
-                    cls_name = os.path.basename(classes_file)
-                    if cls_name not in added_names:
-                        added_names.add(cls_name)
-                        zf.write(classes_file, cls_name)
+            zf.writestr(arc_name, image_bytes)
 
     mem_zip.seek(0)
     safe_name = (fileName + ".zip").replace(" ", "_")
@@ -395,38 +409,61 @@ async def upload_samples(
     typeCode: str = Form(...),
     files: list[UploadFile] = File(...),
 ):
-    """上传原始样本文件：保存到 sample_upload_dir/setName/ 目录，并写入 s_original_sample_info 表"""
-    from app.core.config import settings
-    from app.services.sample_import_service import _get_unique_filename
+    """上传原始样本文件
 
-    target_dir = os.path.join(settings.sample_upload_dir, setName)
-    os.makedirs(target_dir, exist_ok=True)
+    - 原始样本管理仅上传图片，不涉及 classes.txt 和标注 txt 文件
+    - 本地模式：保存到 sample_upload_dir/setName/ 目录，写入 s_original_sample_info
+    - MinIO 模式：上传到 MinIO，对象 ID 写入 s_original_sample_info.file_path
+    """
+    from app.core.config import settings
+    from app.services.sample_import_service import _get_unique_filename, _get_unique_filename_for_minio
+
+    use_minio = is_minio_enabled()
+    target_dir = None
+    if not use_minio:
+        target_dir = os.path.join(settings.sample_upload_dir, setName)
+        os.makedirs(target_dir, exist_ok=True)
 
     success_count = 0
     errors = []
-    used_names = set()  # 本次上传已使用的文件名
-
-    # 图片类型：预扫描本次上传的文件名，构建"哪些图片有同名txt标注"的集合
-    labeled_images = set()
-    if typeCode == '05':
-        all_filenames = [f.filename for f in files if f.filename]
-        txt_basenames = {os.path.splitext(fn)[0] for fn in all_filenames if os.path.splitext(fn)[1].lower() == '.txt'}
-        labeled_images = {fn for fn in all_filenames if os.path.splitext(fn)[1].lower() != '.txt' and os.path.splitext(fn)[0] in txt_basenames}
+    # MinIO 模式下预填入桶内已有对象名，避免覆盖
+    if use_minio:
+        used_names = minio_list_object_names(setNo)
+    else:
+        used_names = set()
 
     for file in files:
         if not file.filename:
             continue
         ext = os.path.splitext(file.filename)[1].lower()
-        # 生成唯一文件名（避免与磁盘已有文件及本次已上传文件重名）
-        unique_name = _get_unique_filename(target_dir, file.filename, used_names)
+        # 原始样本仅上传图片，跳过 .txt 文件（如有）
+        if ext == '.txt':
+            continue
+
+        # 生成唯一文件名（MinIO 模式仅检查 used_names，本地模式同时检查磁盘）
+        if use_minio:
+            unique_name = _get_unique_filename_for_minio(file.filename, used_names)
+        else:
+            unique_name = _get_unique_filename(target_dir, file.filename, used_names)
         used_names.add(unique_name)
-        file_path = os.path.join(target_dir, unique_name)
+
         try:
             content = await file.read()
-            with open(file_path, "wb") as f:
-                f.write(content)
-            # 图片类型：检测是否有同名txt标注文件
-            label_flag = 1 if (typeCode == '05' and file.filename in labeled_images) else 0
+            # 保存文件并得到 file_path
+            if use_minio:
+                content_type_map = {
+                    ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png",
+                    ".bmp": "image/bmp", ".gif": "image/gif", ".webp": "image/webp",
+                    ".tif": "image/tiff", ".tiff": "image/tiff",
+                }
+                ct = content_type_map.get(ext, "application/octet-stream")
+                file_path = minio_upload_image(setNo, unique_name, content, content_type=ct)
+            else:
+                file_path = os.path.join(target_dir, unique_name)
+                with open(file_path, "wb") as f:
+                    f.write(content)
+
+            # 原始样本不涉及标注，label_flag 固定为 0
             insert_original_sample_info(
                 set_no=setNo,
                 sample_name=unique_name,
@@ -434,7 +471,7 @@ async def upload_samples(
                 type_code=typeCode,
                 file_path=file_path,
                 file_size=len(content),
-                label_flag=label_flag,
+                label_flag=0,
             )
             success_count += 1
         except Exception as e:
@@ -453,19 +490,26 @@ async def upload_samples_batch(
     typeCode: str = Form(...),
     file: UploadFile = File(...),
 ):
-    """批量导入：上传单个 ZIP，解压图片到 sample_upload_dir/setName/，写入 s_original_sample_info。
-    大文件采用流式写入临时文件再解压，避免一次性读入内存。"""
+    """批量导入：上传单个 ZIP，解压图片导入样本集
+
+    - 原始样本管理仅上传图片，不涉及 classes.txt 和标注 txt 文件
+    - 图片保存到本地或上传到 MinIO
+    - .txt 标注文件直接跳过（write_txt_to_db=False）
+    - 大文件采用流式写入临时文件再解压，避免一次性读入内存
+    """
     from app.core.config import settings
     from app.services.sample_import_service import extract_zip_and_import
 
     if typeCode != "05":
         return {"code": 1, "message": "批量导入仅支持图片类型（05）样本集"}
 
+    use_minio = is_minio_enabled()
     # 流式写入临时文件，避免大 ZIP 一次性读入内存触发 400
     tmp_path = None
     try:
         import tempfile
         tmp_dir = settings.upload_tmp_dir or tempfile.gettempdir()
+        os.makedirs(tmp_dir, exist_ok=True)
         tmp_path = os.path.join(tmp_dir, f"batch_import_{setNo}_{id(file)}.zip")
         with open(tmp_path, "wb") as tmp_f:
             while True:
@@ -477,16 +521,18 @@ async def upload_samples_batch(
         if not zipfile.is_zipfile(tmp_path):
             return {"code": 1, "message": "上传文件不是有效的 ZIP 文件"}
 
-        target_dir = os.path.join(settings.sample_upload_dir, setName)
+        target_dir = None if use_minio else os.path.join(settings.sample_upload_dir, setName)
         result = extract_zip_and_import(
             target_dir=target_dir,
             set_no=setNo,
             type_code=typeCode,
             insert_callback=insert_original_sample_info,
             zip_path=tmp_path,
+            use_minio=use_minio,
+            write_txt_to_db=False,
+            update_set_labels_callback=None,
         )
         msg = (f"成功导入 {result['image_count']} 张图片，"
-               f"保存 {result['txt_count']} 个标注文件，"
                f"跳过 {result['skipped_count']} 个文件")
         if result["errors"]:
             msg += f"，失败 {len(result['errors'])} 个: {'; '.join(result['errors'][:5])}"

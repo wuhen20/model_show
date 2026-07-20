@@ -3,7 +3,7 @@ import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import Header from '@/components/Header.vue'
 import Sidebar from '@/components/Sidebar.vue'
-import { getCodeDict, saveSampleSet, querySampleSet, uploadSamples, uploadSamplesBatch, type CodeDictItem } from '@/api/sample'
+import { getCodeDict, saveSampleSet, updateSampleSet, querySampleSet, uploadSamples, uploadSamplesBatch, type CodeDictItem } from '@/api/sample'
 import { ElMessage, ElLoading } from 'element-plus'
 
 type ViewMode = 'card' | 'list'
@@ -23,6 +23,7 @@ interface SampleSet {
   businessSystem: string
   fieldCode: string
   setDescription: string
+  sampleLabels?: string
   _fromDb?: boolean
 }
 
@@ -233,6 +234,8 @@ function handleCardCommand(command: string, item: SampleSet) {
     openUploadDialog(item)
   } else if (command === 'batch') {
     openBatchDialog(item)
+  } else if (command === 'edit') {
+    openEditDialog(item)
   }
 }
 
@@ -355,6 +358,7 @@ async function loadSampleSets() {
         businessSystem: row.businessSystem || '',
         fieldCode: row.sampleFieldCode || '',
         setDescription: row.setDescription || '',
+        sampleLabels: row.sampleLabels || '',
         _fromDb: true
       }))
       sampleSets.value = [...dbData, ...sampleSets.value]
@@ -373,7 +377,8 @@ const dialogForm = ref({
   description: '',
   businessSystem: '',
   sampleTypeCode: '',
-  sampleFieldCode: ''
+  sampleFieldCode: '',
+  sampleLabels: ''
 })
 
 function openCreateDialog() {
@@ -382,13 +387,18 @@ function openCreateDialog() {
     description: '',
     businessSystem: '',
     sampleTypeCode: '',
-    sampleFieldCode: ''
+    sampleFieldCode: '',
+    sampleLabels: ''
   }
   dialogVisible.value = true
 }
 
 function onSampleTypeChange(val: string) {
   dialogForm.value.sampleTypeCode = val
+  // 切换到非图片类型时清空标注标签
+  if (val !== '05') {
+    dialogForm.value.sampleLabels = ''
+  }
 }
 
 async function handleCreateConfirm() {
@@ -412,7 +422,8 @@ async function handleCreateConfirm() {
       sampleTypeCode: dialogForm.value.sampleTypeCode,
       sampleTypeName: typeMatch?.label || '',
       sampleFieldCode: dialogForm.value.sampleFieldCode,
-      sampleFieldName: fieldMatch?.label || ''
+      sampleFieldName: fieldMatch?.label || '',
+      sampleLabels: dialogForm.value.sampleTypeCode === '05' ? dialogForm.value.sampleLabels : ''
     })
     ElMessage.success('新建样本集成功')
     dialogVisible.value = false
@@ -421,6 +432,59 @@ async function handleCreateConfirm() {
     ElMessage.error(e.message || '新建失败')
   } finally {
     dialogSaving.value = false
+  }
+}
+
+// ========== 编辑样本集弹框 ==========
+const editDialogVisible = ref(false)
+const editDialogSaving = ref(false)
+
+const editForm = ref({
+  setNo: '',
+  setName: '',
+  description: '',
+  businessSystem: '',
+  sampleFieldCode: '',
+  sampleLabels: '',
+  sampleTypeCode: ''  // 仅用于判断是否显示标注标签字段，不允许修改
+})
+
+function openEditDialog(item: SampleSet) {
+  editForm.value = {
+    setNo: item.setNo,
+    setName: item.name,
+    description: item.setDescription || '',
+    businessSystem: item.businessSystem || '',
+    sampleFieldCode: item.fieldCode || '',
+    sampleLabels: item.sampleLabels || '',
+    sampleTypeCode: item.modality[0] || ''
+  }
+  editDialogVisible.value = true
+}
+
+async function handleEditConfirm() {
+  if (!editForm.value.setNo) {
+    ElMessage.warning('样本集编号缺失')
+    return
+  }
+  editDialogSaving.value = true
+  try {
+    const fieldMatch = fieldOptions.value.find(o => o.value === editForm.value.sampleFieldCode)
+    await updateSampleSet({
+      setNo: editForm.value.setNo,
+      description: editForm.value.description,
+      businessSystem: editForm.value.businessSystem.trim(),
+      sampleFieldCode: editForm.value.sampleFieldCode,
+      sampleFieldName: fieldMatch?.label || '',
+      sampleLabels: editForm.value.sampleTypeCode === '05' ? editForm.value.sampleLabels : ''
+    })
+    ElMessage.success('更新成功')
+    editDialogVisible.value = false
+    loadSampleSets()
+  } catch (e: any) {
+    ElMessage.error(e.message || '更新失败')
+  } finally {
+    editDialogSaving.value = false
   }
 }
 
@@ -574,14 +638,14 @@ async function handleBatchConfirm() {
 
 <template>
   <div class="app-layout">
-    <Header title="模型能力展示与体验工作台" subtitle="高质量样本集管理" />
+    <Header title="模型能力展示与体验工作台" subtitle="高质量样本管理" />
     <div class="main-content">
       <Sidebar />
       <main class="content-area">
         <div class="page-header">
           <div class="page-title">
-            <h2>高质量样本集管理</h2>
-            <p>管理和浏览全部高质量样本集，支持多维度筛选与排序</p>
+            <h2>高质量样本管理</h2>
+            <p>管理和浏览全部高质量样本，支持多维度筛选与排序</p>
           </div>
           <div class="page-actions">
             <el-button type="primary" @click="openCreateDialog">新建样本集</el-button>
@@ -712,6 +776,7 @@ async function handleBatchConfirm() {
                 </span>
                 <template #dropdown>
                   <el-dropdown-menu>
+                    <el-dropdown-item command="edit">编辑</el-dropdown-item>
                     <el-dropdown-item command="upload">上传</el-dropdown-item>
                     <el-dropdown-item v-if="item.modality[0] === '05'" command="batch">批量导入</el-dropdown-item>
                     <el-dropdown-item command="download">下载</el-dropdown-item>
@@ -763,6 +828,7 @@ async function handleBatchConfirm() {
             </span>
             <span class="col col-update">{{ item.updateTime }}</span>
             <span class="col col-action">
+              <el-button text size="small" class="action-btn" @click="openEditDialog(item)">编辑</el-button>
               <el-button text size="small" class="action-btn" @click="openUploadDialog(item)">上传</el-button>
               <el-button v-if="item.modality[0] === '05'" text size="small" class="action-btn" @click="openBatchDialog(item)">批量导入</el-button>
               <el-button text size="small" class="action-btn" @click="downloadSampleSet(item)">下载</el-button>
@@ -801,10 +867,54 @@ async function handleBatchConfirm() {
             <el-option v-for="f in fieldOptions" :key="f.value" :label="f.label" :value="f.value" />
           </el-select>
         </el-form-item>
+        <el-form-item v-if="dialogForm.sampleTypeCode === '05'" label="标注标签">
+          <el-input
+            v-model="dialogForm.sampleLabels"
+            type="textarea"
+            :rows="5"
+            placeholder="每行一个标签，与 labelImg 的 classes.txt 格式一致。非必填"
+          />
+        </el-form-item>
       </el-form>
       <template #footer>
         <el-button type="primary" :loading="dialogSaving" @click="handleCreateConfirm">确定</el-button>
         <el-button @click="dialogVisible = false">取消</el-button>
+      </template>
+    </el-dialog>
+
+    <el-dialog v-model="editDialogVisible" title="编辑样本集" width="520px" :close-on-click-modal="false" class="create-dialog">
+      <el-form label-width="100px" label-position="right">
+        <el-form-item label="样本集名称">
+          <el-input v-model="editForm.setName" disabled />
+        </el-form-item>
+        <el-form-item label="样本类型">
+          <el-select v-model="editForm.sampleTypeCode" disabled style="width: 100%">
+            <el-option v-for="m in modalityOptions" :key="m.value" :label="m.label" :value="m.value" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="描述">
+          <el-input v-model="editForm.description" type="textarea" :rows="3" placeholder="请输入描述" maxlength="500" />
+        </el-form-item>
+        <el-form-item label="业务系统">
+          <el-input v-model="editForm.businessSystem" placeholder="请输入业务系统" maxlength="50" />
+        </el-form-item>
+        <el-form-item label="样本领域">
+          <el-select v-model="editForm.sampleFieldCode" placeholder="请选择样本领域" clearable style="width: 100%" popper-class="create-dialog-popper">
+            <el-option v-for="f in fieldOptions" :key="f.value" :label="f.label" :value="f.value" />
+          </el-select>
+        </el-form-item>
+        <el-form-item v-if="editForm.sampleTypeCode === '05'" label="标注标签">
+          <el-input
+            v-model="editForm.sampleLabels"
+            type="textarea"
+            :rows="5"
+            placeholder="每行一个标签，与 labelImg 的 classes.txt 格式一致。非必填"
+          />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button type="primary" :loading="editDialogSaving" @click="handleEditConfirm">确定</el-button>
+        <el-button @click="editDialogVisible = false">取消</el-button>
       </template>
     </el-dialog>
 
@@ -820,7 +930,7 @@ async function handleBatchConfirm() {
         </div>
         <div class="upload-info-row">
           <span class="upload-info-label">允许格式：</span>
-          <span class="upload-info-value">{{ uploadTarget.modality[0] === '05' ? '图像文件（jpg/png/bmp等），可附带同名txt标注和classes.txt' : uploadTarget.modality[0] === '02' ? '文本文件（txt/csv/doc等）' : uploadTarget.modality[0] === '03' ? '音频文件（mp3/wav等）' : uploadTarget.modality[0] === '04' ? '视频文件（mp4/avi等）' : '不限' }}</span>
+          <span class="upload-info-value">{{ uploadTarget.modality[0] === '05' ? '图像文件（jpg/png/bmp等）' : uploadTarget.modality[0] === '02' ? '文本文件（txt/csv/doc等）' : uploadTarget.modality[0] === '03' ? '音频文件（mp3/wav等）' : uploadTarget.modality[0] === '04' ? '视频文件（mp4/avi等）' : '不限' }}</span>
         </div>
         <el-upload
           :accept="typeCodeToAccept[uploadTarget.modality[0]] || ''"
@@ -853,7 +963,7 @@ async function handleBatchConfirm() {
         </div>
         <div class="upload-info-row">
           <span class="upload-info-label">说明：</span>
-          <span class="upload-info-value">上传 ZIP，自动解压图片与同名 .txt 标注、classes.txt 到样本集目录</span>
+          <span class="upload-info-value">上传 ZIP，自动解压图片；同名 .txt 标注和 classes.txt 内容将写入数据库</span>
         </div>
         <el-upload
           ref="batchUploadRef"
@@ -1468,6 +1578,11 @@ async function handleBatchConfirm() {
     font-size: 12px;
     color: rgba(255, 255, 255, 0.35);
     margin-left: 4px;
+  }
+  .edit-tip {
+    font-size: 12px;
+    color: rgba(255, 170, 0, 0.7);
+    margin-top: 8px;
   }
 }
 </style>

@@ -3,7 +3,7 @@ import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import Header from '@/components/Header.vue'
 import Sidebar from '@/components/Sidebar.vue'
-import { getCodeDict, saveSampleSet, querySampleSet, uploadSamples, uploadSamplesBatch } from '@/api/originalSample'
+import { getCodeDict, saveSampleSet, updateSampleSet, querySampleSet, uploadSamples, uploadSamplesBatch } from '@/api/originalSample'
 import { ElMessage, ElLoading } from 'element-plus'
 
 type ViewMode = 'card' | 'list'
@@ -213,6 +213,8 @@ function handleCardCommand(command: string, item: SampleSet) {
     openUploadDialog(item)
   } else if (command === 'batch') {
     openBatchDialog(item)
+  } else if (command === 'edit') {
+    openEditDialog(item)
   }
 }
 
@@ -391,6 +393,56 @@ async function handleCreateConfirm() {
   }
 }
 
+// ========== 编辑样本集弹框 ==========
+const editDialogVisible = ref(false)
+const editDialogSaving = ref(false)
+
+const editForm = ref({
+  setNo: '',
+  setName: '',
+  description: '',
+  businessSystem: '',
+  sampleFieldCode: '',
+  sampleTypeCode: ''  // 仅用于判断是否显示标注标签字段，不允许修改
+})
+
+function openEditDialog(item: SampleSet) {
+  editForm.value = {
+    setNo: item.setNo,
+    setName: item.name,
+    description: item.setDescription || '',
+    businessSystem: item.businessSystem || '',
+    sampleFieldCode: item.fieldCode || '',
+    sampleTypeCode: item.modality[0] || ''
+  }
+  editDialogVisible.value = true
+}
+
+async function handleEditConfirm() {
+  if (!editForm.value.setNo) {
+    ElMessage.warning('样本集编号缺失')
+    return
+  }
+  editDialogSaving.value = true
+  try {
+    const fieldMatch = fieldOptions.value.find(o => o.value === editForm.value.sampleFieldCode)
+    await updateSampleSet({
+      setNo: editForm.value.setNo,
+      description: editForm.value.description,
+      businessSystem: editForm.value.businessSystem.trim(),
+      sampleFieldCode: editForm.value.sampleFieldCode,
+      sampleFieldName: fieldMatch?.label || ''
+    })
+    ElMessage.success('更新成功')
+    editDialogVisible.value = false
+    loadSampleSets()
+  } catch (e: any) {
+    ElMessage.error(e.message || '更新失败')
+  } finally {
+    editDialogSaving.value = false
+  }
+}
+
 // ========== 上传样本弹框 ==========
 const uploadDialogVisible = ref(false)
 const uploadSaving = ref(false)
@@ -407,7 +459,7 @@ const typeCodeToExtensions: Record<string, string[]> = {
 
 // 样本类型编码 → 允许的 accept 值
 const typeCodeToAccept: Record<string, string> = {
-  '05': 'image/*,.txt',
+  '05': 'image/*',
   '02': '.txt,.csv,.json,.xml,.doc,.docx,.pdf',
   '03': 'audio/*',
   '04': 'video/*',
@@ -435,13 +487,11 @@ async function handleUploadConfirm() {
   }
   const typeCode = uploadTarget.value.modality[0] || ''
 
-  // 前端校验文件类型（图片类型允许额外附带 .txt 标注文件）
+  // 前端校验文件类型（原始样本仅上传图片，不支持 txt 标注文件）
   const allowedExts = typeCodeToExtensions[typeCode]
   if (allowedExts) {
-    const isImageType = typeCode === '05'
     const invalidFiles = uploadFileList.value.filter(f => {
       const ext = '.' + f.name.split('.').pop()?.toLowerCase()
-      if (isImageType && ext === '.txt') return false
       return !allowedExts.includes(ext)
     })
     if (invalidFiles.length > 0) {
@@ -664,6 +714,7 @@ async function handleBatchConfirm() {
                 </span>
                 <template #dropdown>
                   <el-dropdown-menu>
+                    <el-dropdown-item command="edit">编辑</el-dropdown-item>
                     <el-dropdown-item command="upload">上传</el-dropdown-item>
                     <el-dropdown-item v-if="item.modality[0] === '05'" command="batch">批量导入</el-dropdown-item>
                     <el-dropdown-item command="download">下载</el-dropdown-item>
@@ -715,6 +766,7 @@ async function handleBatchConfirm() {
             </span>
             <span class="col col-update">{{ item.updateTime }}</span>
             <span class="col col-action">
+              <el-button text size="small" class="action-btn" @click="openEditDialog(item)">编辑</el-button>
               <el-button text size="small" class="action-btn" @click="openUploadDialog(item)">上传</el-button>
               <el-button v-if="item.modality[0] === '05'" text size="small" class="action-btn" @click="openBatchDialog(item)">批量导入</el-button>
               <el-button text size="small" class="action-btn" @click="downloadSampleSet(item)">下载</el-button>
@@ -760,6 +812,34 @@ async function handleBatchConfirm() {
       </template>
     </el-dialog>
 
+    <el-dialog v-model="editDialogVisible" title="编辑样本集" width="520px" :close-on-click-modal="false" class="create-dialog">
+      <el-form label-width="100px" label-position="right">
+        <el-form-item label="样本集名称">
+          <el-input v-model="editForm.setName" disabled />
+        </el-form-item>
+        <el-form-item label="样本类型">
+          <el-select v-model="editForm.sampleTypeCode" disabled style="width: 100%">
+            <el-option v-for="m in modalityOptions" :key="m.value" :label="m.label" :value="m.value" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="描述">
+          <el-input v-model="editForm.description" type="textarea" :rows="3" placeholder="请输入描述" maxlength="500" />
+        </el-form-item>
+        <el-form-item label="业务系统">
+          <el-input v-model="editForm.businessSystem" placeholder="请输入业务系统" maxlength="50" />
+        </el-form-item>
+        <el-form-item label="样本领域">
+          <el-select v-model="editForm.sampleFieldCode" placeholder="请选择样本领域" clearable style="width: 100%" popper-class="create-dialog-popper">
+            <el-option v-for="f in fieldOptions" :key="f.value" :label="f.label" :value="f.value" />
+          </el-select>
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button type="primary" :loading="editDialogSaving" @click="handleEditConfirm">确定</el-button>
+        <el-button @click="editDialogVisible = false">取消</el-button>
+      </template>
+    </el-dialog>
+
     <el-dialog v-model="uploadDialogVisible" title="上传样本" width="520px" :close-on-click-modal="false" class="create-dialog">
       <div v-if="uploadTarget" class="upload-dialog-content">
         <div class="upload-info-row">
@@ -772,7 +852,7 @@ async function handleBatchConfirm() {
         </div>
         <div class="upload-info-row">
           <span class="upload-info-label">允许格式：</span>
-          <span class="upload-info-value">{{ uploadTarget.modality[0] === '01' ? '图片文件（jpg/png/bmp等），可附带同名txt标注和classes.txt' : uploadTarget.modality[0] === '02' ? '文本文件（txt/csv/doc等）' : uploadTarget.modality[0] === '03' ? '音频文件（mp3/wav等）' : uploadTarget.modality[0] === '04' ? '视频文件（mp4/avi等）' : '不限' }}</span>
+          <span class="upload-info-value">{{ uploadTarget.modality[0] === '05' ? '图像文件（jpg/png/bmp等）' : uploadTarget.modality[0] === '02' ? '文本文件（txt/csv/doc等）' : uploadTarget.modality[0] === '03' ? '音频文件（mp3/wav等）' : uploadTarget.modality[0] === '04' ? '视频文件（mp4/avi等）' : '不限' }}</span>
         </div>
         <el-upload
           :accept="typeCodeToAccept[uploadTarget.modality[0]] || ''"
@@ -787,7 +867,7 @@ async function handleBatchConfirm() {
               <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M17 8l-5-5-5 5M12 3v12"/>
             </svg>
             <p>将文件拖到此处，或<em>点击上传</em></p>
-            <p class="upload-tip">图片类型可同时选择图片和同名txt标注文件</p>
+            <p class="upload-tip">原始样本仅上传图片，不支持 txt 标注文件</p>
           </div>
         </el-upload>
       </div>
@@ -805,7 +885,7 @@ async function handleBatchConfirm() {
         </div>
         <div class="upload-info-row">
           <span class="upload-info-label">说明：</span>
-          <span class="upload-info-value">上传 ZIP，自动解压图片与同名 .txt 标注、classes.txt 到样本集目录</span>
+          <span class="upload-info-value">上传 ZIP，自动解压图片到样本集目录；原始样本仅导入图片</span>
         </div>
         <el-upload
           accept=".zip"
@@ -1386,6 +1466,11 @@ async function handleBatchConfirm() {
       font-size: 12px;
       color: rgba(255, 255, 255, 0.3);
     }
+  }
+  .edit-tip {
+    font-size: 12px;
+    color: rgba(255, 170, 0, 0.7);
+    margin-top: 8px;
   }
 }
 </style>

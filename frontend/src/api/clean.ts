@@ -188,10 +188,22 @@ export interface CleanResultData {
   resultCount: number
   columns: string[]
   rows: Record<string, any>[]
+  total: number
+  page: number
+  pageSize: number
 }
 
-export async function viewCleanResult(recordId: number): Promise<CleanResultData> {
-  const res = await fetch(`${BASE_URL}/view-clean-result?recordId=${recordId}`)
+export async function viewCleanResult(
+  recordId: number,
+  page: number = 1,
+  pageSize: number = 20
+): Promise<CleanResultData> {
+  const params = new URLSearchParams({
+    recordId: String(recordId),
+    page: String(page),
+    pageSize: String(pageSize),
+  })
+  const res = await fetch(`${BASE_URL}/view-clean-result?${params.toString()}`)
   const json = await res.json()
   if (json.code !== 0) throw new Error(json.message || '查看失败')
   return json.data

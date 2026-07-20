@@ -15,7 +15,7 @@ const routes = [
 
   // ===== 样本中心（sxy-sample-center）=====
   { path: '/sample', name: 'SampleCenter', component: () => import('@/views/SampleCenter.vue'), meta: { title: '样本中心' } },
-  { path: '/sample-set', name: 'SampleSetManagement', component: () => import('@/views/SampleSetManagement.vue'), meta: { title: '高质量样本集管理' } },
+  { path: '/sample-set', name: 'SampleSetManagement', component: () => import('@/views/SampleSetManagement.vue'), meta: { title: '高质量样本管理' } },
   { path: '/sample-detail', name: 'SampleDetail', component: () => import('@/views/SampleDetail.vue'), meta: { title: '样本详情' } },
   { path: '/original-sample-set', name: 'OriginalSampleSetManagement', component: () => import('@/views/OriginalSampleSetManagement.vue'), meta: { title: '原始样本集管理' } },
   { path: '/original-sample-detail', name: 'OriginalSampleDetail', component: () => import('@/views/OriginalSampleDetail.vue'), meta: { title: '原始样本详情' } },
