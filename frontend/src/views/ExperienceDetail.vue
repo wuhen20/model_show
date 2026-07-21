@@ -12,6 +12,7 @@ import StationHealthDemo from '@/views/StationHealthDemo.vue'
 import MeterRemovalDemo from '@/views/MeterRemovalDemo.vue'
 import MeterInstallDemo from '@/views/MeterInstallDemo.vue'
 import HeatingFraudDemo from '@/views/HeatingFraudDemo.vue'
+import TQForecastDemo from '@/views/TQForecastDemo.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -140,6 +141,21 @@ onMounted(load)
       <!-- YD-03 电采暖高价低接研判 -->
       <template v-else-if="detail.code === 'YD-03'">
         <HeatingFraudDemo />
+      </template>
+
+      <!-- TQ-01 台区负荷预测与负载率预测 -->
+      <template v-else-if="detail.code === 'TQ-01'">
+        <TQForecastDemo model-key="load_forecast" />
+      </template>
+
+      <!-- TQ-02 台区功率因数预测 -->
+      <template v-else-if="detail.code === 'TQ-02'">
+        <TQForecastDemo model-key="power_factor" />
+      </template>
+
+      <!-- TQ-03 台区三相不平衡度预测 -->
+      <template v-else-if="detail.code === 'TQ-03'">
+        <TQForecastDemo model-key="unbalance" />
       </template>
 
       <!-- 非 ZJ-05 模型：保持原有布局 -->

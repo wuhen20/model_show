@@ -1,0 +1,75 @@
+{
+  "model": "CNNLSTM V4 + Residual",
+  "config": {
+    "input_days": 7,
+    "output_days": 1,
+    "input_steps": 672,
+    "output_steps": 96,
+    "cnn_out_channels": 24,
+    "lstm_hidden": 64,
+    "fc_hidden": 192,
+    "residual_cnn": 12,
+    "residual_lstm": 32,
+    "residual_fc": 96,
+    "stage1_params": 61036,
+    "stage2_params": 20028,
+    "total_params": 81064
+  },
+  "data_split": {
+    "train_samples": 72,
+    "val_samples": 15,
+    "test_samples": 16
+  },
+  "training": {
+    "stage1_best_val_loss": 0.00408694,
+    "stage1_best_epoch": 97,
+    "stage2_best_val_loss": 0.00833016,
+    "stage2_best_epoch": 24,
+    "epochs_trained": 122
+  },
+  "eval": {
+    "overall": {
+      "mae_kW": 0.981803,
+      "rmse_kW": 1.42942,
+      "mape_%": 40.266,
+      "cvrmse_%": 52.4028,
+      "actual_mean_kW": 2.727754,
+      "n_samples": 15,
+      "n_points": 1440
+    },
+    "per_district": {
+      "5572596045": {
+        "name": "马鞍村1社",
+        "mae_kW": 0.981803,
+        "rmse_kW": 1.42942,
+        "mape_%": 40.266,
+        "cvrmse_%": 52.4028,
+        "actual_mean_kW": 2.727754,
+        "n_samples": 15
+      }
+    }
+  },
+  "model_path": "D:\\LYL\\小模型\\四川\\负荷预测\\best_model.pt",
+  "test": {
+    "overall": {
+      "mae_kW": 0.973577,
+      "rmse_kW": 1.440517,
+      "mape_%": 41.0508,
+      "cvrmse_%": 53.8357,
+      "actual_mean_kW": 2.675766,
+      "n_samples": 16,
+      "n_points": 1536
+    },
+    "per_district": {
+      "5572596045": {
+        "name": "马鞍村1社",
+        "mae_kW": 0.973577,
+        "rmse_kW": 1.440517,
+        "mape_%": 41.0508,
+        "cvrmse_%": 53.8357,
+        "actual_mean_kW": 2.675766,
+        "n_samples": 16
+      }
+    }
+  }
+}

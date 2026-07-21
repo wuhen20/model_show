@@ -1021,3 +1021,157 @@ export function createHeatingFraudApi() {
 }
 
 export type HeatingFraudApi = ReturnType<typeof createHeatingFraudApi>
+
+// ============ TQ 预测 API ============
+
+export interface TQForecastModelInfo {
+  model_key: string
+  name: string
+  code: string
+  config: {
+    input_days: number
+    output_days: number
+    input_steps: number
+    output_steps: number
+    time_series_dim: number
+    channels: string[]
+    cnn_out_channels: number
+    lstm_hidden: number
+    lstm_layers: number
+    fc_hidden: number
+  }
+  params: number
+  has_trained_model: boolean
+  model_type: string
+  target_key: string
+  target_unit: string
+  districts: { id: number; name: string; capacity: number }[]
+}
+
+export interface TQTrainLogEntry {
+  epoch: number
+  train_loss: number
+  val_loss: number
+  lr?: number
+}
+
+export interface TQTrainResult {
+  metrics: {
+    best_val_loss: number
+    best_epoch: number
+    total_params: number
+    epochs_trained: number
+  }
+  training_log: TQTrainLogEntry[]
+  charts: { training_curve: string }
+  optuna_best_params: Record<string, any>
+  model_path: string
+}
+
+export interface TQTrainStatus {
+  running: boolean
+  progress: number
+  message: string
+  result?: TQTrainResult
+  error?: string
+}
+
+export interface TQPredictResult {
+  predictions: {
+    district: string
+    sample: number
+    time: string
+    predicted: number
+    true: number
+  }[]
+  charts: { predict_compare: string }
+  metrics: { mae: number; rmse: number; mape: number; cvrmse: number }
+  result_csv_path: string
+  n_samples: number
+}
+
+export function createTQForecastApi() {
+  const base = '/api/demo/tq-forecast'
+
+  return {
+    async ping(): Promise<{ status: string; message: string }> {
+      const resp = await fetch(`${BASE_URL}${base}/ping`)
+      if (!resp.ok) throw new Error('ping failed')
+      return resp.json()
+    },
+
+    async modelInfo(modelKey: string): Promise<TQForecastModelInfo> {
+      const resp = await fetch(`${BASE_URL}${base}/model_info?model_key=${modelKey}`)
+      if (!resp.ok) throw new Error(`获取模型信息失败: ${resp.status}`)
+      return resp.json()
+    },
+
+    getDemoCsvUrl(modelKey: string): string {
+      return `${BASE_URL}${base}/demo_csv?model_key=${modelKey}`
+    },
+
+    getPredictCsvUrl(modelKey: string): string {
+      return `${BASE_URL}${base}/predict_csv?model_key=${modelKey}`
+    },
+
+    async evaluate(modelKey: string): Promise<any> {
+      const resp = await fetch(`${BASE_URL}${base}/evaluate?model_key=${modelKey}`)
+      if (!resp.ok) throw new Error(`获取评估指标失败: ${resp.status}`)
+      return resp.json()
+    },
+
+    async trainingLog(modelKey: string): Promise<any> {
+      const resp = await fetch(`${BASE_URL}${base}/training_log?model_key=${modelKey}`)
+      if (!resp.ok) throw new Error(`获取训练日志失败: ${resp.status}`)
+      return resp.json()
+    },
+
+    async figures(modelKey: string): Promise<{ status: string; data: { name: string; base64: string }[] }> {
+      const resp = await fetch(`${BASE_URL}${base}/figures?model_key=${modelKey}`)
+      if (!resp.ok) throw new Error(`获取预测图失败: ${resp.status}`)
+      return resp.json()
+    },
+
+    async uploadTrain(modelKey: string, file: File): Promise<any> {
+      const fd = new FormData()
+      fd.append('file', file)
+      const resp = await fetch(`${BASE_URL}${base}/upload_train?model_key=${modelKey}`, { method: 'POST', body: fd })
+      if (!resp.ok) throw new Error(`上传训练数据失败: ${resp.status}`)
+      return resp.json()
+    },
+
+    async train(modelKey: string, nTrials: number = 10): Promise<any> {
+      const fd = new FormData()
+      fd.append('n_trials', String(nTrials))
+      const resp = await fetch(`${BASE_URL}${base}/train?model_key=${modelKey}`, { method: 'POST', body: fd })
+      if (!resp.ok) throw new Error(`启动训练失败: ${resp.status}`)
+      return resp.json()
+    },
+
+    async trainStatus(modelKey: string): Promise<TQTrainStatus> {
+      const resp = await fetch(`${BASE_URL}${base}/train_status?model_key=${modelKey}`)
+      if (!resp.ok) throw new Error(`获取训练状态失败: ${resp.status}`)
+      return resp.json()
+    },
+
+    async uploadPredict(modelKey: string, file: File): Promise<any> {
+      const fd = new FormData()
+      fd.append('file', file)
+      const resp = await fetch(`${BASE_URL}${base}/upload_predict?model_key=${modelKey}`, { method: 'POST', body: fd })
+      if (!resp.ok) throw new Error(`上传预测数据失败: ${resp.status}`)
+      return resp.json()
+    },
+
+    async predict(modelKey: string): Promise<TQPredictResult> {
+      const resp = await fetch(`${BASE_URL}${base}/predict?model_key=${modelKey}`, { method: 'POST' })
+      if (!resp.ok) throw new Error(`预测请求失败: ${resp.status}`)
+      return resp.json()
+    },
+
+    getDownloadUrl(modelKey: string): string {
+      return `${BASE_URL}${base}/download_result?model_key=${modelKey}`
+    },
+  }
+}
+
+export type TQForecastApi = ReturnType<typeof createTQForecastApi>
