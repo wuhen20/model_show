@@ -4,10 +4,11 @@ import { useRouter } from 'vue-router'
 import Header from '@/components/Header.vue'
 import Sidebar from '@/components/Sidebar.vue'
 import { getCodeDict, saveSampleSet, updateSampleSet, querySampleSet, uploadSamples, uploadSamplesBatch, type CodeDictItem } from '@/api/sample'
+import ChunkUploadDialog from '@/components/ChunkUploadDialog.vue'
 import { ElMessage, ElLoading } from 'element-plus'
 
 type ViewMode = 'card' | 'list'
-type SortField = 'updateTime' | 'scale' | 'quality' | 'popularity'
+type SortField = 'updateTime' | 'scale' | 'quality'
 type SortOrder = 'asc' | 'desc'
 
 interface SampleSet {
@@ -18,7 +19,6 @@ interface SampleSet {
   updateTime: string
   qualityLevel: string
   version: string
-  popularity: number
   scale: number
   businessSystem: string
   fieldCode: string
@@ -58,22 +58,21 @@ const scaleOptions = [
 const sortOptions: { value: SortField; label: string }[] = [
   { value: 'updateTime', label: '更新时间' },
   { value: 'scale', label: '样本规模' },
-  { value: 'quality', label: '质量等级' },
-  { value: 'popularity', label: '热度' }
+  { value: 'quality', label: '质量等级' }
 ]
 
 const sampleSets = ref<SampleSet[]>([
-  { id: 1, setNo: 'SAMPLE-001', name: '线损异常诊断样本集', modality: ['text'], updateTime: '2026-05-28', qualityLevel: '01', version: 'v3.2', popularity: 342, scale: 2865, businessSystem: '线损诊断', fieldCode: '', setDescription: '线损异常诊断文本数据集' },
-  { id: 2, setNo: 'SAMPLE-002', name: '采集异常识别样本集', modality: ['text'], updateTime: '2026-05-27', qualityLevel: '01', version: 'v2.8', popularity: 289, scale: 3215, businessSystem: '采集异常', fieldCode: '', setDescription: '采集运维异常识别专用文本数据集' },
-  { id: 3, setNo: 'SAMPLE-003', name: '电能表故障识别样本集', modality: ['image'], updateTime: '2026-05-26', qualityLevel: '01', version: 'v4.1', popularity: 256, scale: 1542, businessSystem: '电能表', fieldCode: '', setDescription: '电能表外观及内部故障图像样本集' },
-  { id: 5, setNo: 'SAMPLE-005', name: '作业风险识别样本集', modality: ['image'], updateTime: '2026-05-24', qualityLevel: '02', version: 'v1.9', popularity: 176, scale: 8632, businessSystem: '作业安全', fieldCode: '', setDescription: '现场作业风险场景图像集' },
-  { id: 6, setNo: 'SAMPLE-006', name: '市场交易预测样本集', modality: ['text'], updateTime: '2026-05-23', qualityLevel: '02', version: 'v2.1', popularity: 145, scale: 2641, businessSystem: '市场交易', fieldCode: '', setDescription: '电力市场交易及价格预测文本数据' },
-  { id: 7, setNo: 'SAMPLE-007', name: '低电压诊断样本集', modality: ['image'], updateTime: '2026-05-22', qualityLevel: '03', version: 'v1.3', popularity: 112, scale: 5420, businessSystem: '低电压', fieldCode: '', setDescription: '配电网低电压问题诊断图像样本' },
-  { id: 8, setNo: 'SAMPLE-008', name: '谐波分析样本集', modality: ['audio'], updateTime: '2026-05-21', qualityLevel: '03', version: 'v1.1', popularity: 87, scale: 750, businessSystem: '谐波分析', fieldCode: '', setDescription: '电力谐波信号音频数据集' },
-  { id: 9, setNo: 'SAMPLE-009', name: '故障录波识别样本集', modality: ['image'], updateTime: '2026-05-20', qualityLevel: '02', version: 'v2.0', popularity: 203, scale: 1300, businessSystem: '故障识别', fieldCode: '', setDescription: '电网故障录波图像样本' },
-  { id: 10, setNo: 'SAMPLE-010', name: '巡检视频分析样本集', modality: ['video'], updateTime: '2026-05-19', qualityLevel: '04', version: 'v1.0', popularity: 64, scale: 800, businessSystem: '设备缺陷', fieldCode: '', setDescription: '变电站巡检视频及标注数据' },
-  { id: 11, setNo: 'SAMPLE-011', name: '计量异常语音报工样本集', modality: ['audio'], updateTime: '2026-05-18', qualityLevel: '03', version: 'v1.2', popularity: 53, scale: 410, businessSystem: '计量异常', fieldCode: '', setDescription: '计量异常现场语音报工记录数据' },
-  { id: 12, setNo: 'SAMPLE-012', name: '综合能源调度样本集', modality: ['video'], updateTime: '2026-05-17', qualityLevel: '01', version: 'v3.0', popularity: 318, scale: 9100, businessSystem: '市场交易', fieldCode: '', setDescription: '综合能源系统调度优化视频数据集' }
+  { id: 1, setNo: 'SAMPLE-001', name: '线损异常诊断样本集', modality: ['text'], updateTime: '2026-05-28', qualityLevel: '01', version: 'v3.2', scale: 2865, businessSystem: '线损诊断', fieldCode: '', setDescription: '线损异常诊断文本数据集' },
+  { id: 2, setNo: 'SAMPLE-002', name: '采集异常识别样本集', modality: ['text'], updateTime: '2026-05-27', qualityLevel: '01', version: 'v2.8', scale: 3215, businessSystem: '采集异常', fieldCode: '', setDescription: '采集运维异常识别专用文本数据集' },
+  { id: 3, setNo: 'SAMPLE-003', name: '电能表故障识别样本集', modality: ['image'], updateTime: '2026-05-26', qualityLevel: '01', version: 'v4.1', scale: 1542, businessSystem: '电能表', fieldCode: '', setDescription: '电能表外观及内部故障图像样本集' },
+  { id: 5, setNo: 'SAMPLE-005', name: '作业风险识别样本集', modality: ['image'], updateTime: '2026-05-24', qualityLevel: '02', version: 'v1.9', scale: 8632, businessSystem: '作业安全', fieldCode: '', setDescription: '现场作业风险场景图像集' },
+  { id: 6, setNo: 'SAMPLE-006', name: '市场交易预测样本集', modality: ['text'], updateTime: '2026-05-23', qualityLevel: '02', version: 'v2.1', scale: 2641, businessSystem: '市场交易', fieldCode: '', setDescription: '电力市场交易及价格预测文本数据' },
+  { id: 7, setNo: 'SAMPLE-007', name: '低电压诊断样本集', modality: ['image'], updateTime: '2026-05-22', qualityLevel: '03', version: 'v1.3', scale: 5420, businessSystem: '低电压', fieldCode: '', setDescription: '配电网低电压问题诊断图像样本' },
+  { id: 8, setNo: 'SAMPLE-008', name: '谐波分析样本集', modality: ['audio'], updateTime: '2026-05-21', qualityLevel: '03', version: 'v1.1', scale: 750, businessSystem: '谐波分析', fieldCode: '', setDescription: '电力谐波信号音频数据集' },
+  { id: 9, setNo: 'SAMPLE-009', name: '故障录波识别样本集', modality: ['image'], updateTime: '2026-05-20', qualityLevel: '02', version: 'v2.0', scale: 1300, businessSystem: '故障识别', fieldCode: '', setDescription: '电网故障录波图像样本' },
+  { id: 10, setNo: 'SAMPLE-010', name: '巡检视频分析样本集', modality: ['video'], updateTime: '2026-05-19', qualityLevel: '04', version: 'v1.0', scale: 800, businessSystem: '设备缺陷', fieldCode: '', setDescription: '变电站巡检视频及标注数据' },
+  { id: 11, setNo: 'SAMPLE-011', name: '计量异常语音报工样本集', modality: ['audio'], updateTime: '2026-05-18', qualityLevel: '03', version: 'v1.2', scale: 410, businessSystem: '计量异常', fieldCode: '', setDescription: '计量异常现场语音报工记录数据' },
+  { id: 12, setNo: 'SAMPLE-012', name: '综合能源调度样本集', modality: ['video'], updateTime: '2026-05-17', qualityLevel: '01', version: 'v3.0', scale: 9100, businessSystem: '市场交易', fieldCode: '', setDescription: '综合能源系统调度优化视频数据集' }
 ])
 
 const viewMode = ref<ViewMode>('card')
@@ -153,9 +152,6 @@ const filteredData = computed(() => {
         break
       case 'quality':
         cmp = qualityOrder.value[a.qualityLevel] - qualityOrder.value[b.qualityLevel]
-        break
-      case 'popularity':
-        cmp = a.popularity - b.popularity
         break
     }
     return cmp * order
@@ -353,7 +349,6 @@ async function loadSampleSets() {
         updateTime: row.updateTime ? String(row.updateTime).slice(0, 16) : (row.createTime ? String(row.createTime).slice(0, 16) : ''),
         qualityLevel: row.qualityLevel || '',
         version: row.version || '',
-        popularity: row.popularity ?? 0,
         scale: row.sampleCount ?? 0,
         businessSystem: row.businessSystem || '',
         fieldCode: row.sampleFieldCode || '',
@@ -566,14 +561,9 @@ async function handleUploadConfirm() {
   }
 }
 
-// ========== 批量导入弹框（仅图片类型）==========
+// ========== 批量导入弹框（仅图片类型，分片上传）==========
 const batchDialogVisible = ref(false)
-const batchSaving = ref(false)
 const batchTarget = ref<SampleSet | null>(null)
-const batchFile = ref<File | null>(null)
-const batchMajorVersion = ref(false)
-const batchVersionRemark = ref('')
-const batchUploadRef = ref()
 
 function openBatchDialog(item: SampleSet) {
   if (item.modality[0] !== '05') {
@@ -581,58 +571,11 @@ function openBatchDialog(item: SampleSet) {
     return
   }
   batchTarget.value = item
-  batchFile.value = null
-  batchMajorVersion.value = false
-  batchVersionRemark.value = ''
   batchDialogVisible.value = true
-  // 清空 el-upload 内部文件列表
-  setTimeout(() => {
-    batchUploadRef.value?.clearFiles()
-  }, 0)
 }
 
-function handleBatchFileChange(file: any) {
-  batchFile.value = file.raw
-}
-
-function handleBatchFileRemove() {
-  batchFile.value = null
-}
-
-async function handleBatchConfirm() {
-  if (!batchTarget.value) return
-  if (!batchFile.value) {
-    ElMessage.warning('请选择要上传的 ZIP 文件')
-    return
-  }
-  const fileName = batchFile.value.name.toLowerCase()
-  if (!fileName.endsWith('.zip')) {
-    ElMessage.warning('仅支持 ZIP 文件')
-    return
-  }
-  if (batchVersionRemark.value.length > 150) {
-    ElMessage.warning('变更说明不能超过 150 个字')
-    return
-  }
-  const typeCode = batchTarget.value.modality[0] || ''
-  batchSaving.value = true
-  try {
-    const msg = await uploadSamplesBatch(
-      batchTarget.value.setNo,
-      batchTarget.value.name,
-      typeCode,
-      batchFile.value,
-      batchMajorVersion.value,
-      batchVersionRemark.value.trim()
-    )
-    ElMessage.success(msg)
-    batchDialogVisible.value = false
-    loadSampleSets()
-  } catch (e: any) {
-    ElMessage.error(e.message || '批量导入失败')
-  } finally {
-    batchSaving.value = false
-  }
+function handleBatchUploadSuccess() {
+  loadSampleSets()
 }
 </script>
 
@@ -758,10 +701,6 @@ async function handleBatchConfirm() {
                   <span>{{ formatScale(item.scale) }}条</span>
                 </div>
                 <div class="meta-item">
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>
-                  <span>{{ item.popularity }}</span>
-                </div>
-                <div class="meta-item">
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 7v10c0 .55.45 1 1 1h14c.55 0 1-.45 1-1V7c0-.55-.45-1-1-1H5c-.55 0-1 .45-1 1zm0 0l9 6 9-6"/></svg>
                   <span>{{ formatVersion(item.version) }}</span>
                 </div>
@@ -795,7 +734,6 @@ async function handleBatchConfirm() {
             <span class="col col-scale">样本规模</span>
             <span class="col col-quality">质量等级</span>
             <span class="col col-version">版本号</span>
-            <span class="col col-popularity">热度</span>
             <span class="col col-update">更新时间</span>
             <span class="col col-action">操作</span>
           </div>
@@ -822,10 +760,6 @@ async function handleBatchConfirm() {
               <span class="quality-badge-sm" :style="{ color: qualityColor[item.qualityLevel], borderColor: qualityColor[item.qualityLevel] }">{{ qualityLabel[item.qualityLevel] }}</span>
             </span>
             <span class="col col-version">{{ formatVersion(item.version) }}</span>
-            <span class="col col-popularity">
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#ff5555" stroke-width="2"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>
-              {{ item.popularity }}
-            </span>
             <span class="col col-update">{{ item.updateTime }}</span>
             <span class="col col-action">
               <el-button text size="small" class="action-btn" @click="openEditDialog(item)">编辑</el-button>
@@ -955,53 +889,18 @@ async function handleBatchConfirm() {
       </template>
     </el-dialog>
 
-    <el-dialog v-model="batchDialogVisible" title="批量导入（ZIP）" width="520px" :close-on-click-modal="false" class="create-dialog">
-      <div v-if="batchTarget" class="upload-dialog-content">
-        <div class="upload-info-row">
-          <span class="upload-info-label">样本集：</span>
-          <span class="upload-info-value">{{ batchTarget.name }}</span>
-        </div>
-        <div class="upload-info-row">
-          <span class="upload-info-label">说明：</span>
-          <span class="upload-info-value">上传 ZIP，自动解压图片；同名 .txt 标注和 classes.txt 内容将写入数据库</span>
-        </div>
-        <el-upload
-          ref="batchUploadRef"
-          accept=".zip"
-          :auto-upload="false"
-          :limit="1"
-          :on-change="handleBatchFileChange"
-          :on-remove="handleBatchFileRemove"
-          drag
-        >
-          <div class="upload-drag-content">
-            <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="rgba(0,212,255,0.5)" stroke-width="1.5">
-              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M17 8l-5-5-5 5M12 3v12"/>
-            </svg>
-            <p>将 ZIP 文件拖到此处，或<em>点击上传</em></p>
-            <p class="upload-tip">仅支持单个 ZIP，图片类型样本集</p>
-          </div>
-        </el-upload>
-        <div class="batch-version-row">
-          <el-checkbox v-model="batchMajorVersion">大版本变更</el-checkbox>
-        </div>
-        <div v-if="batchMajorVersion" class="batch-remark-row">
-          <div class="batch-remark-label">变更说明<span class="batch-remark-tip">（非必填，最多 150 字）</span></div>
-          <el-input
-            v-model="batchVersionRemark"
-            type="textarea"
-            :rows="3"
-            placeholder="请输入变更说明，留空则自动生成"
-            maxlength="150"
-            show-word-limit
-          />
-        </div>
-      </div>
-      <template #footer>
-        <el-button type="primary" :loading="batchSaving" @click="handleBatchConfirm">确认导入</el-button>
-        <el-button @click="batchDialogVisible = false">取消</el-button>
-      </template>
-    </el-dialog>
+    <!-- 批量导入弹框（分片上传，仅图片类型） -->
+    <ChunkUploadDialog
+      v-if="batchTarget"
+      v-model="batchDialogVisible"
+      :setNo="batchTarget.setNo"
+      :setName="batchTarget.name"
+      :typeCode="batchTarget.modality[0] || '05'"
+      source="sample"
+      title="批量导入（ZIP 分片上传）"
+      description="上传 ZIP，自动分片上传并解压图片；同名 .txt 标注和 classes.txt 内容将写入数据库"
+      @success="handleBatchUploadSuccess"
+    />
   </div>
 </template>
 
@@ -1436,14 +1335,6 @@ async function handleBatchConfirm() {
 .col-version {
   width: 60px;
   text-align: center;
-}
-
-.col-popularity {
-  width: 80px;
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  justify-content: center;
 }
 
 .col-update {

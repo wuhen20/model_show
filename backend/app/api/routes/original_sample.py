@@ -1,12 +1,12 @@
 from fastapi import APIRouter, Query, UploadFile, File, Form
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
-from app.core.database import (
-    query_code_dict, query_original_sample_set, query_original_sample_info,
+from app.core.database import query_code_dict, generate_sample_set_no
+from app.core.db_sample import (
+    query_original_sample_set, query_original_sample_info,
     save_original_sample_set, update_original_sample_set, insert_original_sample_info,
     update_original_sample_score, update_original_label_think, query_audio_text,
-    generate_sample_set_no, query_time_series_data_by_set_no,
-    get_original_sample_set_path,
+    query_time_series_data_by_set_no, get_original_sample_set_path,
 )
 from app.services.sample_minio_service import (
     is_minio_enabled, is_minio_path,
@@ -525,6 +525,7 @@ async def upload_samples_batch(
         result = extract_zip_and_import(
             target_dir=target_dir,
             set_no=setNo,
+            set_name=setName,
             type_code=typeCode,
             insert_callback=insert_original_sample_info,
             zip_path=tmp_path,

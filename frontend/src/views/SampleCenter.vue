@@ -462,6 +462,8 @@ onUnmounted(() => {
           </div>
         </div>
 
+        <!-- 样本采集状态统计暂时隐藏 -->
+        <!--
         <div class="section-card">
           <div class="section-header">
             <h3>样本采集状态</h3>
@@ -477,6 +479,7 @@ onUnmounted(() => {
             </div>
           </div>
         </div>
+        -->
 
         <!-- 样本集管理和样本标签热词暂时隐藏 -->
         <!--
@@ -545,9 +548,6 @@ onUnmounted(() => {
             <span class="star-explain"><span style="color:#f5a623">★★★★</span><span style="color:rgba(255,255,255,0.15)">★</span> 良好</span>
             <span class="star-explain"><span style="color:#f5a623">★★★</span><span style="color:rgba(255,255,255,0.15)">★★</span> 一般</span>
             <span class="star-explain"><span style="color:#f5a623">★★</span><span style="color:rgba(255,255,255,0.15)">★★★</span> 较差</span>
-          </div>
-          <div class="update-info">
-            数据每日凌晨更新，更新时间：2026-04-24 02:00:00
           </div>
         </div>
       </main>

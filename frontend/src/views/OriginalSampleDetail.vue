@@ -4,6 +4,7 @@ import { useRoute, useRouter } from 'vue-router'
 import Header from '@/components/Header.vue'
 import Sidebar from '@/components/Sidebar.vue'
 import { getSamples, getImageUrl, getAnnotations, getAudioText, updateSampleScore, uploadSamples, uploadSamplesBatch, saveLabelThink, queryTimeSeriesData, getClasses, getSamplesByLabels, type SampleInfoRow, type AnnotationData, type AnnotationBox, type TimeSeriesColumn } from '@/api/originalSample'
+import ChunkUploadDialog from '@/components/ChunkUploadDialog.vue'
 import { ElMessage } from 'element-plus'
 
 const route = useRoute()
@@ -101,49 +102,19 @@ async function handleUploadConfirm() {
   }
 }
 
-// ========== 批量导入弹框（仅图片类型）==========
+// ========== 批量导入弹框（仅图片类型，分片上传）==========
 const batchDialogVisible = ref(false)
-const batchSaving = ref(false)
-const batchFile = ref<File | null>(null)
 
 function openBatchDialog() {
   if (typeCode.value !== '05') {
     ElMessage.warning('批量导入仅支持图片类型样本集')
     return
   }
-  batchFile.value = null
   batchDialogVisible.value = true
 }
 
-function handleBatchFileChange(file: any) {
-  batchFile.value = file.raw
-}
-
-function handleBatchFileRemove() {
-  batchFile.value = null
-}
-
-async function handleBatchConfirm() {
-  if (!batchFile.value) {
-    ElMessage.warning('请选择要上传的 ZIP 文件')
-    return
-  }
-  const fileName = batchFile.value.name.toLowerCase()
-  if (!fileName.endsWith('.zip')) {
-    ElMessage.warning('仅支持 ZIP 文件')
-    return
-  }
-  batchSaving.value = true
-  try {
-    const msg = await uploadSamplesBatch(setNo.value, setName.value, typeCode.value, batchFile.value)
-    ElMessage.success(msg)
-    batchDialogVisible.value = false
-    loadSamples()
-  } catch (e: any) {
-    ElMessage.error(e.message || '批量导入失败')
-  } finally {
-    batchSaving.value = false
-  }
+function handleBatchUploadSuccess() {
+  loadSamples()
 }
 
 // 筛选条件
@@ -292,20 +263,23 @@ function goBack() {
 }
 
 // 隐藏的字段（不需要在表格中展示）
-const hiddenColumns = new Set(['recordId', 'sampleNo', 'typeCode', 'filePath', 'fileName', 'labelFlagCode', 'sampleScore', 'labelThink', 'labelContent'])
+const hiddenColumns = new Set(['recordId', 'sampleNo', 'typeCode', 'filePath', 'fileName', 'labelFlagCode', 'labelFlag', 'sampleScore', 'labelThink', 'labelContent'])
 
 // ========== 文件预览 ==========
 const imageExtSet = new Set(['jpg', 'jpeg', 'png', 'bmp', 'gif', 'webp', 'tif', 'tiff'])
 const audioExtSet = new Set(['mp3', 'wav', 'ogg', 'flac', 'aac', 'wma', 'm4a'])
 
 function isImageRow(row: SampleInfoRow): boolean {
+  // 优先通过 suffix 判断，其次通过 typeCode 判断
   const suffix = String(row.suffix || '').toLowerCase().replace('.', '')
-  return imageExtSet.has(suffix)
+  if (suffix && imageExtSet.has(suffix)) return true
+  return String(row.typeCode || '') === '05'
 }
 
 function isAudioRow(row: SampleInfoRow): boolean {
   const suffix = String(row.suffix || '').toLowerCase().replace('.', '')
-  return audioExtSet.has(suffix)
+  if (suffix && audioExtSet.has(suffix)) return true
+  return String(row.typeCode || '') === '03'
 }
 
 function isPreviewable(row: SampleInfoRow): boolean {
@@ -915,39 +889,17 @@ onMounted(() => {
       </template>
     </el-dialog>
 
-    <!-- 批量导入弹框（仅图片类型） -->
-    <el-dialog v-model="batchDialogVisible" title="批量导入（ZIP）" width="520px" :close-on-click-modal="false" class="upload-dialog">
-      <div class="upload-dialog-content">
-        <div class="upload-info-row">
-          <span class="upload-info-label">样本集：</span>
-          <span class="upload-info-value">{{ setName }}</span>
-        </div>
-        <div class="upload-info-row">
-          <span class="upload-info-label">说明：</span>
-          <span class="upload-info-value">上传 ZIP，自动解压图片到样本集目录；原始样本仅导入图片</span>
-        </div>
-        <el-upload
-          accept=".zip"
-          :auto-upload="false"
-          :limit="1"
-          :on-change="handleBatchFileChange"
-          :on-remove="handleBatchFileRemove"
-          drag
-        >
-          <div class="upload-drag-content">
-            <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="rgba(0,212,255,0.5)" stroke-width="1.5">
-              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M17 8l-5-5-5 5M12 3v12"/>
-            </svg>
-            <p>将 ZIP 文件拖到此处，或<em>点击上传</em></p>
-            <p class="upload-tip">仅支持单个 ZIP，图片类型样本集</p>
-          </div>
-        </el-upload>
-      </div>
-      <template #footer>
-        <el-button type="primary" :loading="batchSaving" @click="handleBatchConfirm">确认导入</el-button>
-        <el-button @click="batchDialogVisible = false">取消</el-button>
-      </template>
-    </el-dialog>
+    <!-- 批量导入弹框（分片上传，仅图片类型） -->
+    <ChunkUploadDialog
+      v-model="batchDialogVisible"
+      :setNo="setNo"
+      :setName="setName"
+      :typeCode="typeCode"
+      source="original"
+      title="批量导入（ZIP 分片上传）"
+      description="上传 ZIP，自动分片上传并解压图片到样本集目录；原始样本仅导入图片"
+      @success="handleBatchUploadSuccess"
+    />
 
     <!-- 文件预览弹框 -->
     <el-dialog v-model="previewVisible" :title="previewName || '文件预览'" width="90vw" :close-on-click-modal="true" class="preview-dialog" destroy-on-close top="3vh">
@@ -1480,7 +1432,6 @@ onMounted(() => {
 .link-name {
   color: #00d4ff;
   cursor: pointer;
-  text-decoration: underline;
   &:hover {
     color: #66e0ff;
   }

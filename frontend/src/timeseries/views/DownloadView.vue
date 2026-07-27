@@ -124,7 +124,7 @@
 
 <script setup>
 import { ref, computed, onMounted } from 'vue'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElMessage, ElMessageBox, ElLoading } from 'element-plus'
 import StatStrip from '@/timeseries/components/StatStrip.vue'
 import { downloadAPI, predictAPI } from '@/timeseries/api'
 
@@ -195,16 +195,46 @@ const refreshCurrentTab = () => {
   }
 }
 
+// 通用 fetch + blob 下载：在 F12 Network 中可见请求，并显示 loading
+const downloadByFetch = async (url, defaultName) => {
+  const loading = ElLoading.service({ lock: true, text: '正在下载文件...', background: 'rgba(0,0,0,0.7)' })
+  try {
+    const res = await fetch(url)
+    if (!res.ok) {
+      const errData = await res.json().catch(() => null)
+      ElMessage.warning(errData?.detail || errData?.message || '下载失败')
+      return
+    }
+    const blob = await res.blob()
+    // 优先从响应头获取文件名
+    let fileName = defaultName
+    const disposition = res.headers.get('Content-Disposition') || ''
+    const match = disposition.match(/filename\*?=([^;]+)/i)
+    if (match) {
+      fileName = decodeURIComponent(match[1].replace(/^UTF-8''/i, '').replace(/^"/, '').replace(/"$/, '').trim())
+    }
+    const a = document.createElement('a')
+    a.href = URL.createObjectURL(blob)
+    a.download = fileName || 'download'
+    a.click()
+    URL.revokeObjectURL(a.href)
+    ElMessage.success('下载成功')
+  } catch (e) {
+    console.error('下载失败:', e)
+    ElMessage.error('下载出错')
+  } finally {
+    loading.close()
+  }
+}
+
 const handleDownloadProcessed = (file) => {
   const downloadUrl = downloadAPI.downloadProcessed(file.file_id)
-  window.open(downloadUrl, '_blank')
-  ElMessage.success('开始下载预处理文件')
+  downloadByFetch(downloadUrl, file.new_name)
 }
 
 const handleDownloadMerged = (file) => {
   const downloadUrl = downloadAPI.downloadMerged(file.file_id)
-  window.open(downloadUrl, '_blank')
-  ElMessage.success('开始下载整合文件')
+  downloadByFetch(downloadUrl, file.merged_name)
 }
 
 const handleDeleteProcessed = async (file) => {
@@ -253,8 +283,7 @@ const handleDeleteMerged = async (file) => {
 
 const handleDownloadPredicted = (file) => {
   const downloadUrl = predictAPI.download(file.file_id)
-  window.open(downloadUrl, '_blank')
-  ElMessage.success('开始下载预测文件')
+  downloadByFetch(downloadUrl, file.predict_name)
 }
 
 const handleDeletePredicted = async (file) => {

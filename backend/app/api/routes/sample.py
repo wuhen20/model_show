@@ -1,7 +1,30 @@
 from fastapi import APIRouter, Query, UploadFile, File, Form
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
-from app.core.database import query_code_dict, query_sample_set, query_sample_info, save_sample_set, update_sample_set, update_sample_set_labels, get_annotation_by_sample_no, sample_statistic, sample_trend, query_audio_text, update_sample_score, insert_sample_info, update_label_think, generate_task_no, generate_sample_set_no, generate_sample_no, query_data_collect_task, save_data_collect_task, save_data_collect_task_det, query_data_collect_task_det, update_data_collect_task_det, get_task_det_raw, update_task_status, insert_collect_log, append_collect_log, finish_collect_log, query_collect_log, query_all_scheduled_tasks, get_task_execute_type, update_task_execute_type, delete_data_collect_task, execute_source_sql, save_query_result_to_desktop, query_target_table_columns, query_col_map, save_col_map, write_to_target_table, query_original_sample_set_by_type, apply_sample_set_version_change, get_sample_set_path
+from app.core.database import (
+    query_code_dict,
+    generate_task_no,
+    generate_sample_set_no,
+    generate_sample_no,
+    save_query_result_to_desktop,
+)
+from app.core.db_sample import (
+    query_sample_set, query_sample_info, save_sample_set, update_sample_set,
+    update_sample_set_labels, get_annotation_by_sample_no, query_audio_text,
+    update_sample_score, insert_sample_info, update_label_think,
+    apply_sample_set_version_change, get_sample_set_path,
+    query_original_sample_set_by_type, insert_original_sample_info_for_collect,
+    batch_insert_sample_info,
+)
+from app.core.db_collect import (
+    sample_statistic, sample_trend,
+    query_data_collect_task, save_data_collect_task, save_data_collect_task_det,
+    query_data_collect_task_det, update_data_collect_task_det, get_task_det_raw,
+    update_task_status, insert_collect_log, append_collect_log, finish_collect_log,
+    query_collect_log, query_all_scheduled_tasks, get_task_execute_type,
+    update_task_execute_type, delete_data_collect_task, execute_source_sql,
+    query_target_table_columns, query_col_map, save_col_map, write_to_target_table,
+)
 from app.services.sample_minio_service import is_minio_enabled, is_minio_path, upload_image as minio_upload_image, download_image as minio_download_image, build_set_path as minio_build_set_path, build_object_id as minio_build_object_id, list_object_names as minio_list_object_names
 import os
 import io
@@ -826,6 +849,7 @@ async def upload_samples_batch(
         result = extract_zip_and_import(
             target_dir=target_dir,
             set_no=setNo,
+            set_name=setName,
             type_code=typeCode,
             insert_callback=insert_sample_info,
             zip_path=tmp_path,
@@ -1210,6 +1234,8 @@ def _execute_image_collect_task(task_no: str, det: dict, trigger_source: str = "
     """执行图像类型数据采集任务
 
     流程：连接源数据库执行SQL → 根据获取方式下载图像文件 → 登记到 s_original_sample_info
+    - 本地存储：文件保存到关联原始样本集的 set_path 目录
+    - MinIO 存储：文件上传到 MinIO，file_path 写入 minio://bucket/setNo/filename
     """
     # 从任务明细获取图像配置
     file_get_mode = det.get("file_get_mode") or ""
@@ -1225,6 +1251,9 @@ def _execute_image_collect_task(task_no: str, det: dict, trigger_source: str = "
         return {"code": 1, "message": "图像获取字段未配置，请先配置图像获取配置"}
     if file_get_mode == "02" and not bucket_name:
         return {"code": 1, "message": "ceph 模式下桶名称不能为空"}
+
+    # 判断存储模式
+    use_minio = is_minio_enabled()
 
     # 查询任务名称
     task_name = ""
@@ -1275,27 +1304,39 @@ def _execute_image_collect_task(task_no: str, det: dict, trigger_source: str = "
             if file_name_idx is None:
                 raise ValueError(f"SQL结果中未找到图像名称字段：{file_name_field}，查询出的列：{columns}")
 
-        # 准备保存目录：优先使用关联原始样本集的 set_path 根目录
+        # 准备保存目录 / MinIO 路径
         from app.core.config import settings
         set_path = det.get("set_path") or ""
-        if set_path:
-            save_dir = set_path
+        save_dir = ""
+        if use_minio:
+            # MinIO 模式：不需要本地目录，使用 sample_set_no 作为对象前缀
+            if not sample_set_no:
+                return {"code": 1, "message": "MinIO 模式下原始样本集编号不能为空"}
+            minio_list = minio_list_object_names(sample_set_no)
+            used_filenames = set(minio_list)  # 预填入 MinIO 已有对象名，避免覆盖
+            append_collect_log(log_id, f"存储模式：MinIO，对象前缀：{sample_set_no}/")
         else:
-            # 兜底：旧数据无 set_path 时回退原逻辑，并记日志告警
-            save_dir = os.path.join(settings.sample_upload_dir, "data_collect", task_no)
-            append_collect_log(log_id, f"警告：原始样本集未配置 set_path，回退到 {save_dir}")
-        os.makedirs(save_dir, exist_ok=True)
+            # 本地模式：优先使用关联原始样本集的 set_path 根目录
+            if set_path:
+                save_dir = set_path
+            else:
+                # 兜底：旧数据无 set_path 时回退原逻辑
+                save_dir = os.path.join(settings.sample_upload_dir, "data_collect", task_no)
+                append_collect_log(log_id, f"警告：原始样本集未配置 set_path，回退到 {save_dir}")
+            os.makedirs(save_dir, exist_ok=True)
+            used_filenames = set()
 
-        append_collect_log(log_id, f"文件保存目录：{save_dir}")
+        if not use_minio:
+            append_collect_log(log_id, f"文件保存目录：{save_dir}")
         mode_names = {"01": "存储路径", "02": "ceph", "03": "oss"}
         append_collect_log(log_id, f"图像获取方式：{mode_names.get(file_get_mode, file_get_mode)}")
 
         # 遍历每行数据，获取图像文件
         success_count = 0
         fail_count = 0
-        used_filenames = set()  # 用于文件名冲突检测
 
-        from app.core.database import generate_sample_no, insert_original_sample_info_for_collect
+        from app.core.database import generate_sample_no
+        from app.core.db_sample import insert_original_sample_info_for_collect
 
         for i, row in enumerate(rows):
             try:
@@ -1307,17 +1348,22 @@ def _execute_image_collect_task(task_no: str, det: dict, trigger_source: str = "
 
                 file_id_value = str(file_id_value)
 
+                # 获取展示用名称（file_name 字段值，仅用于数据库记录和前端展示）
+                display_name = ""
+                if file_name_idx is not None and file_name_idx < len(row) and row[file_name_idx]:
+                    display_name = str(row[file_name_idx])
+
                 # 文件保存名：直接使用对象 key 的 basename
                 disk_filename = os.path.basename(file_id_value)
-
-                # 如果文件名无后缀，尝试从 Ceph 元数据补充
                 base_name, ext = os.path.splitext(disk_filename)
-                if not ext and file_get_mode == "02":
-                    from app.services.ceph_service import get_ceph_object_ext
-                    ceph_ext = get_ceph_object_ext(bucket_name, file_id_value)
-                    if ceph_ext:
-                        disk_filename = disk_filename + ceph_ext
-                        base_name, ext = os.path.splitext(disk_filename)
+
+                # 如果文件名无后缀，用 sample_name（display_name）的后缀补充
+                if not ext and display_name:
+                    _, name_ext = os.path.splitext(display_name)
+                    if name_ext:
+                        ext = name_ext
+                        disk_filename = disk_filename + ext
+                        base_name, _ = os.path.splitext(disk_filename)
 
                 # 处理文件名冲突：自动加序号
                 final_disk_name = disk_filename
@@ -1327,14 +1373,9 @@ def _execute_image_collect_task(task_no: str, det: dict, trigger_source: str = "
                     seq += 1
                 used_filenames.add(final_disk_name)
 
-                local_path = os.path.join(save_dir, final_disk_name)
-
-                # 获取展示用名称（file_name 字段值，仅用于数据库记录和前端展示）
-                display_name = ""
-                if file_name_idx is not None and file_name_idx < len(row) and row[file_name_idx]:
-                    display_name = str(row[file_name_idx])
-
-                # 根据获取方式下载文件
+                # 根据获取方式下载文件，统一拿到 bytes 和 size
+                image_bytes = None
+                file_size_bytes = 0
                 if file_get_mode == "01":
                     # 存储路径：file_id_value 就是文件路径
                     src_path = file_id_value
@@ -1342,17 +1383,45 @@ def _execute_image_collect_task(task_no: str, det: dict, trigger_source: str = "
                         append_collect_log(log_id, f"第 {i + 1} 行：源文件不存在：{src_path}，跳过")
                         fail_count += 1
                         continue
-                    import shutil
-                    shutil.copy2(src_path, local_path)
-                    file_size_bytes = os.path.getsize(local_path)
+                    with open(src_path, "rb") as f:
+                        image_bytes = f.read()
+                    file_size_bytes = len(image_bytes)
                 elif file_get_mode == "02":
-                    # ceph：file_id_value 是对象 key
-                    from app.services.ceph_service import download_from_ceph
-                    file_size_bytes = download_from_ceph(bucket_name, file_id_value, local_path)
+                    # ceph：file_id_value 是对象 key，先下载到临时文件再读取 bytes
+                    import tempfile
+                    tmp_dir = settings.upload_tmp_dir or tempfile.gettempdir()
+                    os.makedirs(tmp_dir, exist_ok=True)
+                    tmp_path = os.path.join(tmp_dir, f"collect_{task_no}_{i}")
+                    try:
+                        from app.services.ceph_service import download_from_ceph
+                        file_size_bytes = download_from_ceph(bucket_name, file_id_value, tmp_path)
+                        with open(tmp_path, "rb") as f:
+                            image_bytes = f.read()
+                    finally:
+                        if os.path.isfile(tmp_path):
+                            try:
+                                os.remove(tmp_path)
+                            except Exception:
+                                pass
                 elif file_get_mode == "03":
                     raise NotImplementedError("oss 获取方式暂未实现")
                 else:
                     raise ValueError(f"不支持的获取方式：{file_get_mode}")
+
+                # 保存文件：本地 or MinIO
+                if use_minio:
+                    content_type_map = {
+                        ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png",
+                        ".bmp": "image/bmp", ".gif": "image/gif", ".webp": "image/webp",
+                        ".tif": "image/tiff", ".tiff": "image/tiff",
+                    }
+                    ct = content_type_map.get(ext.lower(), "application/octet-stream")
+                    file_path = minio_upload_image(sample_set_no, final_disk_name, image_bytes, content_type=ct)
+                else:
+                    local_path = os.path.join(save_dir, final_disk_name)
+                    with open(local_path, "wb") as f:
+                        f.write(image_bytes)
+                    file_path = local_path
 
                 # 提取后缀名（不含点）
                 _, file_ext = os.path.splitext(final_disk_name)
@@ -1372,7 +1441,7 @@ def _execute_image_collect_task(task_no: str, det: dict, trigger_source: str = "
                     "set_no": sample_set_no,
                     "type_code": "05",
                     "suffix": suffix,
-                    "file_path": local_path,
+                    "file_path": file_path,
                     "file_size": file_size_str,
                     "collect_task_no": task_no,
                 })

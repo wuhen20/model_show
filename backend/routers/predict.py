@@ -1,7 +1,6 @@
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse
 from services.file_manager import FileManager
-from services.predict_service import PredictService
 from services.csv_parser import CSVParser
 from models.schemas import (
     PredictRequest, 
@@ -19,20 +18,13 @@ from pydantic import BaseModel
 
 router = APIRouter(prefix="/api/predict", tags=["predict"])
 
-# 添加 Chronos2 API 路径到 sys.path
+# 添加 Chronos2 API 路径到 sys.path（仅添加路径，不导入模块）
 project_root = Path(__file__).parent.parent
 chronos_api_path = project_root / "predict_api_chronos2" / "Api"
 if str(chronos_api_path) not in sys.path:
     sys.path.insert(0, str(chronos_api_path))
 
-# 导入 Chronos2 原生接口
-from chronos_predict_api import (
-    ChronosPredictRequest,
-    run_chronos_prediction,
-    is_valid_model_dir,
-    has_model_weights,
-    default_model_dir,
-)
+# === 延迟导入策略：chronos_predict_api 移到函数内部按需加载，避免启动时加载 900MB 模型依赖 ===
 
 # 模型根目录（用于扫描可选模型；可用环境变量 CHRONOS2_MODEL_ROOT 覆盖）
 def _default_model_root() -> Path:
@@ -65,9 +57,11 @@ def _list_windows_drives() -> list:
 class ModelBrowseRequest(BaseModel):
     path: Optional[str] = None
 
-# 初始化服务
+
+# 初始化服务（PredictService 内部延迟导入 chronos_predict_api）
+# file_manager 不涉及 chronos 依赖
 file_manager = FileManager()
-predict_service = PredictService()
+
 
 # 导入process路由中的file_registry
 from routers.process import file_registry
@@ -82,8 +76,11 @@ async def list_models(root: str = None):
     列出可选的本机模型。
 
     扫描模型根目录（默认 backend/predict_api_chronos2/Model，或 ?root= 指定的目录），
-    返回其中“含 config.json + 权重文件”的有效模型目录；根目录本身若是模型也会包含在内。
+    返回其中"含 config.json + 权重文件"的有效模型目录；根目录本身若是模型也会包含在内。
     """
+    # 延迟导入 chronos_predict_api
+    from chronos_predict_api import is_valid_model_dir, default_model_dir
+
     try:
         if root and root.strip():
             root_path = Path(root.strip()).expanduser().resolve()
@@ -133,8 +130,11 @@ async def browse_models(req: ModelBrowseRequest):
 
     - path 为空：Windows 返回盘符列表，其它系统返回根目录内容。
     - path 非空：返回该目录下的子目录列表，并标注每个子目录是否为有效模型目录，
-      同时返回当前目录是否为模型目录、其父级路径（便于“返回上一级”）。
+      同时返回当前目录是否为模型目录、其父级路径（便于"返回上一级"）。
     """
+    # 延迟导入 chronos_predict_api
+    from chronos_predict_api import is_valid_model_dir
+
     try:
         raw = (req.path or "").strip()
 
@@ -299,7 +299,11 @@ async def get_file_headers(file_type: str, file_id: str):
 
 @router.post("/execute", response_model=PredictResponse)
 async def execute_predict(predict_request: PredictRequest):
-    """执行数据预测"""
+    """执行数据预测（延迟导入 PredictService 以避免启动时加载 Chronos）"""
+    # 延迟导入 PredictService（其内部会导入 chronos_predict_api）
+    from services.predict_service import PredictService
+    predict_service = PredictService()
+
     try:
         print(f"[数据预测] 开始执行预测")
         print(f"[数据预测] 文件: {predict_request.file_name}")
@@ -338,22 +342,28 @@ async def execute_predict(predict_request: PredictRequest):
 
 
 @router.post("/chronos2/predict")
-async def chronos2_predict(request: ChronosPredictRequest):
+async def chronos2_predict(request: dict):
     """
     Chronos2 原生预测接口（可直接用 Postman 测试）
     
     直接接收历史数据，不依赖文件上传。
     完全兼容 Chronos2 原生接口规范。
     """
+    # 延迟导入 chronos_predict_api
+    from chronos_predict_api import ChronosPredictRequest, run_chronos_prediction
+
     try:
+        # 将 dict 转换为 ChronosPredictRequest 实例
+        request_obj = ChronosPredictRequest(**request)
+
         print(f"[Chronos2预测] 开始执行预测")
-        print(f"[Chronos2预测] 目标字段: {request.target_fields}")
-        print(f"[Chronos2预测] 预测长度: {request.prediction_length}")
-        print(f"[Chronos2预测] 预测策略: {request.predict_strategy}")
-        print(f"[Chronos2预测] 历史数据条数: {len(request.history_data)}")
+        print(f"[Chronos2预测] 目标字段: {request_obj.target_fields}")
+        print(f"[Chronos2预测] 预测长度: {request_obj.prediction_length}")
+        print(f"[Chronos2预测] 预测策略: {request_obj.predict_strategy}")
+        print(f"[Chronos2预测] 历史数据条数: {len(request_obj.history_data)}")
         
         # 直接调用 Chronos2 预测
-        prediction_result = run_chronos_prediction(request)
+        prediction_result = run_chronos_prediction(request_obj)
         
         print(f"[Chronos2预测] 预测完成")
         print(f"[Chronos2预测] 结果分位数: {list(prediction_result.get('prediction_result', {}).keys())}")

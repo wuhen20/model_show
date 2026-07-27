@@ -4,10 +4,11 @@ import { useRouter } from 'vue-router'
 import Header from '@/components/Header.vue'
 import Sidebar from '@/components/Sidebar.vue'
 import { getCodeDict, saveSampleSet, updateSampleSet, querySampleSet, uploadSamples, uploadSamplesBatch } from '@/api/originalSample'
+import ChunkUploadDialog from '@/components/ChunkUploadDialog.vue'
 import { ElMessage, ElLoading } from 'element-plus'
 
 type ViewMode = 'card' | 'list'
-type SortField = 'updateTime' | 'scale' | 'quality' | 'popularity'
+type SortField = 'updateTime' | 'scale' | 'quality'
 type SortOrder = 'asc' | 'desc'
 
 interface SampleSet {
@@ -18,7 +19,6 @@ interface SampleSet {
   updateTime: string
   qualityLevel: string
   version: string
-  popularity: number
   scale: number
   businessSystem: string
   fieldCode: string
@@ -29,7 +29,6 @@ interface SampleSet {
 const router = useRouter()
 
 const modalityOptions = ref<{ value: string; label: string }[]>([])
-const qualityOptions = ref<{ value: string; label: string }[]>([])
 const fieldOptions = ref<{ value: string; label: string }[]>([])
 const dictLoading = ref(false)
 
@@ -38,13 +37,6 @@ const defaultModalityOptions = [
   { value: 'image', label: '图片' },
   { value: 'audio', label: '语音' },
   { value: 'video', label: '视频' }
-]
-
-const defaultQualityOptions = [
-  { value: '01', label: '优质' },
-  { value: '02', label: '良好' },
-  { value: '03', label: '一般' },
-  { value: '04', label: '较差' }
 ]
 
 const scaleOptions = [
@@ -56,9 +48,7 @@ const scaleOptions = [
 
 const sortOptions: { value: SortField; label: string }[] = [
   { value: 'updateTime', label: '更新时间' },
-  { value: 'scale', label: '样本规模' },
-  { value: 'quality', label: '质量等级' },
-  { value: 'popularity', label: '热度' }
+  { value: 'scale', label: '样本规模' }
 ]
 
 const sampleSets = ref<SampleSet[]>([])
@@ -69,7 +59,6 @@ const sortField = ref<SortField>('updateTime')
 
 const filterName = ref('')
 const filterModality = ref<string[]>([])
-const filterQuality = ref<string[]>([])
 const filterField = ref<string[]>([])
 const filterScale = ref<string[]>([])
 const filterTagsText = ref('')
@@ -84,9 +73,6 @@ const modalityIcon: Record<string, string> = {
 }
 // codeValue 到图标类型的映射（数据库编码 → 图标 key）
 const codeToIconKey = ref<Record<string, string>>({})
-const qualityLabel = ref<Record<string, string>>({})
-const qualityColor = ref<Record<string, string>>({})
-const qualityOrder = ref<Record<string, number>>({})
 const fieldLabel = ref<Record<string, string>>({})
 
 function matchScale(scale: number, range: string): boolean {
@@ -108,9 +94,6 @@ const filteredData = computed(() => {
   }
   if (filterModality.value.length > 0) {
     result = result.filter(s => filterModality.value.some(m => s.modality.includes(m)))
-  }
-  if (filterQuality.value.length > 0) {
-    result = result.filter(s => filterQuality.value.includes(s.qualityLevel))
   }
   if (filterField.value.length > 0) {
     result = result.filter(s => filterField.value.includes(s.fieldCode))
@@ -137,12 +120,6 @@ const filteredData = computed(() => {
         break
       case 'scale':
         cmp = a.scale - b.scale
-        break
-      case 'quality':
-        cmp = qualityOrder.value[a.qualityLevel] - qualityOrder.value[b.qualityLevel]
-        break
-      case 'popularity':
-        cmp = a.popularity - b.popularity
         break
     }
     return cmp * order
@@ -199,7 +176,6 @@ async function downloadSampleSet(item: SampleSet) {
 function resetFilters() {
   filterName.value = ''
   filterModality.value = []
-  filterQuality.value = []
   filterField.value = []
   filterScale.value = []
   filterTagsText.value = ''
@@ -217,8 +193,6 @@ function handleCardCommand(command: string, item: SampleSet) {
     openEditDialog(item)
   }
 }
-
-const qualityColors = ['#00d4ff', '#00ff88', '#ffaa00', '#ff5555']
 
 async function loadCodeDict() {
   dictLoading.value = true
@@ -256,29 +230,6 @@ async function loadCodeDict() {
       codeToIconKey.value = Object.fromEntries(defaultModalityOptions.map(o => [o.value, o.value]))
     }
 
-    if (data.QUALITY_LEVEL && data.QUALITY_LEVEL.length > 0) {
-      qualityOptions.value = data.QUALITY_LEVEL.map(item => ({
-        value: item.codeValue,
-        label: item.codeName
-      }))
-      const labelMap: Record<string, string> = {}
-      const colorMap: Record<string, string> = {}
-      const orderMap: Record<string, number> = {}
-      data.QUALITY_LEVEL.forEach((item, idx) => {
-        labelMap[item.codeValue] = item.codeName
-        colorMap[item.codeValue] = qualityColors[idx] || '#00d4ff'
-        orderMap[item.codeValue] = data.QUALITY_LEVEL!.length - idx
-      })
-      qualityLabel.value = labelMap
-      qualityColor.value = colorMap
-      qualityOrder.value = orderMap
-    } else {
-      qualityOptions.value = defaultQualityOptions
-      qualityLabel.value = Object.fromEntries(defaultQualityOptions.map(o => [o.value, o.label]))
-      qualityColor.value = { '01': '#00d4ff', '02': '#00ff88', '03': '#ffaa00', '04': '#ff5555' }
-      qualityOrder.value = { '01': 4, '02': 3, '03': 2, '04': 1 }
-    }
-
     if (data.SAMPLE_FIELD && data.SAMPLE_FIELD.length > 0) {
       fieldOptions.value = data.SAMPLE_FIELD.map(item => ({
         value: item.codeValue,
@@ -295,10 +246,6 @@ async function loadCodeDict() {
     modalityOptions.value = defaultModalityOptions
     modalityLabel.value = Object.fromEntries(defaultModalityOptions.map(o => [o.value, o.label]))
     codeToIconKey.value = Object.fromEntries(defaultModalityOptions.map(o => [o.value, o.value]))
-    qualityOptions.value = defaultQualityOptions
-    qualityLabel.value = Object.fromEntries(defaultQualityOptions.map(o => [o.value, o.label]))
-    qualityColor.value = { '01': '#00d4ff', '02': '#00ff88', '03': '#ffaa00', '04': '#ff5555' }
-    qualityOrder.value = { '01': 4, '02': 3, '03': 2, '04': 1 }
   } finally {
     dictLoading.value = false
   }
@@ -320,7 +267,6 @@ async function loadSampleSets() {
       updateTime: row.updateTime ? String(row.updateTime).slice(0, 16) : (row.createTime ? String(row.createTime).slice(0, 16) : ''),
       qualityLevel: row.qualityLevel || '',
       version: row.version || '',
-      popularity: row.popularity ?? 0,
       scale: row.sampleCount ?? 0,
       businessSystem: row.businessSystem || '',
       fieldCode: row.sampleFieldCode || '',
@@ -519,11 +465,9 @@ async function handleUploadConfirm() {
   }
 }
 
-// ========== 批量导入弹框（仅图片类型）==========
+// ========== 批量导入弹框（仅图片类型，分片上传）==========
 const batchDialogVisible = ref(false)
-const batchSaving = ref(false)
 const batchTarget = ref<SampleSet | null>(null)
-const batchFile = ref<File | null>(null)
 
 function openBatchDialog(item: SampleSet) {
   if (item.modality[0] !== '05') {
@@ -531,46 +475,11 @@ function openBatchDialog(item: SampleSet) {
     return
   }
   batchTarget.value = item
-  batchFile.value = null
   batchDialogVisible.value = true
 }
 
-function handleBatchFileChange(file: any) {
-  batchFile.value = file.raw
-}
-
-function handleBatchFileRemove() {
-  batchFile.value = null
-}
-
-async function handleBatchConfirm() {
-  if (!batchTarget.value) return
-  if (!batchFile.value) {
-    ElMessage.warning('请选择要上传的 ZIP 文件')
-    return
-  }
-  const fileName = batchFile.value.name.toLowerCase()
-  if (!fileName.endsWith('.zip')) {
-    ElMessage.warning('仅支持 ZIP 文件')
-    return
-  }
-  const typeCode = batchTarget.value.modality[0] || ''
-  batchSaving.value = true
-  try {
-    const msg = await uploadSamplesBatch(
-      batchTarget.value.setNo,
-      batchTarget.value.name,
-      typeCode,
-      batchFile.value
-    )
-    ElMessage.success(msg)
-    batchDialogVisible.value = false
-    loadSampleSets()
-  } catch (e: any) {
-    ElMessage.error(e.message || '批量导入失败')
-  } finally {
-    batchSaving.value = false
-  }
+function handleBatchUploadSuccess() {
+  loadSampleSets()
 }
 </script>
 
@@ -607,12 +516,6 @@ async function handleBatchConfirm() {
               <label>样本领域</label>
               <el-select v-model="filterField" multiple placeholder="全部" clearable size="default">
                 <el-option v-for="f in fieldOptions" :key="f.value" :label="f.label" :value="f.value" />
-              </el-select>
-            </div>
-            <div class="filter-item">
-              <label>质量等级</label>
-              <el-select v-model="filterQuality" multiple placeholder="全部" clearable size="default">
-                <el-option v-for="q in qualityOptions" :key="q.value" :label="q.label" :value="q.value" />
               </el-select>
             </div>
             <div class="filter-item">
@@ -679,7 +582,6 @@ async function handleBatchConfirm() {
                   {{ modalityLabel[m] }}
                 </span>
               </div>
-              <span class="quality-badge" :style="{ color: qualityColor[item.qualityLevel], borderColor: qualityColor[item.qualityLevel] }">{{ qualityLabel[item.qualityLevel] }}</span>
             </div>
             <div class="card-body">
               <h4 class="card-name link-name" :title="item.name" @click="goToDetail(item)">{{ item.name }}</h4>
@@ -694,10 +596,6 @@ async function handleBatchConfirm() {
                 <div class="meta-item">
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 20h16v-2H4v2zm0-6h16v-2H4v2zm0-6h16V6H4v2z"/></svg>
                   <span>{{ formatScale(item.scale) }}条</span>
-                </div>
-                <div class="meta-item">
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>
-                  <span>{{ item.popularity }}</span>
                 </div>
                 <div class="meta-item">
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 7v10c0 .55.45 1 1 1h14c.55 0 1-.45 1-1V7c0-.55-.45-1-1-1H5c-.55 0-1 .45-1 1zm0 0l9 6 9-6"/></svg>
@@ -731,9 +629,7 @@ async function handleBatchConfirm() {
             <span class="col col-name">样本集名称</span>
             <span class="col col-modality">类型</span>
             <span class="col col-scale">样本规模</span>
-            <span class="col col-quality">质量等级</span>
             <span class="col col-version">版本号</span>
-            <span class="col col-popularity">热度</span>
             <span class="col col-update">更新时间</span>
             <span class="col col-action">操作</span>
           </div>
@@ -756,14 +652,7 @@ async function handleBatchConfirm() {
               </div>
             </span>
             <span class="col col-scale">{{ formatScale(item.scale) }}条</span>
-            <span class="col col-quality">
-              <span class="quality-badge-sm" :style="{ color: qualityColor[item.qualityLevel], borderColor: qualityColor[item.qualityLevel] }">{{ qualityLabel[item.qualityLevel] }}</span>
-            </span>
             <span class="col col-version">{{ item.version }}</span>
-            <span class="col col-popularity">
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#ff5555" stroke-width="2"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>
-              {{ item.popularity }}
-            </span>
             <span class="col col-update">{{ item.updateTime }}</span>
             <span class="col col-action">
               <el-button text size="small" class="action-btn" @click="openEditDialog(item)">编辑</el-button>
@@ -877,38 +766,18 @@ async function handleBatchConfirm() {
       </template>
     </el-dialog>
 
-    <el-dialog v-model="batchDialogVisible" title="批量导入（ZIP）" width="520px" :close-on-click-modal="false" class="create-dialog">
-      <div v-if="batchTarget" class="upload-dialog-content">
-        <div class="upload-info-row">
-          <span class="upload-info-label">样本集：</span>
-          <span class="upload-info-value">{{ batchTarget.name }}</span>
-        </div>
-        <div class="upload-info-row">
-          <span class="upload-info-label">说明：</span>
-          <span class="upload-info-value">上传 ZIP，自动解压图片到样本集目录；原始样本仅导入图片</span>
-        </div>
-        <el-upload
-          accept=".zip"
-          :auto-upload="false"
-          :limit="1"
-          :on-change="handleBatchFileChange"
-          :on-remove="handleBatchFileRemove"
-          drag
-        >
-          <div class="upload-drag-content">
-            <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="rgba(0,212,255,0.5)" stroke-width="1.5">
-              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M17 8l-5-5-5 5M12 3v12"/>
-            </svg>
-            <p>将 ZIP 文件拖到此处，或<em>点击上传</em></p>
-            <p class="upload-tip">仅支持单个 ZIP，图片类型样本集</p>
-          </div>
-        </el-upload>
-      </div>
-      <template #footer>
-        <el-button type="primary" :loading="batchSaving" @click="handleBatchConfirm">确认导入</el-button>
-        <el-button @click="batchDialogVisible = false">取消</el-button>
-      </template>
-    </el-dialog>
+    <!-- 批量导入弹框（分片上传，仅图片类型） -->
+    <ChunkUploadDialog
+      v-if="batchTarget"
+      v-model="batchDialogVisible"
+      :setNo="batchTarget.setNo"
+      :setName="batchTarget.name"
+      :typeCode="batchTarget.modality[0] || '05'"
+      source="original"
+      title="批量导入（ZIP 分片上传）"
+      description="上传 ZIP，自动分片上传并解压图片到样本集目录；原始样本仅导入图片"
+      @success="handleBatchUploadSuccess"
+    />
   </div>
 </template>
 
@@ -1166,15 +1035,6 @@ async function handleBatchConfirm() {
   }
 }
 
-.quality-badge {
-  font-size: 12px;
-  font-weight: 600;
-  padding: 2px 8px;
-  border-radius: 4px;
-  border: 1px solid;
-  white-space: nowrap;
-}
-
 .card-body {
   flex: 1;
   margin-bottom: 16px;
@@ -1335,22 +1195,9 @@ async function handleBatchConfirm() {
   text-align: center;
 }
 
-.col-quality {
-  width: 80px;
-  text-align: center;
-}
-
 .col-version {
   width: 60px;
   text-align: center;
-}
-
-.col-popularity {
-  width: 80px;
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  justify-content: center;
 }
 
 .col-update {
@@ -1410,14 +1257,6 @@ async function handleBatchConfirm() {
   &.image { background: rgba(0, 255, 136, 0.15); color: #00ff88; }
   &.audio { background: rgba(168, 85, 247, 0.15); color: #a855f7; }
   &.video { background: rgba(255, 170, 0, 0.15); color: #ffaa00; }
-}
-
-.quality-badge-sm {
-  font-size: 12px;
-  font-weight: 600;
-  padding: 1px 8px;
-  border-radius: 4px;
-  border: 1px solid;
 }
 
 .empty-state {

@@ -1,6 +1,8 @@
 """
 Chronos2 数据预测服务
 集成 Chronos2 模型进行时间序列预测
+
+延迟导入策略：chronos_predict_api 移到方法内部按需加载，避免启动时加载 900MB 模型依赖
 """
 import os
 import sys
@@ -8,23 +10,15 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 from datetime import datetime
 import pandas as pd
-import torch
 
-# 添加 predict_api_chronos2 到路径（内置到backend目录）
+# 添加 predict_api_chronos2 到路径（仅添加路径，不导入模块）
 project_root = Path(__file__).parent.parent
 chronos_api_path = project_root / "predict_api_chronos2" / "Api"
 if str(chronos_api_path) not in sys.path:
     sys.path.insert(0, str(chronos_api_path))
 
-from chronos_predict_api import (
-    ChronosPredictRequest,
-    get_pipeline,
-    _normalize_history_dataframe,
-    _build_predict_inputs,
-    _predict_with_optional_future,
-    _predict_column_by_column,
-    _build_quantile_wide,
-)
+# === 延迟导入：chronos_predict_api 在方法内部按需加载 ===
+
 from models.schemas import PredictRequest, FileStatus
 from fastapi import HTTPException
 
@@ -36,7 +30,10 @@ class PredictService:
         self.pipeline = None
     
     def _load_pipeline(self):
-        """加载 Chronos2 模型"""
+        """加载 Chronos2 模型（延迟导入 chronos_predict_api）"""
+        # 延迟导入
+        from chronos_predict_api import get_pipeline
+
         if self.pipeline is None:
             try:
                 self.pipeline = get_pipeline()
@@ -206,7 +203,7 @@ class PredictService:
     
     def execute_prediction(self, request: PredictRequest) -> Dict[str, Any]:
         """
-        执行预测任务
+        执行预测任务（延迟导入 chronos_predict_api）
         
         Args:
             request: 预测请求参数
@@ -214,6 +211,9 @@ class PredictService:
         Returns:
             预测结果字典
         """
+        # 延迟导入 chronos_predict_api
+        from chronos_predict_api import ChronosPredictRequest, run_chronos_prediction
+
         try:
             # 1. 确定文件路径
             if request.file_type == "uploaded":
@@ -307,8 +307,6 @@ class PredictService:
             if request.prediction_start_time:
                 print(f"[预测服务] 预测起始时间: {request.prediction_start_time}")
             
-            # 使用 chronos_predict_api 中的 run_chronos_prediction 函数
-            from chronos_predict_api import run_chronos_prediction
             prediction_result = run_chronos_prediction(chronos_request)
             
             # 8. 如果指定了预测起始时间，重新生成预测时间索引

@@ -192,8 +192,20 @@ async function handleExecute(task: CleanTask) {
     return
   }
   executingSet.value.add(task.taskNo)
+  let isAsync = false
   try {
     const result = await executeCleanTask(task.taskNo)
+    // 图片类型和时序类型均为异步执行：启动轮询监控任务状态
+    isAsync = !!result.async
+
+    if (isAsync) {
+      ElMessage.success('任务已启动，正在后台执行，请通过执行记录查看进度')
+      startTaskPolling(task.taskNo)
+      await loadTasks()
+      return
+    }
+
+    // 同步执行结果（兼容旧逻辑）
     if (isImage) {
       ElMessage.success(`执行成功，共检测 ${result.resultCount} 张正常图片，问题图片已隔离`)
     } else {
@@ -204,8 +216,71 @@ async function handleExecute(task: CleanTask) {
     ElMessage.error(e.message || '执行失败')
     await loadTasks()
   } finally {
-    executingSet.value.delete(task.taskNo)
+    // 异步任务不在此处移除 executingSet，由轮询结束时机移除
+    if (!isAsync) {
+      executingSet.value.delete(task.taskNo)
+    }
   }
+}
+
+// ========== 异步任务轮询 ==========
+// {taskNo: number} 保存定时器ID
+const pollingTimers: Record<string, ReturnType<typeof setInterval>> = {}
+const POLLING_INTERVAL = 2000 // 轮询间隔 2 秒
+const POLLING_TIMEOUT = 30 * 60 * 1000 // 最大轮询时长 30 分钟
+
+function startTaskPolling(taskNo: string) {
+  // 避免重复启动
+  if (pollingTimers[taskNo]) {
+    clearInterval(pollingTimers[taskNo])
+  }
+
+  const startTime = Date.now()
+
+  const poll = async () => {
+    // 超时保护
+    if (Date.now() - startTime > POLLING_TIMEOUT) {
+      ElMessage.warning(`任务 ${taskNo} 轮询超时，请手动刷新查看结果`)
+      stopTaskPolling(taskNo)
+      return
+    }
+
+    try {
+      const logs = await getCleanLogs(taskNo)
+      if (!logs || logs.length === 0) return
+
+      // 取最新一条日志
+      const latestLog = logs[0]
+      const status = String(latestLog.executeStatusCode || '')
+
+      if (status === '03') {
+        // 执行成功
+        ElMessage.success(`任务执行成功，共检测 ${latestLog.totalCount} 张图片，隔离 ${latestLog.removedCount} 张问题图片`)
+        stopTaskPolling(taskNo)
+        await loadTasks()
+      } else if (status === '04') {
+        // 执行失败
+        ElMessage.error(`任务执行失败：${latestLog.executeLog || '未知错误'}`)
+        stopTaskPolling(taskNo)
+        await loadTasks()
+      }
+      // status === '02' 执行中，继续轮询
+    } catch (e) {
+      console.error('轮询任务状态失败:', e)
+    }
+  }
+
+  // 立即执行一次，然后定时执行
+  poll()
+  pollingTimers[taskNo] = setInterval(poll, POLLING_INTERVAL)
+}
+
+function stopTaskPolling(taskNo: string) {
+  if (pollingTimers[taskNo]) {
+    clearInterval(pollingTimers[taskNo])
+    delete pollingTimers[taskNo]
+  }
+  executingSet.value.delete(taskNo)
 }
 
 // 删除任务
@@ -484,7 +559,7 @@ async function loadOriginalSampleSetOptions() {
             <div class="log-stats">
               <span class="stat-item">总数：<b>{{ log.totalCount }}</b></span>
               <span class="stat-item removed">移除：<b>{{ log.removedCount }}</b></span>
-              <span class="stat-item result">结果：<b>{{ log.resultCount }}</b></span>
+              <span class="stat-item result">结果：<b>{{ currentLogTask?.sampleType === '05' ? log.removedCount : log.resultCount }}</b></span>
             </div>
             <el-button size="small" class="log-btn" @click="openLogDetailDialog(log)">
               日志

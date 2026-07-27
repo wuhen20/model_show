@@ -251,3 +251,40 @@ body {
   border-color: rgba(0, 212, 255, 0.3);
   color: $primary-color;
 }
+
+/* el-dialog 弹框样式：去掉标题与框体间距 */
+.el-dialog {
+  background: linear-gradient(135deg, rgba(17, 24, 39, 0.98) 0%, rgba(26, 35, 50, 0.95) 100%) !important;
+  border: 1px solid rgba(0, 212, 255, 0.25) !important;
+  border-radius: 12px !important;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5) !important;
+
+  .el-dialog__header {
+    margin-right: 0 !important; // 去掉右侧间距（Element Plus 默认给关闭按钮留空间）
+    padding: 14px 20px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.15);
+    background: transparent;
+  }
+  .el-dialog__title {
+    color: #fff !important;
+    font-weight: 600;
+  }
+  .el-dialog__headerbtn {
+    top: 14px;
+    right: 16px;
+    .el-dialog__close {
+      color: rgba(255, 255, 255, 0.5) !important;
+      &:hover {
+        color: #00d4ff !important;
+      }
+    }
+  }
+  .el-dialog__body {
+    padding: 20px;
+    color: rgba(255, 255, 255, 0.85) !important;
+  }
+  .el-dialog__footer {
+    padding: 12px 20px;
+    border-top: 1px solid rgba(255, 255, 255, 0.15);
+  }
+}

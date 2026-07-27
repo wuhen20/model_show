@@ -6,11 +6,12 @@ from datetime import datetime
 
 import pandas as pd
 
-from app.core.database import (
+from app.core.db_clean import (
     update_clean_task_status,
     insert_clean_log,
     append_clean_log,
     finish_clean_log,
+    finish_clean_task_and_log,
 )
 from . import OPERATOR_REGISTRY
 from .base import CleanContext
@@ -58,7 +59,9 @@ def _reorder_nodes_by_prev(nodes: list) -> list:
 
 
 def _save_clean_result(ctx: CleanContext, task: dict, task_no: str, log_id: int) -> dict:
-    """生成清洗结果 JSON 文件并保存到本地，返回包含文件信息的字典。"""
+    """生成清洗结果 JSON 文件，根据存储类型保存到本地或 MinIO，返回包含文件信息的字典。"""
+    from app.services.sample_minio_service import is_minio_enabled, upload_image
+
     ctx.log("正在生成清洗结果 JSON 文件...")
 
     df = ctx.df
@@ -89,41 +92,53 @@ def _save_clean_result(ctx: CleanContext, task: dict, task_no: str, log_id: int)
         "rows": records,
     }
 
-    # 保存目录：SAMPLE_UPLOAD_DIR 下的 clean_result 文件夹
-    from app.core.config import settings
-    base_dir = getattr(settings, "sample_upload_dir", "")
-    if not base_dir:
-        base_dir = os.path.abspath("uploads")
-    clean_result_dir = os.path.join(base_dir, "clean_result")
-    os.makedirs(clean_result_dir, exist_ok=True)
-
     # 文件命名：清洗任务编号_时间戳.json
     timestamp_str = datetime.now().strftime("%Y%m%d_%H%M%S")
     file_name = f"{task_no}_{timestamp_str}.json"
-    file_path = os.path.join(clean_result_dir, file_name)
 
-    with open(file_path, "w", encoding="utf-8") as f:
-        json.dump(result_data, f, ensure_ascii=False, indent=2, default=str)
+    if is_minio_enabled():
+        # MinIO 模式：上传到对象存储
+        json_bytes = json.dumps(result_data, ensure_ascii=False, indent=2, default=str).encode("utf-8")
+        minio_path = upload_image("clean_result", file_name, json_bytes, content_type="application/json")
+        ctx.log(f"清洗结果已上传到对象存储：{minio_path}")
 
-    ctx.log(f"清洗结果已保存到：{file_path}")
+        return {"fileName": file_name, "filePath": minio_path, "resultCount": result_count}
+    else:
+        # 本地模式：保存到 SAMPLE_UPLOAD_DIR 下的 clean_result 文件夹
+        from app.core.config import settings
+        base_dir = getattr(settings, "sample_upload_dir", "")
+        if not base_dir:
+            base_dir = os.path.abspath("uploads")
+        clean_result_dir = os.path.join(base_dir, "clean_result")
+        os.makedirs(clean_result_dir, exist_ok=True)
 
-    finish_clean_log(
-        log_id,
-        execute_status="03",
-        total_count=ctx.total_count,
-        removed_count=ctx.removed_count,
-        result_count=result_count,
-        log_content="执行完成，清洗结果已保存为 JSON 文件",
-        file_name=file_name,
-        file_path=file_path,
-    )
-    return {"fileName": file_name, "filePath": file_path, "resultCount": result_count}
+        file_path = os.path.join(clean_result_dir, file_name)
+
+        with open(file_path, "w", encoding="utf-8") as f:
+            json.dump(result_data, f, ensure_ascii=False, indent=2, default=str)
+
+        ctx.log(f"清洗结果已保存到：{file_path}")
+
+        return {"fileName": file_name, "filePath": file_path, "resultCount": result_count}
 
 
-def execute_clean_pipeline(task: dict, task_no: str) -> dict:
-    """按画布连线顺序执行时序类型清洗任务。"""
+def execute_clean_pipeline(task: dict, task_no: str, log_id: int = None) -> dict:
+    """按画布连线顺序执行时序类型清洗任务（可被后台线程调用）。
+
+    成功/失败均通过 finish_clean_task_and_log 原子完成，
+    确保前端轮询看到日志"已完成"时，任务状态也已同步更新。
+
+    注意：任务状态"执行中"(02)已在 API 层启动后台线程前更新，
+    此处不再重复更新。日志记录也已在 API 层创建，使用传入的 log_id。
+    """
     raw_nodes = task.get("nodes", [])
     if not raw_nodes:
+        if log_id:
+            finish_clean_task_and_log(
+                task_no=task_no, task_status="04", last_execute_flag=2,
+                record_id=log_id, execute_status="04",
+                log_content="任务未配置流程节点"
+            )
         return {"code": 1, "message": "任务未配置流程节点"}
 
     # 按画布连线顺序重建节点顺序
@@ -131,14 +146,16 @@ def execute_clean_pipeline(task: dict, task_no: str) -> dict:
 
     # 校验起点必须是 source
     if not nodes or nodes[0].get("node_type") != "source":
+        if log_id:
+            finish_clean_task_and_log(
+                task_no=task_no, task_status="04", last_execute_flag=2,
+                record_id=log_id, execute_status="04",
+                log_content="流程起点必须是数据源节点"
+            )
         return {"code": 1, "message": "流程起点必须是数据源节点"}
 
-    update_clean_task_status(task_no, "02")
-
-    log_id = None
     try:
-        init_log = f"开始执行清理任务：{task.get('task_name', task_no)}"
-        log_id = insert_clean_log(task_no, init_log)
+        logger.info(f"继续执行时序清洗任务：{task.get('task_name', task_no)}")
 
         ctx = CleanContext(
             task=task,
@@ -166,19 +183,29 @@ def execute_clean_pipeline(task: dict, task_no: str) -> dict:
         if ctx.df is None:
             raise ValueError("数据源节点未成功初始化数据")
 
-        # 生成结果 JSON 文件
+        # 生成结果 JSON 文件（本地保存/上传 MinIO）
         result_info = _save_clean_result(ctx, task, task_no, log_id)
 
-        update_clean_task_status(task_no, "03", last_execute_flag=1)
+        # 原子完成：同一事务中更新任务状态 + 日志状态
+        # 确保前端轮询看到日志"已完成"时，任务状态也一定已更新，所有操作已真正完成
+        finish_clean_task_and_log(
+            task_no=task_no, task_status="03", last_execute_flag=1,
+            record_id=log_id, execute_status="03",
+            total_count=ctx.total_count, removed_count=ctx.removed_count,
+            result_count=result_info["resultCount"],
+            log_content="执行完成，清洗结果已保存为 JSON 文件",
+            file_name=result_info["fileName"],
+            file_path=result_info["filePath"],
+        )
         return {"code": 0, "message": "执行成功，清洗结果已保存", "data": result_info}
 
     except Exception as e:
-        # 失败时追加错误日志并更新执行记录
+        # 失败也原子完成
         if log_id:
             try:
-                finish_clean_log(
-                    log_id,
-                    execute_status="04",
+                finish_clean_task_and_log(
+                    task_no=task_no, task_status="04", last_execute_flag=2,
+                    record_id=log_id, execute_status="04",
                     total_count=ctx.total_count if 'ctx' in locals() else 0,
                     removed_count=ctx.removed_count if 'ctx' in locals() else 0,
                     result_count=(len(ctx.df) if 'ctx' in locals() and ctx.df is not None else 0),
@@ -186,6 +213,7 @@ def execute_clean_pipeline(task: dict, task_no: str) -> dict:
                 )
             except Exception:
                 pass
-        update_clean_task_status(task_no, "04", last_execute_flag=2)
+        else:
+            update_clean_task_status(task_no, "04", last_execute_flag=2)
         logger.exception("时序清洗任务执行异常")
         return {"code": 1, "message": f"执行失败: {str(e)}"}

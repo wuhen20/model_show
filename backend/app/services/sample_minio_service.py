@@ -31,22 +31,30 @@ def is_minio_path(path: str) -> bool:
     return bool(path) and path.startswith(MINIO_ID_PREFIX)
 
 
+_minio_client = None
+
+
 def _get_client():
-    """获取 MinIO 客户端（懒加载，未配置 endpoint 时抛错）
+    """获取 MinIO 客户端（单例缓存，避免每次请求重建连接）
 
     access_key/secret_key 可以为空（无认证模式），不做非空校验。
     """
+    global _minio_client
+    if _minio_client is not None:
+        return _minio_client
+
     from minio import Minio
 
     if not settings.minio_endpoint:
         raise ValueError("MinIO 未配置：请在 .env 中设置 MINIO_ENDPOINT")
 
-    return Minio(
+    _minio_client = Minio(
         settings.minio_endpoint,
         access_key=settings.minio_access_key,
         secret_key=settings.minio_secret_key,
         secure=settings.minio_secure,
     )
+    return _minio_client
 
 
 def ensure_bucket(bucket_name: Optional[str] = None) -> str:

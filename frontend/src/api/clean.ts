@@ -113,7 +113,7 @@ export async function queryCleanTableColumns(tableName: string): Promise<TableCo
   return json.data || []
 }
 
-export async function executeCleanTask(taskNo: string): Promise<{ fileName: string; filePath: string; resultCount: number }> {
+export async function executeCleanTask(taskNo: string): Promise<{ fileName: string; filePath: string; resultCount: number; async?: boolean }> {
   const res = await fetch(`${BASE_URL}/execute-clean-task`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -132,7 +132,8 @@ export async function executeCleanTask(taskNo: string): Promise<{ fileName: stri
   return {
     fileName: json.data?.fileName || '',
     filePath: json.data?.filePath || '',
-    resultCount: json.data?.resultCount || 0
+    resultCount: json.data?.resultCount || 0,
+    async: json.data?.async || false
   }
 }
 
@@ -166,6 +167,7 @@ export interface CleanResult {
   startTime: string
   endTime: string
   resultCount: number
+  removedCount: number
   fileName: string
   filePath: string
 }
@@ -295,10 +297,16 @@ export interface CleanPicRecord {
   cleanTypeName: string
   fileName: string
   filePath: string
+  cleanLogId: number | null
+  repeatFileName: string
+  repeatFilePath: string
 }
 
-export async function queryCleanPics(taskNo: string): Promise<CleanPicRecord[]> {
-  const res = await fetch(`${BASE_URL}/query-clean-pics?taskNo=${encodeURIComponent(taskNo)}`)
+export async function queryCleanPics(cleanLogId: number, taskNo?: string): Promise<CleanPicRecord[]> {
+  const params = new URLSearchParams()
+  params.set('cleanLogId', String(cleanLogId))
+  if (taskNo) params.set('taskNo', taskNo)
+  const res = await fetch(`${BASE_URL}/query-clean-pics?${params.toString()}`)
   const json = await res.json()
   if (json.code !== 0) throw new Error(json.message || '查询清洗图片失败')
   return json.data || []
@@ -309,11 +317,11 @@ export function getCleanPicImageUrl(filePath: string): string {
   return `${BASE_URL}/serve-image?filePath=${encodeURIComponent(filePath)}`
 }
 
-export async function rollbackCleanPics(taskNo: string): Promise<{ restoredCount: number; skippedCount: number }> {
+export async function rollbackCleanPics(taskNo: string, cleanLogId?: number): Promise<{ restoredCount: number; skippedCount: number }> {
   const res = await fetch(`${BASE_URL}/rollback-clean-pics`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ taskNo })
+    body: JSON.stringify({ taskNo, cleanLogId })
   })
   const json = await res.json()
   if (json.code !== 0) throw new Error(json.message || '回滚失败')

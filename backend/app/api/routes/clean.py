@@ -4,6 +4,7 @@ import logging
 import os
 import sys
 import shutil
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from fastapi import APIRouter, Query, UploadFile, File
 from pydantic import BaseModel
@@ -13,6 +14,23 @@ logger = logging.getLogger("app.clean")
 from app.core.database import (
     generate_clean_task_no,
     generate_sample_no,
+    get_connection,
+    _execute,
+    _select_all_from,
+)
+from app.core.db_sample import (
+    batch_insert_sample_info,
+    insert_original_sample_info,
+    batch_insert_original_sample_info,
+    delete_original_sample_info_by_path,
+    get_original_sample_set_path,
+    query_original_sample_file_paths,
+    query_original_sample_set_by_type,
+    apply_sample_set_version_change,
+    query_sample_set_options,
+    query_original_samples,
+)
+from app.core.db_clean import (
     query_data_clean_tasks,
     save_data_clean_task,
     save_data_clean_task_nodes,
@@ -25,23 +43,17 @@ from app.core.database import (
     insert_clean_log,
     append_clean_log,
     finish_clean_log,
+    finish_clean_task_and_log,
     query_clean_log,
     query_clean_results,
-    query_sample_set_options,
-    batch_insert_sample_info,
-    insert_original_sample_info,
-    get_connection,
-    _execute,
-    _select_all_from,
     query_pic_clean_type_dict,
     insert_clean_pic_record,
+    insert_clean_pic_records_batch,
     query_clean_pic_records,
-    delete_original_sample_info_by_path,
-    get_original_sample_set_path,
     delete_clean_pic_records,
-    query_original_sample_file_paths,
-    query_original_sample_set_by_type,
-    apply_sample_set_version_change,
+)
+from app.services.sample_minio_service import (
+    is_minio_path, download_image, upload_image, delete_object,
 )
 
 router = APIRouter()
@@ -246,11 +258,20 @@ def query_clean_table_columns_api(tableName: str = Query(..., description="表�
         return {"code": 1, "message": f"查询失败: {str(e)}"}
 
 
-def _execute_image_clean_task(task: dict, task_no: str):
-    """执行图像样本清洗任务：使用 cleanvision 检测问题图片，移动到隔离目录"""
+def _execute_image_clean_task(task: dict, task_no: str, log_id: int):
+    """执行图像样本清洗任务（自实现版本，兼容本地与 MinIO 存储）
+
+    原 cleanvision 实现已备份至 app/services/_cleanvision_backup.py，
+    新实现详见 app/services/image_clean_service.py。
+    """
     nodes = task.get("nodes", [])
     if not nodes:
-        return {"code": 1, "message": "任务未配置清洗节点"}
+        # 更新日志为失败状态
+        if log_id:
+            finish_clean_task_and_log(task_no=task_no, task_status="04", last_execute_flag=2,
+                                       record_id=log_id, execute_status="04",
+                                       log_content="任务未配置清洗节点")
+        return
 
     # 1. 从节点获取原始样本集编号和清洗类型编码
     image_node = None
@@ -259,280 +280,87 @@ def _execute_image_clean_task(task: dict, task_no: str):
             image_node = node
             break
     if not image_node:
-        return {"code": 1, "message": "未找到图像清洗节点"}
+        if log_id:
+            finish_clean_task_and_log(task_no=task_no, task_status="04", last_execute_flag=2,
+                                       record_id=log_id, execute_status="04",
+                                       log_content="未找到图像清洗节点")
+        return
 
     set_no = image_node.get("node_id", "")
     clean_types_str = image_node.get("node_config") or ""
     if not set_no:
-        return {"code": 1, "message": "清洗节点未关联原始样本集"}
+        if log_id:
+            finish_clean_task_and_log(task_no=task_no, task_status="04", last_execute_flag=2,
+                                       record_id=log_id, execute_status="04",
+                                       log_content="清洗节点未关联原始样本集")
+        return
     if not clean_types_str:
-        return {"code": 1, "message": "未配置清洗类型"}
+        if log_id:
+            finish_clean_task_and_log(task_no=task_no, task_status="04", last_execute_flag=2,
+                                       record_id=log_id, execute_status="04",
+                                       log_content="未配置清洗类型")
+        return
 
     clean_type_codes = [c.strip() for c in clean_types_str.split(",") if c.strip()]
     if not clean_type_codes:
-        return {"code": 1, "message": "未配置清洗类型"}
+        if log_id:
+            finish_clean_task_and_log(task_no=task_no, task_status="04", last_execute_flag=2,
+                                       record_id=log_id, execute_status="04",
+                                       log_content="未配置清洗类型")
+        return
 
-    update_clean_task_status(task_no, "02")
-    log_id = None
-    total_count = 0
-    removed_count = 0
+    # 2. 委托给图像清洗服务执行
+    from app.services.image_clean_service import execute_image_clean_task
 
+    deps = {
+        "update_clean_task_status": update_clean_task_status,
+        "insert_clean_log": insert_clean_log,
+        "append_clean_log": append_clean_log,
+        "finish_clean_log": finish_clean_log,
+        "finish_clean_task_and_log": finish_clean_task_and_log,
+        "query_pic_clean_type_dict": query_pic_clean_type_dict,
+        "query_original_samples": query_original_samples,
+        "insert_clean_pic_record": insert_clean_pic_record,
+        "insert_clean_pic_records_batch": insert_clean_pic_records_batch,
+        "delete_original_sample_info_by_path": delete_original_sample_info_by_path,
+    }
+    execute_image_clean_task(task, task_no, set_no, clean_type_codes, deps, log_id)
+
+
+def _execute_timeseries_clean_task(task: dict, task_no: str, log_id: int):
+    """执行时序清洗任务（后台线程），包装 pipeline 的同步调用
+
+    execute_clean_pipeline 内部已自行处理成功/失败的状态更新，
+    此处 try/except 仅防止线程崩溃时无人收场。
+    """
+    from app.services.clean_operators.pipeline import execute_clean_pipeline
     try:
-        init_log = f"开始执行图像清洗任务：{task.get('task_name', task_no)}"
-        log_id = insert_clean_log(task_no, init_log)
-        logger.info(init_log)
-
-        # 2. 查询清洗类型字典，将编码映射到 cleanvision issue 类型
-        append_clean_log(log_id, "正在加载清洗类型配置...")
-        logger.info("正在加载清洗类型配置...")
-        dict_rows = query_pic_clean_type_dict()
-        code_to_issue = {}  # {清洗类型编码: {spare1, code_name}}
-        for row in dict_rows:
-            code_val = row.get("CODE_VALUE", "")
-            spare1 = row.get("SPARE1", "")
-            code_name = row.get("CODE_NAME", "")
-            if code_val in clean_type_codes and spare1:
-                code_to_issue[code_val] = {"spare1": spare1, "code_name": code_name}
-
-        if not code_to_issue:
-            raise ValueError("配置的清洗类型在字典中未找到对应记录")
-
-        configured_issues = {info["spare1"] for info in code_to_issue.values()}
-        type_names = ', '.join(info['code_name'] for info in code_to_issue.values())
-        append_clean_log(log_id, f"配置的检测类型：{type_names}")
-        logger.info(f"配置的检测类型：{type_names}")
-
-        # 3. 查询原始样本文件路径
-        append_clean_log(log_id, "正在查询样本文件路径...")
-        logger.info("正在查询样本文件路径...")
-        file_rows = query_original_sample_file_paths(set_no)
-        logger.info(f"查询返回 {len(file_rows)} 条记录，set_no={set_no}")
-        file_paths = []
-        # 构建 规范化绝对路径 → 数据库存储 file_path 的映射，用于移动后精确删除原始样本记录
-        norm_path_to_stored = {}
-        for row in file_rows:
-            fp = row.get("file_path") if isinstance(row, dict) else row[0]
-            if fp:
-                file_paths.append(fp)
-                norm_path_to_stored[os.path.normpath(os.path.abspath(fp))] = fp
-
-        if not file_paths:
-            logger.error(f"原始样本集下未找到样本文件，set_no={set_no}，查询返回 {len(file_rows)} 条记录")
-            raise ValueError(f"原始样本集下未找到样本文件（set_no={set_no}，查询返回 {len(file_rows)} 条记录）")
-
-        total_count = len(file_paths)
-        append_clean_log(log_id, f"共 {total_count} 个样本文件")
-        logger.info(f"共 {total_count} 个样本文件")
-
-        # 4. 提取公共目录作为 data_path
-        abs_paths = [os.path.abspath(fp) for fp in file_paths]
-        try:
-            data_path = os.path.commonpath(abs_paths)
-        except ValueError:
-            raise ValueError("样本文件路径跨盘符，无法确定公共目录")
-
-        if not os.path.isdir(data_path):
-            raise ValueError(f"计算得到的图片目录不存在：{data_path}")
-
-        append_clean_log(log_id, f"图片目录：{data_path}")
-        logger.info(f"图片目录：{data_path}")
-
-        # 5. 使用 cleanvision 检测问题图片
-        append_clean_log(log_id, "正在检测图片质量问题，请稍候...")
-        logger.info("正在检测图片质量问题，请稍候...")
-        from cleanvision import Imagelab
-
-        imagelab = Imagelab(data_path=data_path)
-
-        # issue_types 格式：{"exact_duplicates":{}, "blurry":{"threshold":0.45}, ...}，key 为 SPARE1 英文名
-        issue_types = {spare1: {} for spare1 in configured_issues}
-        # 模糊类型设置自定义阈值
-        if "blurry" in issue_types:
-            issue_types["blurry"] = {"threshold": 0.45}
-        # 过亮类型设置自定义阈值
-        if "light" in issue_types:
-            issue_types["light"] = {"threshold": 0.47}
-        # 异常大小类型设置自定义阈值
-        if "odd_size" in issue_types:
-            issue_types["odd_size"] = {"threshold": 0.84}
-        append_clean_log(log_id, f"检测类型参数：{issue_types}")
-        logger.info(f"检测类型参数：{issue_types}")
-
-        # 禁用 tqdm 输出
-        os.environ['TQDM_DISABLE'] = '1'
-        original_stderr = sys.stderr
-        try:
-            sys.stderr = open(os.devnull, 'w')
-            try:
-                imagelab.find_issues(issue_types=issue_types, verbose=False, n_jobs=1)
-            except Exception as e_issue:
-                # 某些类型不兼容单独指定，降级为全量检测后过滤
-                msg = f"指定类型检测失败({e_issue})，降级为全量检测..."
-                append_clean_log(log_id, msg)
-                logger.warning(msg)
-                imagelab = Imagelab(data_path=data_path)
-                imagelab.find_issues(verbose=False, n_jobs=1)
-        finally:
-            if sys.stderr:
-                sys.stderr.close()
-            sys.stderr = original_stderr
-            if 'TQDM_DISABLE' in os.environ:
-                del os.environ['TQDM_DISABLE']
-
-        append_clean_log(log_id, "检测完成，正在整理结果...")
-        logger.info("检测完成，正在整理结果...")
-
-        # 6. 从 issues DataFrame 提取问题图片
-        issues_df = imagelab.issues
-        # 收集 {image_name: [清洗类型编码列表]}
-        problem_images = {}
-
-        for image_name, row in issues_df.iterrows():
-            issues_for_image = []
-            for code_val, info in code_to_issue.items():
-                issue_col = f"is_{info['spare1']}_issue"
-                if issue_col in issues_df.columns and row[issue_col]:
-                    issues_for_image.append(code_val)
-
-            if issues_for_image:
-                problem_images[image_name] = issues_for_image
-
-        # 6.1 对于重复类型（exact_duplicates / near_duplicates），每个重复组保留一张，不全删除
-        # cleanvision 的重复分组存储在 imagelab.info[issue_key]["sets"]，是 list[list[str]] 结构
-        duplicate_type_codes = {
-            code_val: info["spare1"]
-            for code_val, info in code_to_issue.items()
-            if info["spare1"] in ("exact_duplicates", "near_duplicates")
-        }
-        kept_for_duplicate = 0
-        if duplicate_type_codes:
-            imagelab_info = getattr(imagelab, "info", {}) or {}
-            for code_val, spare1 in duplicate_type_codes.items():
-                issue_info = imagelab_info.get(spare1, {}) or {}
-                sets = issue_info.get("sets", []) or []
-                append_clean_log(log_id, f"重复类型 [{spare1}] 检测到 {len(sets)} 个重复组")
-                logger.info(f"重复类型 [{spare1}] 检测到 {len(sets)} 个重复组")
-                for group in sets:
-                    if not group or len(group) < 2:
-                        continue
-                    # 保留组内第一张：从其问题列表中移除该重复类型编码
-                    keep_image = group[0]
-                    if keep_image in problem_images:
-                        issue_list = problem_images[keep_image]
-                        if code_val in issue_list:
-                            issue_list.remove(code_val)
-                            kept_for_duplicate += 1
-                        # 若该图片已无任何问题类型，则从待移动集合中移除
-                        if not issue_list:
-                            del problem_images[keep_image]
-            if kept_for_duplicate > 0:
-                msg = f"重复图片处理：每组保留 1 张，共保留 {kept_for_duplicate} 张重复图片不移动"
-                append_clean_log(log_id, msg)
-                logger.info(msg)
-
-        removed_count = len(problem_images)
-        result_count = total_count - removed_count
-        msg = f"发现 {removed_count} 张问题图片，剩余 {result_count} 张正常图片"
-        append_clean_log(log_id, msg)
-        logger.info(msg)
-
-        # 7. 创建目标目录并移动问题图片
-        from app.core.config import settings
-        base_dir = getattr(settings, "sample_upload_dir", "")
-        if not base_dir:
-            base_dir = os.path.abspath("uploads")
-        target_dir = os.path.join(base_dir, "clean_result", task_no)
-        os.makedirs(target_dir, exist_ok=True)
-
-        append_clean_log(log_id, f"正在移动问题图片到：{target_dir}")
-        logger.info(f"正在移动问题图片到：{target_dir}")
-
-        moved_count = 0
-        deleted_info_count = 0
-        for image_name, issue_codes in problem_images.items():
-            # image_name 是相对于 data_path 的路径
-            src_path = os.path.join(data_path, image_name)
-            if not os.path.exists(src_path):
-                # 尝试用绝对路径
-                src_path = image_name
-
-            if not os.path.exists(src_path):
-                warn_msg = f"警告：文件不存在，跳过：{image_name}"
-                append_clean_log(log_id, warn_msg)
-                logger.warning(warn_msg)
-                continue
-
-            dst_path = os.path.join(target_dir, os.path.basename(image_name))
-
-            # 处理同名文件冲突
-            if os.path.exists(dst_path):
-                name, ext = os.path.splitext(os.path.basename(image_name))
-                dst_path = os.path.join(target_dir, f"{name}_{moved_count}{ext}")
-
-            try:
-                shutil.move(src_path, dst_path)
-                moved_count += 1
-                # 一张图片只插入一条记录，多个问题类型逗号分隔
-                clean_type_str = ",".join(issue_codes)
-                insert_clean_pic_record(task_no, clean_type_str, os.path.basename(image_name), dst_path)
-                logger.debug(f"移动文件：{image_name} -> {dst_path}")
-                # 删除 s_original_sample_info 中对应的原始样本记录
-                stored_fp = norm_path_to_stored.get(os.path.normpath(os.path.abspath(src_path)))
-                if stored_fp:
-                    try:
-                        deleted_info_count += delete_original_sample_info_by_path(stored_fp)
-                    except Exception as e_del:
-                        warn_msg = f"警告：删除原始样本记录失败：{image_name}，{e_del}"
-                        append_clean_log(log_id, warn_msg)
-                        logger.warning(warn_msg)
-            except Exception as e_move:
-                warn_msg = f"警告：移动文件失败：{image_name}，{e_move}"
-                append_clean_log(log_id, warn_msg)
-                logger.warning(warn_msg)
-
-        msg = f"成功移动 {moved_count} 张问题图片，删除 {deleted_info_count} 条原始样本记录"
-        append_clean_log(log_id, msg)
-        logger.info(msg)
-
-        # 8. 完成执行记录
-        finish_clean_log(
-            log_id,
-            execute_status="03",
-            total_count=total_count,
-            removed_count=removed_count,
-            result_count=result_count,
-            log_content="图像清洗执行完成，问题图片已移至隔离目录",
-        )
-        update_clean_task_status(task_no, "03", last_execute_flag=1)
-        logger.info(f"图像清洗任务 {task_no} 执行完成")
-
-        return {
-            "code": 0,
-            "message": f"执行成功，共检测 {total_count} 张图片，移动 {removed_count} 张问题图片",
-            "data": {"fileName": "", "filePath": target_dir, "resultCount": result_count},
-        }
-
+        result = execute_clean_pipeline(task, task_no, log_id)
+        logger.info(f"时序清洗任务 {task_no} 后台执行完成: {result.get('message', '')}")
     except Exception as e:
+        logger.exception(f"时序清洗任务 {task_no} 后台执行异常（pipeline 外部未捕获）")
+        # 异常时更新日志状态
         if log_id:
             try:
-                finish_clean_log(
-                    log_id,
-                    execute_status="04",
-                    total_count=total_count,
-                    removed_count=removed_count,
-                    result_count=total_count - removed_count,
-                    log_content=f"执行失败：{str(e)}",
+                finish_clean_task_and_log(
+                    task_no=task_no, task_status="04", last_execute_flag=2,
+                    record_id=log_id, execute_status="04",
+                    log_content=f"执行异常：{str(e)}"
                 )
             except Exception:
                 pass
-        update_clean_task_status(task_no, "04", last_execute_flag=2)
-        logger.exception("图像清洗任务执行异常")
-        return {"code": 1, "message": f"执行失败: {str(e)}"}
 
 
 @router.post("/execute-clean-task")
 def execute_clean_task_api(req: ExecuteCleanTaskRequest):
-    """执行清洗任务：图片类型走专用流程；时序类型按画布连线顺序执行算子管道"""
+    """执行清洗任务（异步：启动后台线程，立即返回，前端轮询任务状态）
+
+    图片类型和时序类型均采用异步执行模式：
+    - 启动前先将任务状态更新为"执行中"(02)
+    - 创建"执行中"状态的日志记录，确保前端轮询时能立即看到当前执行记录
+    - 后台线程执行清洗逻辑，使用已创建的 log_id
+    - 接口立即返回，前端通过查询执行记录轮询进度
+    """
     task_no = req.taskNo.strip()
     if not task_no:
         return {"code": 1, "message": "任务编号不能为空"}
@@ -541,14 +369,54 @@ def execute_clean_task_api(req: ExecuteCleanTaskRequest):
     if not task:
         return {"code": 1, "message": "未找到任务"}
 
-    # 图片类型清洗任务走专用流程
-    sample_type = str(task.get("sample_type") or "")
-    if sample_type == "05":
-        return _execute_image_clean_task(task, task_no)
+    # 防止重复执行：检查任务状态是否已处于执行中
+    current_status = str(task.get("task_status") or "")
+    if current_status == "02":
+        return {"code": 1, "message": f"任务 {task_no} 正在执行中，请勿重复触发"}
 
-    # 时序类型：交给管道执行器，按画布连线顺序执行各算子
-    from app.services.clean_operators.pipeline import execute_clean_pipeline
-    return execute_clean_pipeline(task, task_no)
+    sample_type = str(task.get("sample_type") or "")
+
+    # 先将任务状态更新为"执行中"，确保前端立即看到状态变化
+    update_clean_task_status(task_no, "02")
+
+    # 创建"执行中"状态的日志记录，确保前端轮询时能立即看到当前执行记录
+    init_log = f"开始执行清洗任务：{task.get('task_name', task_no)}"
+    log_id = insert_clean_log(task_no, init_log)
+
+    import threading
+
+    if sample_type == "05":
+        # 图片类型清洗任务
+        thread = threading.Thread(
+            target=_execute_image_clean_task,
+            args=(task, task_no, log_id),
+            name=f"image_clean_{task_no}",
+            daemon=True,
+        )
+        thread.start()
+        logger.info(f"图像清洗任务 {task_no} 已启动后台线程 {thread.ident}")
+    else:
+        # 时序类型清洗任务
+        thread = threading.Thread(
+            target=_execute_timeseries_clean_task,
+            args=(task, task_no, log_id),
+            name=f"ts_clean_{task_no}",
+            daemon=True,
+        )
+        thread.start()
+        logger.info(f"时序清洗任务 {task_no} 已启动后台线程 {thread.ident}")
+
+    return {
+        "code": 0,
+        "message": "任务已启动，请通过执行记录查看进度",
+        "data": {
+            "async": True,
+            "taskNo": task_no,
+            "fileName": "",
+            "filePath": "",
+            "resultCount": 0,
+        },
+    }
 
 
 @router.get("/query-clean-log")
@@ -593,34 +461,69 @@ import time as _time
 
 
 def _load_clean_result_with_cache(record_id: int, file_path: str) -> dict:
-    """加载清洗结果JSON，带文件mtime校验的内存缓存。
-    文件未变更时直接返回缓存，变更后重新加载。"""
-    try:
-        mtime = os.path.getmtime(file_path)
-    except OSError:
-        mtime = 0
+    """加载清洗结果JSON，带缓存校验的内存缓存。
 
-    cached = _clean_result_cache.get(record_id)
-    if cached and cached.get("mtime") == mtime:
-        return cached["data"]
+    本地文件用 mtime 校验，MinIO 对象用 size 校验。
+    未变更时直接返回缓存，变更后重新加载。
+    """
+    if is_minio_path(file_path):
+        # MinIO 模式：用对象 size 作为缓存校验
+        try:
+            from app.services.sample_minio_service import get_image_size
+            obj_size = get_image_size(file_path)
+        except Exception:
+            obj_size = -1
 
-    with open(file_path, "r", encoding="utf-8") as f:
-        data = json.load(f)
+        cached = _clean_result_cache.get(record_id)
+        if cached and cached.get("size") == obj_size:
+            return cached["data"]
 
-    # 缓存淘汰：超过上限时移除最早加载的项
-    if len(_clean_result_cache) >= _CLEAN_CACHE_MAX:
-        oldest_key = min(
-            _clean_result_cache.keys(),
-            key=lambda k: _clean_result_cache[k].get("loaded_at", 0),
-        )
-        _clean_result_cache.pop(oldest_key, None)
+        from app.services.sample_minio_service import download_image
+        content = download_image(file_path)
+        data = json.loads(content.decode("utf-8"))
 
-    _clean_result_cache[record_id] = {
-        "mtime": mtime,
-        "data": data,
-        "loaded_at": _time.time(),
-    }
-    return data
+        # 缓存淘汰
+        if len(_clean_result_cache) >= _CLEAN_CACHE_MAX:
+            oldest_key = min(
+                _clean_result_cache.keys(),
+                key=lambda k: _clean_result_cache[k].get("loaded_at", 0),
+            )
+            _clean_result_cache.pop(oldest_key, None)
+
+        _clean_result_cache[record_id] = {
+            "size": obj_size,
+            "data": data,
+            "loaded_at": _time.time(),
+        }
+        return data
+    else:
+        # 本地模式：用 mtime 校验
+        try:
+            mtime = os.path.getmtime(file_path)
+        except OSError:
+            mtime = 0
+
+        cached = _clean_result_cache.get(record_id)
+        if cached and cached.get("mtime") == mtime:
+            return cached["data"]
+
+        with open(file_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+
+        # 缓存淘汰
+        if len(_clean_result_cache) >= _CLEAN_CACHE_MAX:
+            oldest_key = min(
+                _clean_result_cache.keys(),
+                key=lambda k: _clean_result_cache[k].get("loaded_at", 0),
+            )
+            _clean_result_cache.pop(oldest_key, None)
+
+        _clean_result_cache[record_id] = {
+            "mtime": mtime,
+            "data": data,
+            "loaded_at": _time.time(),
+        }
+        return data
 
 
 @router.get("/view-clean-result")
@@ -645,7 +548,8 @@ def view_clean_result_api(
             return {"code": 1, "message": "清洗结果文件不存在"}
 
         file_path = row["file_path"]
-        if not os.path.exists(file_path):
+        # MinIO 路径无需检查本地文件存在性，本地路径需要检查
+        if not is_minio_path(file_path) and not os.path.exists(file_path):
             return {"code": 1, "message": f"文件不存在：{file_path}"}
 
         # 带缓存加载
@@ -697,17 +601,18 @@ def download_clean_result_api(recordId: int = Query(..., description="记录ID")
             return {"code": 1, "message": "清洗结果文件不存在"}
 
         file_path = row["file_path"]
-        if not os.path.exists(file_path):
+        # MinIO 路径无需检查本地文件存在性，本地路径需要检查
+        if not is_minio_path(file_path) and not os.path.exists(file_path):
             return {"code": 1, "message": f"文件不存在：{file_path}"}
 
         task_no = row.get("task_no", "unknown")
         from urllib.parse import quote
 
-        if format == "excel":
-            # 读取 JSON 并转换为 Excel
-            with open(file_path, "r", encoding="utf-8") as f:
-                data = json.load(f)
+        # 加载 JSON 数据（自动适配本地/MinIO）
+        data = _load_clean_result_with_cache(recordId, file_path)
 
+        if format == "excel":
+            # JSON 转 Excel
             import pandas as pd
             import io as _io
             columns = data.get("columns", [])
@@ -731,8 +636,24 @@ def download_clean_result_api(recordId: int = Query(..., description="记录ID")
                 media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 headers=headers,
             )
+        elif is_minio_path(file_path):
+            # MinIO 模式：下载 JSON bytes 返回
+            from app.services.sample_minio_service import download_image
+            from fastapi.responses import StreamingResponse
+            import io as _io
+            content = download_image(file_path)
+            filename = row.get("file_name") or f"{task_no}_清洗结果.json"
+            encoded_filename = quote(filename)
+            headers = {
+                "Content-Disposition": f"attachment; filename*=UTF-8''{encoded_filename}"
+            }
+            return StreamingResponse(
+                _io.BytesIO(content),
+                media_type="application/json",
+                headers=headers,
+            )
         else:
-            # 直接下载 JSON 文件
+            # 本地模式：直接返回文件
             filename = row.get("file_name") or f"{task_no}_清洗结果.json"
             encoded_filename = quote(filename)
             headers = {
@@ -754,11 +675,17 @@ def download_clean_result_api(recordId: int = Query(..., description="记录ID")
 def view_clean_result_by_path_api(filePath: str = Query(..., description="文件路径")):
     """通过文件路径查看清洗结果 JSON 内容"""
     try:
-        if not os.path.exists(filePath):
-            return {"code": 1, "message": f"文件不存在：{filePath}"}
-
-        with open(filePath, "r", encoding="utf-8") as f:
-            data = json.load(f)
+        if is_minio_path(filePath):
+            # MinIO 模式：从对象存储下载并解析
+            from app.services.sample_minio_service import download_image
+            content = download_image(filePath)
+            data = json.loads(content.decode("utf-8"))
+        else:
+            # 本地模式
+            if not os.path.exists(filePath):
+                return {"code": 1, "message": f"文件不存在：{filePath}"}
+            with open(filePath, "r", encoding="utf-8") as f:
+                data = json.load(f)
 
         return {"code": 0, "data": data}
     except Exception as e:
@@ -770,22 +697,42 @@ def view_clean_result_by_path_api(filePath: str = Query(..., description="文件
 def download_clean_result_by_path_api(filePath: str = Query(..., description="文件路径")):
     """通过文件路径下载清洗结果 JSON 文件"""
     try:
-        if not os.path.exists(filePath):
-            return {"code": 1, "message": f"文件不存在：{filePath}"}
-
-        filename = os.path.basename(filePath)
         from urllib.parse import quote
-        encoded_filename = quote(filename)
-        headers = {
-            "Content-Disposition": f"attachment; filename*=UTF-8''{encoded_filename}"
-        }
-        from fastapi.responses import FileResponse
-        return FileResponse(
-            filePath,
-            media_type="application/json",
-            filename=filename,
-            headers=headers,
-        )
+
+        if is_minio_path(filePath):
+            # MinIO 模式：从对象存储下载
+            from app.services.sample_minio_service import download_image
+            from fastapi.responses import StreamingResponse
+            import io as _io
+            content = download_image(filePath)
+            # 从 MinIO 路径提取文件名
+            filename = filePath.rstrip("/").split("/")[-1]
+            encoded_filename = quote(filename)
+            headers = {
+                "Content-Disposition": f"attachment; filename*=UTF-8''{encoded_filename}"
+            }
+            return StreamingResponse(
+                _io.BytesIO(content),
+                media_type="application/json",
+                headers=headers,
+            )
+        else:
+            # 本地模式
+            if not os.path.exists(filePath):
+                return {"code": 1, "message": f"文件不存在：{filePath}"}
+
+            filename = os.path.basename(filePath)
+            encoded_filename = quote(filename)
+            headers = {
+                "Content-Disposition": f"attachment; filename*=UTF-8''{encoded_filename}"
+            }
+            from fastapi.responses import FileResponse
+            return FileResponse(
+                filePath,
+                media_type="application/json",
+                filename=filename,
+                headers=headers,
+            )
     except Exception as e:
         logger.exception("下载清洗结果异常")
         return {"code": 1, "message": f"下载失败: {str(e)}"}
@@ -823,10 +770,16 @@ def query_pic_clean_types_api():
 
 
 @router.get("/query-clean-pics")
-def query_clean_pics_api(taskNo: str = Query(..., description="清洗任务编号")):
-    """查询图像清洗任务被清洗的图片记录（含清洗原因）"""
+def query_clean_pics_api(
+    taskNo: str = Query(None, description="清洗任务编号"),
+    cleanLogId: int = Query(None, description="清洗执行记录ID（优先级高于 taskNo）"),
+):
+    """查询图像清洗任务被清洗的图片记录（含清洗原因）
+
+    优先按 cleanLogId 查询（精确匹配某次执行结果），否则按 taskNo 查询（兼容旧逻辑）。
+    """
     try:
-        rows = query_clean_pic_records(taskNo)
+        rows = query_clean_pic_records(task_no=taskNo, clean_log_id=cleanLogId)
         pics = []
         for row in rows:
             pics.append({
@@ -836,6 +789,9 @@ def query_clean_pics_api(taskNo: str = Query(..., description="清洗任务编�
                 "cleanTypeName": row.get("clean_type_name", "") or row.get("clean_type", ""),
                 "fileName": row.get("file_name", ""),
                 "filePath": row.get("file_path", ""),
+                "cleanLogId": row.get("clean_log_id"),
+                "repeatFileName": row.get("repeat_file_name", "") or "",
+                "repeatFilePath": row.get("repeat_file_path", "") or "",
             })
         return {"code": 0, "data": pics}
     except Exception as e:
@@ -845,16 +801,33 @@ def query_clean_pics_api(taskNo: str = Query(..., description="清洗任务编�
 
 @router.get("/serve-image")
 def serve_image_api(filePath: str = Query(..., description="图片文件路径")):
-    """读取并返回图片文件，用于展示被清洗的图片"""
-    file_path = os.path.normpath(filePath)
-    if not os.path.isfile(file_path):
-        return {"code": 1, "message": f"图片文件不存在: {file_path}"}
-    ext = os.path.splitext(file_path)[1].lower()
+    """读取并返回图片文件，用于展示被清洗的图片（支持本地路径和 MinIO 路径）"""
+    from fastapi.responses import Response
+
     content_types = {
         ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png",
         ".bmp": "image/bmp", ".gif": "image/gif", ".webp": "image/webp",
         ".tif": "image/tiff", ".tiff": "image/tiff",
     }
+
+    # MinIO 路径
+    if is_minio_path(filePath):
+        try:
+            image_bytes = download_image(filePath)
+            if not image_bytes:
+                return {"code": 1, "message": f"MinIO 图片不存在: {filePath}"}
+            ext = os.path.splitext(filePath)[1].lower()
+            media_type = content_types.get(ext, "application/octet-stream")
+            return Response(content=image_bytes, media_type=media_type)
+        except Exception as e:
+            logger.exception(f"从 MinIO 读取图片失败: {filePath}")
+            return {"code": 1, "message": f"读取图片失败: {str(e)}"}
+
+    # 本地路径
+    file_path = os.path.normpath(filePath)
+    if not os.path.isfile(file_path):
+        return {"code": 1, "message": f"图片文件不存在: {file_path}"}
+    ext = os.path.splitext(file_path)[1].lower()
     media_type = content_types.get(ext, "application/octet-stream")
     from fastapi.responses import FileResponse
     return FileResponse(file_path, media_type=media_type)
@@ -862,12 +835,17 @@ def serve_image_api(filePath: str = Query(..., description="图片文件路径")
 
 class RollbackCleanPicsRequest(BaseModel):
     taskNo: str
+    cleanLogId: int = None  # 精确回滚某次执行的结果（优先级高于 taskNo）
 
 
 @router.post("/rollback-clean-pics")
 def rollback_clean_pics_api(req: RollbackCleanPicsRequest):
-    """回滚图像清洗：将隔离目录中的图片移回原始样本集目录，并恢复 s_original_sample_info 记录"""
+    """回滚图像清洗：将隔离目录中的图片移回原始样本集目录，并恢复 s_original_sample_info 记录
+
+    支持 cleanLogId 精确回滚某次执行结果，避免多次执行后回滚错误。
+    """
     task_no = req.taskNo.strip()
+    clean_log_id = req.cleanLogId
     if not task_no:
         return {"code": 1, "message": "任务编号不能为空"}
 
@@ -891,12 +869,9 @@ def rollback_clean_pics_api(req: RollbackCleanPicsRequest):
             return {"code": 1, "message": "原始样本集不存在"}
         set_path = set_row.get("set_path", "") or ""
         type_code = set_row.get("type_code", "") or "05"
-        if not set_path:
-            return {"code": 1, "message": "原始样本集未配置 set_path，无法确定恢复目录"}
-        os.makedirs(set_path, exist_ok=True)
 
-        # 3. 查询被清洗图片记录，按隔离路径去重（同一图片可能有多个清洗类型记录）
-        pic_rows = query_clean_pic_records(task_no)
+        # 3. 查询被清洗图片记录（优先用 cleanLogId 精确查询）
+        pic_rows = query_clean_pic_records(task_no=task_no, clean_log_id=clean_log_id)
         if not pic_rows:
             return {"code": 1, "message": "无可回滚的清洗图片记录"}
 
@@ -908,19 +883,88 @@ def rollback_clean_pics_api(req: RollbackCleanPicsRequest):
             if iso_path and iso_path not in unique_files:
                 unique_files[iso_path] = file_name
 
-        # 4. 逐个将文件从隔离目录移回 set_path，并恢复原始样本记录
+        # 4. 并行处理 MinIO 下载+上传（本地模式 move 很快，串行即可），
+        #    收集成功项后统一批量插入数据库
         restored_count = 0
         skipped_count = 0
         errors = []
+
+        # 分离 MinIO 和本地两类任务
+        minio_tasks = []   # [(iso_path, file_name)]
+        local_tasks = []   # [(iso_path, file_name)]
         for iso_path, file_name in unique_files.items():
-            iso_path = os.path.normpath(iso_path)
-            if not os.path.isfile(iso_path):
+            if is_minio_path(iso_path):
+                minio_tasks.append((iso_path, file_name))
+            else:
+                local_tasks.append((iso_path, file_name))
+
+        # 成功恢复的记录，供批量插入
+        restored_records = []
+
+        # ---------- MinIO 模式：线程池并行下载+上传 ----------
+        def _restore_minio(task):
+            iso_path, file_name = task
+            if not set_path:
+                return ("skip", file_name, "原始样本集未配置 set_path")
+            try:
+                image_bytes = download_image(iso_path)
+                if not image_bytes:
+                    return ("skip", file_name, "隔离文件不存在")
+                ext = os.path.splitext(file_name)[1].lower()
+                ct_map = {
+                    ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png",
+                    ".bmp": "image/bmp", ".gif": "image/gif", ".webp": "image/webp",
+                }
+                content_type = ct_map.get(ext, "application/octet-stream")
+                new_path = upload_image(set_no, file_name, image_bytes, content_type=content_type)
+                # 删除隔离对象
+                try:
+                    delete_object(iso_path)
+                except Exception:
+                    pass
+                suffix = ext.lstrip(".").lower()
+                file_size = len(image_bytes)
+                return ("ok", {
+                    "set_no": set_no,
+                    "sample_name": file_name,
+                    "suffix": suffix,
+                    "type_code": type_code,
+                    "file_path": new_path,
+                    "file_size": file_size,
+                }, None)
+            except Exception as e_restore:
+                return ("err", file_name, str(e_restore))
+
+        if minio_tasks:
+            max_workers = min(8, max(1, len(minio_tasks)))
+            with ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="rollback") as pool:
+                futures = [pool.submit(_restore_minio, t) for t in minio_tasks]
+                for fut in as_completed(futures):
+                    status, payload, msg = fut.result()
+                    if status == "ok":
+                        restored_records.append(payload)
+                    elif status == "skip":
+                        skipped_count += 1
+                        errors.append(f"{payload}: {msg}")
+                    else:
+                        skipped_count += 1
+                        errors.append(f"{payload}: 恢复失败 - {msg}")
+
+        # ---------- 本地模式：串行 move（同盘 rename 极快，无需并行） ----------
+        for iso_path, file_name in local_tasks:
+            if not set_path:
+                errors.append(f"{file_name}: 原始样本集未配置 set_path，跳过")
+                skipped_count += 1
+                continue
+            os.makedirs(set_path, exist_ok=True)
+            iso_path_norm = os.path.normpath(iso_path)
+            if not os.path.isfile(iso_path_norm):
                 errors.append(f"{file_name}: 隔离文件不存在，跳过")
                 skipped_count += 1
                 continue
 
             restore_path = os.path.join(set_path, file_name)
-            # 处理同名文件冲突：若 set_path 已存在同名文件，添加后缀
+            # 处理同名文件冲突
             if os.path.exists(restore_path):
                 name, ext = os.path.splitext(file_name)
                 idx = 1
@@ -929,34 +973,54 @@ def rollback_clean_pics_api(req: RollbackCleanPicsRequest):
                 restore_path = os.path.join(set_path, f"{name}_{idx}{ext}")
 
             try:
-                file_size = os.path.getsize(iso_path)
-                shutil.move(iso_path, restore_path)
-                # 恢复 s_original_sample_info 记录（自动生成 sample_no）
+                file_size = os.path.getsize(iso_path_norm)
+                shutil.move(iso_path_norm, restore_path)
                 suffix = os.path.splitext(file_name)[1].lstrip(".").lower()
-                insert_original_sample_info(
-                    set_no=set_no,
-                    sample_name=os.path.basename(restore_path),
-                    suffix=suffix,
-                    type_code=type_code,
-                    file_path=restore_path,
-                    file_size=file_size,
-                )
-                restored_count += 1
+                restored_records.append({
+                    "set_no": set_no,
+                    "sample_name": os.path.basename(restore_path),
+                    "suffix": suffix,
+                    "type_code": type_code,
+                    "file_path": restore_path,
+                    "file_size": file_size,
+                })
             except Exception as e_restore:
                 errors.append(f"{file_name}: 恢复失败 - {e_restore}")
                 skipped_count += 1
 
-        # 5. 删除清洗图片记录（无论文件是否成功恢复，记录都已处理）
-        delete_clean_pic_records(task_no)
+        # ---------- 批量插入数据库记录 ----------
+        if restored_records:
+            try:
+                batch_insert_original_sample_info(restored_records)
+                restored_count = len(restored_records)
+            except Exception as e_batch:
+                logger.exception("批量插入恢复记录失败，回退到逐条插入")
+                # 回退到逐条插入，保证健壮性
+                for r in restored_records:
+                    try:
+                        insert_original_sample_info(
+                            set_no=r["set_no"],
+                            sample_name=r["sample_name"],
+                            suffix=r["suffix"],
+                            type_code=r["type_code"],
+                            file_path=r["file_path"],
+                            file_size=r["file_size"],
+                        )
+                        restored_count += 1
+                    except Exception as e_one:
+                        errors.append(f"{r.get('sample_name')}: 插入失败 - {e_one}")
+                        skipped_count += 1
 
-        # 6. 尝试清理空的隔离目录
+        # 5. 删除清洗图片记录
+        delete_clean_pic_records(task_no=task_no, clean_log_id=clean_log_id)
+
+        # 6. 尝试清理空的隔离目录（本地模式）
         from app.core.config import settings
         base_dir = getattr(settings, "sample_upload_dir", "")
         if base_dir:
             target_dir = os.path.join(base_dir, "clean_result", task_no)
             if os.path.isdir(target_dir):
                 try:
-                    # 仅在目录为空时删除
                     if not os.listdir(target_dir):
                         os.rmdir(target_dir)
                 except Exception:
@@ -1044,13 +1108,26 @@ def import_to_sample_api(req: ImportToSampleRequest):
         if not set_row:
             return {"code": 1, "message": "所选样本集不存在"}
 
-        # 3. 读取 JSON 文件获取数据行
+        # 3. 读取 JSON 文件获取数据行（支持本地和 MinIO 两种存储模式）
         file_path = log_row["file_path"]
-        if not os.path.exists(file_path):
-            return {"code": 1, "message": f"文件不存在：{file_path}"}
-
-        with open(file_path, "r", encoding="utf-8") as f:
-            data = json.load(f)
+        if is_minio_path(file_path):
+            # MinIO 模式：下载对象内容
+            from app.services.sample_minio_service import download_image as _minio_download
+            try:
+                content_bytes = _minio_download(file_path)
+                if not content_bytes:
+                    return {"code": 1, "message": f"文件不存在：{file_path}"}
+            except Exception as e_dl:
+                return {"code": 1, "message": f"文件不存在：{file_path}, 错误: {e_dl}"}
+            data = json.loads(content_bytes.decode("utf-8"))
+            file_size_bytes = len(content_bytes)
+        else:
+            # 本地模式
+            if not os.path.exists(file_path):
+                return {"code": 1, "message": f"文件不存在：{file_path}"}
+            with open(file_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            file_size_bytes = os.path.getsize(file_path)
 
         columns = data.get("columns", [])
         rows = data.get("rows", [])
@@ -1063,8 +1140,6 @@ def import_to_sample_api(req: ImportToSampleRequest):
         file_name = log_row.get("file_name") or ""
 
         # 5. 将每行数据转为 JSON 字符串作为样本，批量插入
-        import json as _json
-        file_size_bytes = os.path.getsize(file_path)
         # 格式化文件大小带单位
         if file_size_bytes < 1024:
             file_size = f"{file_size_bytes}B"

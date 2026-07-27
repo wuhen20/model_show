@@ -4,7 +4,7 @@ import Header from '@/components/Header.vue'
 import Sidebar from '@/components/Sidebar.vue'
 import { getCleanResults, viewCleanResult, getDownloadCleanResultUrl, getSampleSetOptions, importToSample, queryCleanPics, getCleanPicImageUrl, rollbackCleanPics, type CleanResult, type CleanResultData, type SampleSetOption, type CleanPicRecord } from '@/api/clean'
 import { getCodeDict } from '@/api/sample'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElMessage, ElMessageBox, ElLoading } from 'element-plus'
 
 const resultList = ref<CleanResult[]>([])
 const loading = ref(false)
@@ -144,7 +144,7 @@ async function handleViewImageResult(item: CleanResult) {
   imageResultTaskName.value = item.taskName || item.taskNo
   imageFilterType.value = ''
   try {
-    imageResultList.value = await queryCleanPics(item.taskNo)
+    imageResultList.value = await queryCleanPics(item.recordId, item.taskNo)
   } catch (e: any) {
     ElMessage.error(e.message || '查看失败')
   } finally {
@@ -152,8 +152,63 @@ async function handleViewImageResult(item: CleanResult) {
   }
 }
 
+// ========== 清洗标签解析与颜色 ==========
+const TAG_COLORS: Record<string, { bg: string; border: string; text: string }> = {
+  '模糊':   { bg: 'rgba(255, 82, 82, 0.12)',  border: 'rgba(255, 82, 82, 0.35)',  text: '#ff5252' },
+  '过暗':   { bg: 'rgba(100, 100, 255, 0.12)', border: 'rgba(100, 100, 255, 0.35)', text: '#6464ff' },
+  '过亮':   { bg: 'rgba(255, 215, 0, 0.12)',   border: 'rgba(255, 215, 0, 0.35)',   text: '#ffd700' },
+  '信息量低': { bg: 'rgba(160, 120, 255, 0.12)', border: 'rgba(160, 120, 255, 0.35)', text: '#a078ff' },
+  '宽高比异常': { bg: 'rgba(0, 200, 200, 0.12)',  border: 'rgba(0, 200, 200, 0.35)',  text: '#00c8c8' },
+  '灰度图像': { bg: 'rgba(180, 180, 180, 0.12)', border: 'rgba(180, 180, 180, 0.35)', text: '#b4b4b4' },
+  '完全重复': { bg: 'rgba(255, 100, 200, 0.12)', border: 'rgba(255, 100, 200, 0.35)', text: '#ff64c8' },
+  '近似重复': { bg: 'rgba(255, 150, 50, 0.12)',  border: 'rgba(255, 150, 50, 0.35)',  text: '#ff9632' },
+  '异常大小': { bg: 'rgba(50, 200, 100, 0.12)',  border: 'rgba(50, 200, 100, 0.35)',  text: '#32c864' },
+}
+
+const DEFAULT_TAG_COLOR = { bg: 'rgba(255, 170, 0, 0.1)', border: 'rgba(255, 170, 0, 0.25)', text: '#ffaa00' }
+
+function parseCleanTags(cleanTypeName: string): string[] {
+  if (!cleanTypeName) return []
+  return cleanTypeName.split(/[,，]/).map(s => s.trim()).filter(Boolean)
+}
+
+function tagColor(tag: string) {
+  return TAG_COLORS[tag] || DEFAULT_TAG_COLOR
+}
+
+// ========== 图片预览弹框 ==========
+const imagePreviewVisible = ref(false)
+const imagePreviewUrl = ref('')
+const imagePreviewTitle = ref('')
+const imagePreviewTags = ref<string[]>([])
+const imagePreviewRepeatUrl = ref('')     // 对比图 URL，仅重复类型有值
+const imagePreviewRepeatName = ref('')    // 对比图文件名
+const imagePreviewIsDuplicate = ref(false) // 是否为重复类型（控制分左右展示）
+
+// 重复检测中文名集合
+const DUPLICATE_TAGS = new Set(['完全重复', '近似重复'])
+
+function openImagePreview(pic: CleanPicRecord) {
+  const tags = parseCleanTags(pic.cleanTypeName)
+  const isDuplicate = tags.some(t => DUPLICATE_TAGS.has(t))
+
+  imagePreviewUrl.value = getCleanPicImageUrl(pic.filePath)
+  imagePreviewTitle.value = pic.fileName || '图片预览'
+  imagePreviewTags.value = tags
+  imagePreviewIsDuplicate.value = isDuplicate
+
+  if (isDuplicate && pic.repeatFilePath) {
+    imagePreviewRepeatUrl.value = getCleanPicImageUrl(pic.repeatFilePath)
+    imagePreviewRepeatName.value = pic.repeatFileName || '对比图'
+  } else {
+    imagePreviewRepeatUrl.value = ''
+    imagePreviewRepeatName.value = ''
+  }
+  imagePreviewVisible.value = true
+}
+
 // ========== 回滚 ==========
-const rollbackSet = ref<Set<string>>(new Set())
+const rollbackSet = ref<Set<number>>(new Set())
 
 async function handleRollback(item: CleanResult) {
   try {
@@ -165,15 +220,15 @@ async function handleRollback(item: CleanResult) {
   } catch {
     return
   }
-  rollbackSet.value.add(item.taskNo)
+  rollbackSet.value.add(item.recordId)
   try {
-    const result = await rollbackCleanPics(item.taskNo)
+    const result = await rollbackCleanPics(item.taskNo, item.recordId)
     ElMessage.success(`回滚成功，恢复 ${result.restoredCount} 张图片${result.skippedCount ? `，跳过 ${result.skippedCount} 张` : ''}`)
     await loadResults()
   } catch (e: any) {
     ElMessage.error(e.message || '回滚失败')
   } finally {
-    rollbackSet.value.delete(item.taskNo)
+    rollbackSet.value.delete(item.recordId)
   }
 }
 
@@ -188,17 +243,37 @@ function handleDownload(item: CleanResult) {
   downloadVisible.value = true
 }
 
-function confirmDownload() {
+async function confirmDownload() {
   if (!downloadItem.value) return
   const url = getDownloadCleanResultUrl(downloadItem.value.recordId, downloadFormat.value)
-  const a = document.createElement('a')
-  a.href = url
-  a.download = ''
-  document.body.appendChild(a)
-  a.click()
-  document.body.removeChild(a)
   downloadVisible.value = false
-  ElMessage.success('开始下载')
+  const loadingInstance = ElLoading.service({ lock: true, text: '正在下载文件...', background: 'rgba(0,0,0,0.7)' })
+  try {
+    const res = await fetch(url)
+    if (!res.ok) {
+      const errData = await res.json().catch(() => null)
+      throw new Error(errData?.message || '下载失败')
+    }
+    const blob = await res.blob()
+    // 从响应头获取文件名
+    let fileName = `${downloadItem.value.taskNo || '清洗结果'}_${downloadFormat.value === 'excel' ? 'xlsx' : 'json'}`
+    const disposition = res.headers.get('Content-Disposition') || ''
+    const match = disposition.match(/filename\*?=([^;]+)/i)
+    if (match) {
+      fileName = decodeURIComponent(match[1].replace(/^UTF-8''/i, '').replace(/^"/, '').replace(/"$/, '').trim())
+    }
+    const a = document.createElement('a')
+    a.href = URL.createObjectURL(blob)
+    a.download = fileName
+    a.click()
+    URL.revokeObjectURL(a.href)
+    ElMessage.success('下载成功')
+  } catch (e: any) {
+    console.error('下载失败:', e)
+    ElMessage.error(e.message || '下载出错')
+  } finally {
+    loadingInstance.close()
+  }
 }
 
 // ========== 入库弹框 ==========
@@ -322,7 +397,7 @@ onMounted(() => {
               <span class="col col-type">{{ getSampleTypeName(item.sampleTypeCode) }}</span>
               <span class="col col-start">{{ item.startTime || '-' }}</span>
               <span class="col col-end">{{ item.endTime || '-' }}</span>
-              <span class="col col-count">{{ item.resultCount }}</span>
+              <span class="col col-count">{{ item.sampleTypeCode === '05' ? item.removedCount : item.resultCount }}</span>
               <span class="col col-file" :title="item.fileName">{{ item.fileName || '-' }}</span>
               <span class="col col-path" :title="item.filePath">{{ item.filePath || '-' }}</span>
               <span class="col col-action">
@@ -333,7 +408,7 @@ onMounted(() => {
                   v-if="item.sampleTypeCode === '05'"
                   size="small"
                   type="warning"
-                  :loading="rollbackSet.has(item.taskNo)"
+                  :loading="rollbackSet.has(item.recordId)"
                   @click="handleRollback(item)"
                 >回滚</el-button>
               </span>
@@ -408,13 +483,20 @@ onMounted(() => {
           </el-select>
         </div>
         <div class="image-grid">
-          <div v-for="pic in imageFilteredResult" :key="pic.recordId" class="image-card">
+          <div v-for="pic in imageFilteredResult" :key="pic.recordId" class="image-card" @click="openImagePreview(pic)">
             <div class="image-thumb">
               <img :src="getCleanPicImageUrl(pic.filePath)" :alt="pic.fileName" loading="lazy" />
             </div>
             <div class="image-info">
               <div class="image-name" :title="pic.fileName">{{ pic.fileName }}</div>
-              <div class="image-reason">{{ pic.cleanTypeName }}</div>
+              <div class="image-reasons">
+                <span
+                  v-for="(tag, idx) in parseCleanTags(pic.cleanTypeName)"
+                  :key="idx"
+                  class="image-tag"
+                  :style="{ background: tagColor(tag).bg, borderColor: tagColor(tag).border, color: tagColor(tag).text }"
+                >{{ tag }}</span>
+              </div>
             </div>
           </div>
         </div>
@@ -422,6 +504,52 @@ onMounted(() => {
       <template #footer>
         <el-button @click="imageResultVisible = false">关闭</el-button>
       </template>
+    </el-dialog>
+
+    <!-- 图片预览弹框 -->
+    <el-dialog
+      v-model="imagePreviewVisible"
+      width="auto"
+      top="5vh"
+      :close-on-click-modal="true"
+      class="image-preview-dialog"
+      destroy-on-close
+      append-to-body
+    >
+      <template #header>
+        <div class="preview-header">
+          <span class="preview-name">{{ imagePreviewTitle }}</span>
+          <span
+            v-for="(tag, idx) in imagePreviewTags"
+            :key="idx"
+            class="image-tag"
+            :style="{ background: tagColor(tag).bg, borderColor: tagColor(tag).border, color: tagColor(tag).text }"
+          >{{ tag }}</span>
+        </div>
+      </template>
+      <!-- 重复图: 左右分栏对比 -->
+      <div v-if="imagePreviewIsDuplicate" class="image-preview-dual">
+        <div class="image-preview-side">
+          <div class="image-preview-label image-preview-label-b">被清洗图片</div>
+          <div class="image-preview-wrap">
+            <img :src="imagePreviewUrl" :alt="imagePreviewTitle" class="image-preview-img" />
+          </div>
+          <div class="image-preview-filename" :title="imagePreviewTitle">{{ imagePreviewTitle }}</div>
+        </div>
+        <div class="image-preview-divider"></div>
+        <div class="image-preview-side">
+          <div class="image-preview-label image-preview-label-a">对比图（保留）</div>
+          <div v-if="imagePreviewRepeatUrl" class="image-preview-wrap">
+            <img :src="imagePreviewRepeatUrl" :alt="imagePreviewRepeatName" class="image-preview-img" />
+          </div>
+          <div v-else class="image-preview-empty">对比图缺失</div>
+          <div class="image-preview-filename" :title="imagePreviewRepeatName">{{ imagePreviewRepeatName }}</div>
+        </div>
+      </div>
+      <!-- 非重复: 单图展示（保持原逻辑） -->
+      <div v-else class="image-preview-wrap">
+        <img :src="imagePreviewUrl" :alt="imagePreviewTitle" class="image-preview-img" />
+      </div>
     </el-dialog>
 
     <!-- 下载弹框 -->
@@ -753,7 +881,8 @@ onMounted(() => {
 .image-result-content {
   display: flex;
   flex-direction: column;
-  height: 70vh;
+  height: 65vh; // 固定高度，确保内容超出时可滚动
+  max-height: calc(90vh - 150px); // 最大高度限制
 }
 
 .image-result-toolbar {
@@ -765,7 +894,8 @@ onMounted(() => {
   background: rgba(0, 212, 255, 0.08);
   border: 1px solid rgba(0, 212, 255, 0.15);
   border-radius: 8px;
-  margin-bottom: 16px;
+  margin-bottom: 12px;
+  flex-shrink: 0;
 
   .image-result-summary {
     font-size: 13px;
@@ -781,11 +911,13 @@ onMounted(() => {
 .image-grid {
   flex: 1;
   overflow-y: auto;
+  overflow-x: hidden;
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
-  gap: 16px;
+  gap: 12px;
   align-content: start;
   padding: 4px;
+  min-height: 0; // 重要：让 flex 子项可以收缩并显示滚动条
 
   &::-webkit-scrollbar {
     width: 8px;
@@ -812,6 +944,10 @@ onMounted(() => {
   border-radius: 8px;
   overflow: hidden;
   transition: border-color 0.2s, transform 0.2s;
+  display: flex;
+  flex-direction: column;
+  height: 240px; // 卡片高度调大
+  cursor: pointer;
 
   &:hover {
     border-color: rgba(0, 212, 255, 0.5);
@@ -821,12 +957,13 @@ onMounted(() => {
 
 .image-thumb {
   width: 100%;
-  height: 160px;
+  height: 165px; // 图片区域调大
   background: rgba(0, 0, 0, 0.3);
   display: flex;
   align-items: center;
   justify-content: center;
   overflow: hidden;
+  flex-shrink: 0;
 
   img {
     width: 100%;
@@ -836,32 +973,162 @@ onMounted(() => {
 }
 
 .image-info {
-  padding: 8px 10px;
-  min-height: 50px;
+  padding: 10px;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  min-height: 0;
+  overflow: hidden;
 }
 
 .image-name {
-  font-size: 12px;
+  font-size: 13px; // 字体调大
   color: rgba(255, 255, 255, 0.8);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  margin-bottom: 4px;
+  margin-bottom: 6px;
+  flex-shrink: 0;
 }
 
-.image-reason {
-  font-size: 11px;
-  color: #ffaa00;
-  background: rgba(255, 170, 0, 0.1);
-  border: 1px solid rgba(255, 170, 0, 0.2);
+.image-reasons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  overflow: hidden;
+}
+
+.image-tag {
+  font-size: 12px; // 标签字体调大
+  line-height: 1.5;
+  padding: 2px 8px;
+  border: 1px solid;
+  border-radius: 3px;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+// ========== 图片预览弹框 ==========
+.image-preview-dialog {
+  :deep(.el-dialog) {
+    max-width: 90vw;
+    max-height: 90vh;
+    background: rgba(0, 0, 0, 0.92);
+    border-color: rgba(0, 212, 255, 0.3);
+  }
+}
+
+.preview-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding-right: 30px; // 给关闭按钮留空间
+
+  .preview-name {
+    font-size: 14px;
+    font-weight: 500;
+    color: rgba(255, 255, 255, 0.9);
+  }
+
+  .image-tag {
+    font-size: 12px;
+  }
+}
+
+.image-preview-wrap {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  max-width: 85vw;
+  max-height: 80vh;
+  overflow: hidden;
+}
+
+.image-preview-img {
+  max-width: 85vw;
+  max-height: 80vh;
+  object-fit: contain;
   border-radius: 4px;
-  padding: 2px 6px;
-  display: inline-block;
+}
+
+// ========== 重复图对比展示（左右分栏） ==========
+.image-preview-dual {
+  display: flex;
+  align-items: stretch;
+  justify-content: center;
+  gap: 16px;
+  max-width: 90vw;
+  max-height: 80vh;
+}
+
+.image-preview-side {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  flex: 1;
+  min-width: 0;
+}
+
+.image-preview-label {
+  font-size: 13px;
+  padding: 4px 14px;
+  border-radius: 4px;
+  margin-bottom: 10px;
+  border: 1px solid;
+  white-space: nowrap;
+}
+
+.image-preview-label-b {
+  color: #ff9632;
+  background: rgba(255, 150, 50, 0.12);
+  border-color: rgba(255, 150, 50, 0.35);
+}
+
+.image-preview-label-a {
+  color: #00d4ff;
+  background: rgba(0, 212, 255, 0.12);
+  border-color: rgba(0, 212, 255, 0.35);
+}
+
+.image-preview-divider {
+  width: 1px;
+  background: rgba(0, 212, 255, 0.2);
+  align-self: stretch;
+}
+
+.image-preview-filename {
+  margin-top: 8px;
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.5);
   max-width: 100%;
+  white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  white-space: nowrap;
-  box-sizing: border-box;
+}
+
+.image-preview-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  min-height: 200px;
+  color: rgba(255, 255, 255, 0.4);
+  font-size: 13px;
+  border: 1px dashed rgba(255, 255, 255, 0.15);
+  border-radius: 4px;
+}
+
+// 双图模式下约束单图尺寸，不影响单图模式
+.image-preview-dual .image-preview-wrap {
+  max-width: 42vw;
+  max-height: 70vh;
+}
+
+.image-preview-dual .image-preview-img {
+  max-width: 42vw;
+  max-height: 70vh;
 }
 
 // ========== 下载弹框 ==========

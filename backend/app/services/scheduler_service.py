@@ -13,7 +13,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.jobstores.memory import MemoryJobStore
 
-from app.core.database import query_all_scheduled_tasks
+from app.core.db_collect import query_all_scheduled_tasks
 
 _scheduler: BackgroundScheduler | None = None
 _lock = threading.Lock()

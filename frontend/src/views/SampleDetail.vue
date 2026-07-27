@@ -4,7 +4,8 @@ import { useRoute, useRouter } from 'vue-router'
 import Header from '@/components/Header.vue'
 import Sidebar from '@/components/Sidebar.vue'
 import { getSamples, getImageUrl, getAnnotations, getAudioText, updateSampleScore, uploadSamples, uploadSamplesBatch, saveLabelThink, getClasses, getSamplesByLabels, type SampleInfoRow, type AnnotationData, type AnnotationBox } from '@/api/sample'
-import { ElMessage } from 'element-plus'
+import ChunkUploadDialog from '@/components/ChunkUploadDialog.vue'
+import { ElMessage, ElLoading } from 'element-plus'
 
 const route = useRoute()
 const router = useRouter()
@@ -136,69 +137,19 @@ async function handleUploadConfirm() {
   }
 }
 
-// ========== 批量导入弹框（仅图片类型）==========
+// ========== 批量导入弹框（仅图片类型，分片上传）==========
 const batchDialogVisible = ref(false)
-const batchSaving = ref(false)
-const batchFile = ref<File | null>(null)
-const batchMajorVersion = ref(false)
-const batchVersionRemark = ref('')
-const batchUploadRef = ref()
 
 function openBatchDialog() {
   if (typeCode.value !== '05') {
     ElMessage.warning('批量导入仅支持图片类型样本集')
     return
   }
-  batchFile.value = null
-  batchMajorVersion.value = false
-  batchVersionRemark.value = ''
   batchDialogVisible.value = true
-  // 清空 el-upload 内部文件列表
-  setTimeout(() => {
-    batchUploadRef.value?.clearFiles()
-  }, 0)
 }
 
-function handleBatchFileChange(file: any) {
-  batchFile.value = file.raw
-}
-
-function handleBatchFileRemove() {
-  batchFile.value = null
-}
-
-async function handleBatchConfirm() {
-  if (!batchFile.value) {
-    ElMessage.warning('请选择要上传的 ZIP 文件')
-    return
-  }
-  const fileName = batchFile.value.name.toLowerCase()
-  if (!fileName.endsWith('.zip')) {
-    ElMessage.warning('仅支持 ZIP 文件')
-    return
-  }
-  if (batchVersionRemark.value.length > 150) {
-    ElMessage.warning('变更说明不能超过 150 个字')
-    return
-  }
-  batchSaving.value = true
-  try {
-    const msg = await uploadSamplesBatch(
-      setNo.value,
-      setName.value,
-      typeCode.value,
-      batchFile.value,
-      batchMajorVersion.value,
-      batchVersionRemark.value.trim()
-    )
-    ElMessage.success(msg)
-    batchDialogVisible.value = false
-    loadSamples()
-  } catch (e: any) {
-    ElMessage.error(e.message || '批量导入失败')
-  } finally {
-    batchSaving.value = false
-  }
+function handleBatchUploadSuccess() {
+  loadSamples()
 }
 
 // 筛选条件
@@ -371,20 +322,35 @@ function handleDownloadTimeSeries(row: SampleInfoRow) {
     return
   }
   const url = `/api/clean/download-clean-result-by-path?filePath=${encodeURIComponent(filePath)}`
-  const a = document.createElement('a')
-  a.href = url
-  a.download = row.sampleName || 'data.json'
-  document.body.appendChild(a)
-  a.click()
-  document.body.removeChild(a)
+  const loading = ElLoading.service({ lock: true, text: '正在下载文件...', background: 'rgba(0,0,0,0.7)' })
+  fetch(url)
+    .then(async res => {
+      if (!res.ok) {
+        const errData = await res.json().catch(() => null)
+        throw new Error(errData?.message || '下载失败')
+      }
+      return res.blob()
+    })
+    .then(blob => {
+      const a = document.createElement('a')
+      a.href = URL.createObjectURL(blob)
+      a.download = row.sampleName || 'data.json'
+      a.click()
+      URL.revokeObjectURL(a.href)
+      ElMessage.success('下载成功')
+    })
+    .catch(e => {
+      console.error('下载失败:', e)
+      ElMessage.error(e.message || '下载出错')
+    })
+    .finally(() => {
+      loading.close()
+    })
 }
 
 // 隐藏的字段（不需要在表格中展示）
 const hiddenColumns = computed(() => {
-  const base = new Set(['recordId', 'sampleNo', 'typeCode', 'filePath', 'fileName', 'labelFlagCode', 'sampleScore', 'labelThink', 'labelContent'])
-  if (isTimeSeriesSet.value) {
-    base.add('labelFlag')
-  }
+  const base = new Set(['recordId', 'sampleNo', 'typeCode', 'filePath', 'fileName', 'labelFlagCode', 'labelFlag', 'sampleScore', 'labelThink', 'labelContent'])
   return base
 })
 
@@ -394,12 +360,14 @@ const audioExtSet = new Set(['mp3', 'wav', 'ogg', 'flac', 'aac', 'wma', 'm4a'])
 
 function isImageRow(row: SampleInfoRow): boolean {
   const suffix = String(row.suffix || '').toLowerCase().replace('.', '')
-  return imageExtSet.has(suffix)
+  if (suffix && imageExtSet.has(suffix)) return true
+  return String(row.typeCode || '') === '05'
 }
 
 function isAudioRow(row: SampleInfoRow): boolean {
   const suffix = String(row.suffix || '').toLowerCase().replace('.', '')
-  return audioExtSet.has(suffix)
+  if (suffix && audioExtSet.has(suffix)) return true
+  return String(row.typeCode || '') === '03'
 }
 
 function isPreviewable(row: SampleInfoRow): boolean {
@@ -408,9 +376,17 @@ function isPreviewable(row: SampleInfoRow): boolean {
 
 const previewVisible = ref(false)
 const previewLoading = ref(false)
+const imageLoading = ref(false) // 图片二进制加载中（独立于标注获取）
 const previewName = ref('')
 const previewFilePath = ref('')
 const previewType = ref<'image' | 'audio'>('image')
+
+// 预览遮罩文本：标注获取与图片加载分阶段提示
+const previewLoadingText = computed(() => {
+  if (previewLoading.value) return '正在加载标注信息...'
+  if (imageLoading.value) return '正在获取图片...'
+  return ''
+})
 const annotationData = ref<AnnotationData | null>(null)
 const previewCanvas = ref<HTMLCanvasElement | null>(null)
 
@@ -602,6 +578,7 @@ async function openPreview(row: SampleInfoRow) {
     previewType.value = 'image'
     previewVisible.value = true
     previewLoading.value = true
+    imageLoading.value = true // 图片开始加载
 
     // 初始化思维链状态
     thinkSampleNo.value = String(row.sampleNo || '')
@@ -623,7 +600,9 @@ async function openPreview(row: SampleInfoRow) {
     if (annotationData.value?.hasAnnotations) {
       await nextTick()
       drawAnnotations()
+      // drawAnnotations 内部会在图片 onload/onerror 时关闭 imageLoading
     }
+    // 无标注分支由 <img> 的 @load/@error 关闭 imageLoading
   } else if (isAudioRow(row)) {
     previewType.value = 'audio'
     audioText.value = null
@@ -732,12 +711,18 @@ function drawAnnotations(highlightIndex?: number | null) {
 
   if (cachedImage) {
     drawImage(cachedImage)
+    imageLoading.value = false
   } else {
     const img = new Image()
     img.crossOrigin = 'anonymous'
     img.onload = () => {
       cachedImage = img
       drawImage(img)
+      imageLoading.value = false
+    }
+    img.onerror = () => {
+      imageLoading.value = false
+      ElMessage.error('图片加载失败')
     }
     img.src = getImageUrl(previewFilePath.value)
   }
@@ -811,6 +796,7 @@ watch(previewVisible, (val) => {
     thinkVisible.value = false
     thinkCollapsed.value = false
     thinkContent.value = ''
+    imageLoading.value = false
   }
 })
 
@@ -1041,60 +1027,23 @@ onMounted(() => {
       </template>
     </el-dialog>
 
-    <!-- 批量导入弹框（仅图片类型） -->
-    <el-dialog v-model="batchDialogVisible" title="批量导入（ZIP）" width="520px" :close-on-click-modal="false" class="upload-dialog">
-      <div class="upload-dialog-content">
-        <div class="upload-info-row">
-          <span class="upload-info-label">样本集：</span>
-          <span class="upload-info-value">{{ setName }}</span>
-        </div>
-        <div class="upload-info-row">
-          <span class="upload-info-label">说明：</span>
-          <span class="upload-info-value">上传 ZIP，自动解压图片；同名 .txt 标注和 classes.txt 内容将写入数据库</span>
-        </div>
-        <el-upload
-          ref="batchUploadRef"
-          accept=".zip"
-          :auto-upload="false"
-          :limit="1"
-          :on-change="handleBatchFileChange"
-          :on-remove="handleBatchFileRemove"
-          drag
-        >
-          <div class="upload-drag-content">
-            <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="rgba(0,212,255,0.5)" stroke-width="1.5">
-              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M17 8l-5-5-5 5M12 3v12"/>
-            </svg>
-            <p>将 ZIP 文件拖到此处，或<em>点击上传</em></p>
-            <p class="upload-tip">仅支持单个 ZIP，图片类型样本集</p>
-          </div>
-        </el-upload>
-        <div class="batch-version-row">
-          <el-checkbox v-model="batchMajorVersion">大版本变更</el-checkbox>
-        </div>
-        <div v-if="batchMajorVersion" class="batch-remark-row">
-          <div class="batch-remark-label">变更说明<span class="batch-remark-tip">（非必填，最多 150 字）</span></div>
-          <el-input
-            v-model="batchVersionRemark"
-            type="textarea"
-            :rows="3"
-            placeholder="请输入变更说明，留空则自动生成"
-            maxlength="150"
-            show-word-limit
-          />
-        </div>
-      </div>
-      <template #footer>
-        <el-button type="primary" :loading="batchSaving" @click="handleBatchConfirm">确认导入</el-button>
-        <el-button @click="batchDialogVisible = false">取消</el-button>
-      </template>
-    </el-dialog>
+    <!-- 批量导入弹框（分片上传，仅图片类型） -->
+    <ChunkUploadDialog
+      v-model="batchDialogVisible"
+      :setNo="setNo"
+      :setName="setName"
+      :typeCode="typeCode"
+      source="sample"
+      title="批量导入（ZIP 分片上传）"
+      description="上传 ZIP，自动分片上传并解压图片；同名 .txt 标注和 classes.txt 内容将写入数据库"
+      @success="handleBatchUploadSuccess"
+    />
 
     <!-- 文件预览弹框 -->
     <el-dialog v-model="previewVisible" :title="previewName || '文件预览'" width="90vw" :close-on-click-modal="true" class="preview-dialog" destroy-on-close top="3vh">
-      <div class="preview-container" v-loading="previewLoading">
+      <div class="preview-container" v-loading="previewLoading || imageLoading" :element-loading-text="previewLoadingText">
         <!-- 图片预览 - 分栏布局 -->
-        <template v-if="previewType === 'image'">
+        <template v-if="previewType === 'image' && !previewLoading">
           <template v-if="annotationData?.hasAnnotations">
             <div class="split-layout">
               <!-- 左侧：上方图片 + 下方思维链 -->
@@ -1209,7 +1158,7 @@ onMounted(() => {
               <!-- 左侧：上方图片 + 下方思维链 -->
               <div class="split-left">
                 <div class="split-left-image">
-                  <img :src="getImageUrl(previewFilePath)" class="preview-img" @error="() => ElMessage.error('图片加载失败')" />
+                  <img :src="getImageUrl(previewFilePath)" class="preview-img" @load="imageLoading = false" @error="() => { imageLoading = false; ElMessage.error('图片加载失败') }" />
                 </div>
                 <div v-if="thinkVisible" class="think-box" :class="{ collapsed: thinkCollapsed }">
                   <div class="think-header" @click="toggleThinkCollapse">
@@ -1674,7 +1623,6 @@ onMounted(() => {
 .link-name {
   color: #00d4ff;
   cursor: pointer;
-  text-decoration: underline;
   &:hover {
     color: #66e0ff;
   }
