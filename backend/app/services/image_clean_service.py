@@ -114,7 +114,6 @@ PER_IMAGE_ISSUES = {"blurry", "dark", "light", "low_information", "grayscale"}
 
 @dataclass
 class ImageFeatures:
-    """单张图片的特征信息（轻量，8000张约 1MB 内存）"""
     file_path: str          # 数据库存储的原始路径（本地绝对路径或 minio:// URL）
     sample_no: str          # 样本编号
     sample_name: str        # 样本名称
@@ -554,7 +553,8 @@ def execute_image_clean_task(
     insert_clean_pic_record = deps["insert_clean_pic_record"]
     # 批量插入函数（可选依赖，缺失时回退到逐条插入）
     insert_clean_pic_records_batch = deps.get("insert_clean_pic_records_batch")
-    delete_original_sample_info_by_path = deps["delete_original_sample_info_by_path"]
+    # 标记法：批量更新清洗标记（替代旧的 delete_original_sample_info_by_path）
+    batch_update_clean_flag = deps.get("batch_update_clean_flag")
     query_original_samples = deps.get("query_original_samples")
 
     total_count = 0
@@ -688,64 +688,65 @@ def execute_image_clean_task(
         # 移除空问题集合（防御性）
         problems_by_sample_no = {k: v for k, v in problems_by_sample_no.items() if v}
 
-        # ============ 阶段三：统一移动问题图片 ============
-        # 检测全部完成，开始统一移动。此阶段前任何失败都不会影响原始文件。
+        # ============ 阶段三：标记问题图片（CLEAN_FLAG=1，不移动文件） ============
+        # 检测全部完成，开始统一标记。此阶段前任何失败都不会影响原始数据。
         problem_count = len(problems_by_sample_no)
-        append_clean_log(log_id, f"检测完成，共发现 {problem_count} 张问题图片，开始统一移动...")
+        append_clean_log(log_id, f"检测完成，共发现 {problem_count} 张问题图片，开始标记...")
         logger.info(f"检测完成，共发现 {problem_count} 张问题图片")
 
         issue_to_code = {v: k for k, v in code_to_issue.items()}
-        moved_count = 0
-        deleted_info_count = 0
-        move_failed_count = 0
+        marked_count = 0
+        mark_failed_count = 0
 
-        # 第一步: 先移动所有问题图，构建 原始路径→隔离新路径 映射
-        # 这样写入B图记录时，可正确查找A图(对比图)的最终路径（若A也被移动则用新路径）
-        original_path_to_new: dict[str, str] = {}
-        # 待写记录列表: (sample_no, feat, new_path)
-        moved_records: list[tuple[str, ImageFeatures, str]] = []
+        # 第一步: 收集问题图片的 sample_no，批量标记 CLEAN_FLAG=1
+        problem_sample_nos = []
+        # 待写记录列表: (sample_no, feat)
+        marked_records: list[tuple[str, ImageFeatures]] = []
 
         for sample_no, issue_set in problems_by_sample_no.items():
             feat = next((f for f in all_features if f.sample_no == sample_no), None)
             if not feat:
                 continue
+            problem_sample_nos.append(sample_no)
+            marked_records.append((sample_no, feat))
 
+        # 批量更新清洗标记
+        if problem_sample_nos and batch_update_clean_flag is not None:
             try:
-                # 移动文件
-                new_path = _move_image_to_quarantine(feat.file_path, task_no, file_name_hint=feat.sample_name)
-                original_path_to_new[feat.file_path] = new_path
-                moved_records.append((sample_no, feat, new_path))
-                moved_count += 1
-            except Exception as e_move:
-                move_failed_count += 1
-                append_clean_log(log_id, f"警告：移动文件失败：{feat.sample_name}，{e_move}")
-                logger.warning(f"移动文件失败: {feat.file_path}, {e_move}")
+                marked_count = batch_update_clean_flag(problem_sample_nos, "1")
+                logger.info(f"批量标记 CLEAN_FLAG=1: {marked_count} 条")
+            except Exception as e_mark:
+                logger.exception(f"批量标记清洗标记失败: {e_mark}")
+                mark_failed_count = len(problem_sample_nos)
+        elif problem_sample_nos:
+            mark_failed_count = len(problem_sample_nos)
+            logger.warning("batch_update_clean_flag 未注入，跳过标记步骤")
 
-        # 第二步-A: 收集所有清洗记录并批量插入
+        # 第二步: 收集所有清洗记录并批量插入（file_path 存原始路径，不再移动文件）
         clean_records_to_insert = []
-        for sample_no, feat, new_path in moved_records:
+        for sample_no, feat in marked_records:
             issue_set = problems_by_sample_no[sample_no]
 
-            # 查找对比图(A图)信息（逻辑与原实现完全一致）
+            # 查找对比图(A图)信息（A图仍在原位置，直接用原始路径）
             repeat_file_name = ""
             repeat_file_path = ""
             a_original_path = repeat_map_by_sample_no.get(sample_no)
             if a_original_path:
-                # 边界处理: A图也被移动时(因其他原因)使用A的新路径，否则用A的原始路径
-                repeat_file_path = original_path_to_new.get(a_original_path, a_original_path)
+                repeat_file_path = a_original_path
                 a_feat = path_to_feat.get(a_original_path)
                 repeat_file_name = a_feat.sample_name if a_feat else os.path.basename(a_original_path)
 
-            # 构建清洗记录（一个图片一条记录，多个类型逗号分隔，关联 clean_log_id）
+            # 构建清洗记录（file_path 存原始路径，用于 serve-image 展示）
             clean_type_str = ",".join(sorted(issue_to_code[i] for i in issue_set if i in issue_to_code))
             clean_records_to_insert.append({
                 "task_no": task_no,
                 "clean_type": clean_type_str,
                 "file_name": feat.sample_name,
-                "file_path": new_path,
+                "file_path": feat.file_path,
                 "clean_log_id": log_id,
                 "repeat_file_name": repeat_file_name,
                 "repeat_file_path": repeat_file_path,
+                "sample_no": feat.sample_no,
             })
 
         # 批量插入清洗记录（单连接单事务）
@@ -765,6 +766,7 @@ def execute_image_clean_task(
                                 clean_log_id=rec["clean_log_id"],
                                 repeat_file_name=rec["repeat_file_name"],
                                 repeat_file_path=rec["repeat_file_path"],
+                                sample_no=rec.get("sample_no"),
                             )
                         except Exception as e_single:
                             logger.warning(f"单条插入清洗记录失败: {rec['file_name']}, {e_single}")
@@ -777,20 +779,14 @@ def execute_image_clean_task(
                             clean_log_id=rec["clean_log_id"],
                             repeat_file_name=rec["repeat_file_name"],
                             repeat_file_path=rec["repeat_file_path"],
+                            sample_no=rec.get("sample_no"),
                         )
                     except Exception as e_single:
                         logger.warning(f"单条插入清洗记录失败: {rec['file_name']}, {e_single}")
 
-        # 第二步-B: 串行删除原始样本记录（保持原逻辑，不在本次优化范围）
-        for sample_no, feat, new_path in moved_records:
-            try:
-                deleted_info_count += delete_original_sample_info_by_path(feat.file_path)
-            except Exception as e_del:
-                logger.warning(f"删除原始样本记录失败: {feat.file_path}, {e_del}")
-
-        removed_count = moved_count
+        removed_count = marked_count
         result_count = total_count - removed_count
-        msg = f"移动完成：成功 {moved_count} 张，失败 {move_failed_count} 张，删除 {deleted_info_count} 条原始样本记录"
+        msg = f"标记完成：成功标记 {marked_count} 张问题图片（CLEAN_FLAG=1），失败 {mark_failed_count} 张"
         append_clean_log(log_id, msg)
         logger.info(msg)
 
@@ -800,13 +796,13 @@ def execute_image_clean_task(
             task_no=task_no, task_status="03", last_execute_flag=1,
             record_id=log_id, execute_status="03",
             total_count=total_count, removed_count=removed_count, result_count=result_count,
-            log_content="图像清洗执行完成，问题图片已移至隔离区",
+            log_content="图像清洗执行完成，问题图片已标记（CLEAN_FLAG=1）",
         )
         logger.info(f"图像清洗任务 {task_no} 执行完成")
 
         return {
             "code": 0,
-            "message": f"执行成功，共检测 {total_count} 张图片，移动 {removed_count} 张问题图片",
+            "message": f"执行成功，共检测 {total_count} 张图片，标记 {removed_count} 张问题图片",
             "data": {"fileName": "", "filePath": "", "resultCount": result_count},
         }
 

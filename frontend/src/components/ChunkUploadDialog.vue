@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref, computed, watch, nextTick } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
   uploadFileInChunks,
@@ -23,11 +23,17 @@ interface Props {
   title?: string
   /** 说明文字 */
   description?: string
+  /** 目录树（el-tree-select data 格式，可选） */
+  directoryTree?: any[]
+  /** 当前目录 ID（默认选中的目录） */
+  currentDirId?: string
 }
 
 const props = withDefaults(defineProps<Props>(), {
   title: '批量导入（ZIP 分片上传）',
   description: '上传 ZIP，自动分片上传并解压导入',
+  directoryTree: () => [],
+  currentDirId: '',
 })
 
 const emit = defineEmits<{
@@ -48,6 +54,23 @@ const progressInfo = ref<UploadProgressInfo | null>(null)
 // 高质量样本专用：版本变更
 const majorVersion = ref(false)
 const versionRemark = ref('')
+
+// 上传目标目录（默认当前目录，可切换到其他已有目录或根目录）
+const selectedDirId = ref('')
+
+// el-tree-select 目录选项（含"根目录"选项）
+const dirTreeOptions = computed(() => [
+  { value: '', label: '根目录', children: [] },
+  ...props.directoryTree,
+])
+
+// 弹框打开时，默认选中当前目录
+watch(() => props.modelValue, (visible) => {
+  if (visible) {
+    selectedDirId.value = props.currentDirId || ''
+  }
+})
+
 
 // 是否高质量样本
 const isSample = computed(() => props.source === 'sample')
@@ -126,6 +149,7 @@ function handleClose() {
   progressInfo.value = null
   majorVersion.value = false
   versionRemark.value = ''
+  selectedDirId.value = ''
   setTimeout(() => {
     uploadRef.value?.clearFiles()
   }, 0)
@@ -165,6 +189,7 @@ async function handleConfirm() {
         source: props.source,
         majorVersionChange: isSample.value ? majorVersion.value : false,
         versionRemark: isSample.value ? versionRemark.value.trim() : '',
+        dirId: selectedDirId.value,
       },
       {
         concurrency: 3,
@@ -246,6 +271,21 @@ async function handleCancel() {
       <div class="info-row">
         <span class="info-label">分片大小：</span>
         <span class="info-value">{{ formatSize(DEFAULT_CHUNK_SIZE) }} / 片，大文件自动分片上传，支持断点续传</span>
+      </div>
+      <div class="subdir-row">
+        <div class="subdir-label">目标目录<span class="subdir-tip">（选择已有目录或根目录）</span></div>
+        <el-tree-select
+          v-model="selectedDirId"
+          :data="dirTreeOptions"
+          :props="{ label: 'label', value: 'value', children: 'children' }"
+          :render-after-expand="false"
+          check-strictly
+          default-expand-all
+          placeholder="根目录"
+          :disabled="uploading"
+          clearable
+          style="width: 100%"
+        />
       </div>
 
       <!-- 文件选择 -->
@@ -373,6 +413,19 @@ async function handleCancel() {
 
 .version-row {
   margin-top: 4px;
+}
+
+.subdir-row {
+  .subdir-label {
+    font-size: 13px;
+    color: rgba(255, 255, 255, 0.7);
+    margin-bottom: 6px;
+  }
+  .subdir-tip {
+    color: rgba(255, 255, 255, 0.4);
+    font-size: 12px;
+    margin-left: 6px;
+  }
 }
 
 .remark-row {

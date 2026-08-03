@@ -49,6 +49,7 @@ export interface InitChunkUploadParams {
   source: 'sample' | 'original'
   majorVersionChange?: boolean
   versionRemark?: string
+  dirId?: string
 }
 
 export interface InitChunkUploadResult {
@@ -75,6 +76,7 @@ export async function initChunkUpload(params: InitChunkUploadParams): Promise<In
   formData.append('source', params.source)
   formData.append('majorVersionChange', String(params.majorVersionChange || false))
   formData.append('versionRemark', params.versionRemark || '')
+  formData.append('dirId', params.dirId || '')
 
   const res = await fetch(`${BASE_URL}/init`, { method: 'POST', body: formData })
   const json = await res.json()

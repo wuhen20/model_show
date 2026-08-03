@@ -184,7 +184,7 @@ function statusColor(statusCode: string): string {
 async function handleExecute(task: CleanTask) {
   const isImage = task.sampleType === '05'
   const confirmMsg = isImage
-    ? '确认执行该清洗任务？执行后将检测问题图片并移动到隔离目录。'
+    ? '确认执行该清洗任务？执行后将检测并标记问题图片（文件不会移动，仍在原位置）。'
     : '确认执行该清洗任务？执行后清洗结果将以 JSON 文件保存到服务器。'
   try {
     await ElMessageBox.confirm(confirmMsg, '提示', { type: 'warning' })
@@ -207,7 +207,7 @@ async function handleExecute(task: CleanTask) {
 
     // 同步执行结果（兼容旧逻辑）
     if (isImage) {
-      ElMessage.success(`执行成功，共检测 ${result.resultCount} 张正常图片，问题图片已隔离`)
+      ElMessage.success(`执行成功，共检测 ${result.resultCount} 张正常图片，问题图片已标记`)
     } else {
       ElMessage.success(`执行成功，清洗结果已保存（共 ${result.resultCount} 条），文件：${result.fileName}`)
     }
@@ -255,7 +255,7 @@ function startTaskPolling(taskNo: string) {
 
       if (status === '03') {
         // 执行成功
-        ElMessage.success(`任务执行成功，共检测 ${latestLog.totalCount} 张图片，隔离 ${latestLog.removedCount} 张问题图片`)
+        ElMessage.success(`任务执行成功，共检测 ${latestLog.totalCount} 张图片，标记 ${latestLog.removedCount} 张问题图片`)
         stopTaskPolling(taskNo)
         await loadTasks()
       } else if (status === '04') {
@@ -417,79 +417,84 @@ async function loadOriginalSampleSetOptions() {
           </div>
         </div>
 
-        <div class="table-container">
-          <div class="list-header">
-            <span class="col col-no">任务编号</span>
-            <span class="col col-name">任务名称</span>
-            <span class="col col-remark">任务说明</span>
-            <span class="col col-create">创建时间</span>
-            <span class="col col-exec">最近执行时间</span>
-            <span class="col col-result">执行结果</span>
-            <span class="col col-status">状态</span>
-            <span class="col col-action">操作</span>
-          </div>
-          <div v-if="loading" class="loading-state">
-            <span>加载中...</span>
-          </div>
-          <div v-else-if="filteredList.length === 0" class="empty-state">
-            <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="rgba(0,212,255,0.3)" stroke-width="1.5">
-              <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
-            </svg>
-            <p>暂无清洗任务</p>
-          </div>
-          <div v-else>
-            <div class="list-row" v-for="item in filteredList" :key="item.taskNo">
-              <span class="col col-no link-col" @click="handleTaskClick(item)">{{ item.taskNo }}</span>
-              <span class="col col-name link-col" @click="handleTaskClick(item)">{{ item.taskName }}</span>
-              <span class="col col-remark">{{ item.remark || '-' }}</span>
-              <span class="col col-create">{{ item.createTime || '-' }}</span>
-              <span class="col col-exec">{{ item.lastExecuteTime || '-' }}</span>
-              <span class="col col-result">
-                <span class="result-tag" :style="{ color: resultColor(item.lastExecuteFlagName) }">
-                  {{ item.lastExecuteFlagName || '未执行' }}
-                </span>
+        <el-table :data="filteredList" v-loading="loading" style="width: 100%" class="clean-task-table">
+          <el-table-column prop="taskNo" label="任务编号" width="150">
+            <template #default="{ row }">
+              <span class="link-col" @click="handleTaskClick(row)">{{ row.taskNo }}</span>
+            </template>
+          </el-table-column>
+          <el-table-column prop="taskName" label="任务名称" min-width="160" show-overflow-tooltip>
+            <template #default="{ row }">
+              <span class="link-col" @click="handleTaskClick(row)">{{ row.taskName }}</span>
+            </template>
+          </el-table-column>
+          <el-table-column prop="remark" label="任务说明" min-width="150" show-overflow-tooltip>
+            <template #default="{ row }">{{ row.remark || '-' }}</template>
+          </el-table-column>
+          <el-table-column prop="createTime" label="创建时间" width="160">
+            <template #default="{ row }">{{ row.createTime || '-' }}</template>
+          </el-table-column>
+          <el-table-column prop="lastExecuteTime" label="最近执行时间" width="160">
+            <template #default="{ row }">{{ row.lastExecuteTime || '-' }}</template>
+          </el-table-column>
+          <el-table-column prop="lastExecuteFlagName" label="执行结果" width="100">
+            <template #default="{ row }">
+              <span class="result-tag" :style="{ color: resultColor(row.lastExecuteFlagName) }">
+                {{ row.lastExecuteFlagName || '未执行' }}
               </span>
-              <span class="col col-status">
-                <span class="status-tag" :style="{ color: statusColor(item.taskStatusCode) }">
-                  {{ item.taskStatusName || '未执行' }}
-                </span>
+            </template>
+          </el-table-column>
+          <el-table-column prop="taskStatusName" label="状态" width="100">
+            <template #default="{ row }">
+              <span class="status-tag" :style="{ color: statusColor(row.taskStatusCode) }">
+                {{ row.taskStatusName || '未执行' }}
               </span>
-              <span class="col col-action">
-                <el-button
-                  type="primary"
-                  size="small"
-                  :loading="executingSet.has(item.taskNo)"
-                  :disabled="item.taskStatusCode === '02'"
-                  @click="handleExecute(item)"
-                >执行</el-button>
-                <el-button
-                  v-if="item.sampleType === '05'"
-                  size="small"
-                  class="edit-btn"
-                  @click="openEditConfigDialog(item)"
-                >配置</el-button>
-                <el-button
-                  v-else
-                  size="small"
-                  class="edit-btn"
-                  @click="goToEdit(item.taskNo)"
-                >编排</el-button>
-                <el-button
-                  size="small"
-                  class="log-btn"
-                  @click="openLogDialog(item)"
-                >执行记录</el-button>
-                <el-button
-                  type="danger"
-                  size="small"
-                  class="delete-btn"
-                  :disabled="item.taskStatusCode === '02'"
-                  @click="handleDelete(item)"
-                >删除</el-button>
-              </span>
+            </template>
+          </el-table-column>
+          <el-table-column label="操作" width="320">
+            <template #default="{ row }">
+              <el-button
+                type="primary"
+                size="small"
+                :loading="executingSet.has(row.taskNo)"
+                :disabled="row.taskStatusCode === '02'"
+                @click="handleExecute(row)"
+              >执行</el-button>
+              <el-button
+                v-if="row.sampleType === '05'"
+                size="small"
+                class="edit-btn"
+                @click="openEditConfigDialog(row)"
+              >配置</el-button>
+              <el-button
+                v-else
+                size="small"
+                class="edit-btn"
+                @click="goToEdit(row.taskNo)"
+              >编排</el-button>
+              <el-button
+                size="small"
+                class="log-btn"
+                @click="openLogDialog(row)"
+              >执行记录</el-button>
+              <el-button
+                type="danger"
+                size="small"
+                class="delete-btn"
+                :disabled="row.taskStatusCode === '02'"
+                @click="handleDelete(row)"
+              >删除</el-button>
+            </template>
+          </el-table-column>
+          <template #empty>
+            <div class="empty-state">
+              <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="rgba(0,212,255,0.3)" stroke-width="1.5">
+                <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
+              </svg>
+              <p>暂无清洗任务</p>
             </div>
-          </div>
-        </div>
+          </template>
+        </el-table>
       </main>
     </div>
 
@@ -686,82 +691,6 @@ async function loadOriginalSampleSetOptions() {
     color: #00d4ff !important;
   }
 }
-
-.table-container {
-  flex: 1;
-  background: linear-gradient(135deg, rgba(17, 24, 39, 0.9) 0%, rgba(26, 35, 50, 0.8) 100%);
-  border: 1px solid rgba(0, 212, 255, 0.2);
-  border-radius: 12px;
-  overflow-x: auto;
-
-  &::-webkit-scrollbar {
-    height: 8px;
-  }
-
-  &::-webkit-scrollbar-track {
-    background: rgba(0, 0, 0, 0.2);
-    border-radius: 4px;
-  }
-
-  &::-webkit-scrollbar-thumb {
-    background: rgba(0, 212, 255, 0.3);
-    border-radius: 4px;
-
-    &:hover {
-      background: rgba(0, 212, 255, 0.5);
-    }
-  }
-}
-
-.list-header,
-.list-row {
-  display: flex;
-  align-items: center;
-  padding: 0 12px;
-  min-height: 52px;
-  box-sizing: border-box;
-  width: max-content;
-  min-width: 100%;
-}
-
-.list-header {
-  background: rgba(0, 212, 255, 0.08);
-  border-bottom: 1px solid rgba(0, 212, 255, 0.2);
-  font-size: 13px;
-  font-weight: 600;
-  color: rgba(255, 255, 255, 0.7);
-}
-
-.list-row {
-  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
-  font-size: 13px;
-  color: rgba(255, 255, 255, 0.85);
-  transition: background 0.2s;
-
-  &:hover {
-    background: rgba(0, 212, 255, 0.05);
-  }
-
-  &:last-child {
-    border-bottom: none;
-  }
-}
-
-.col {
-  padding: 0 8px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.col-no { width: 130px; flex-shrink: 0; color: #00d4ff; }
-.col-name { width: 200px; flex-shrink: 0; }
-.col-remark { width: 160px; flex-shrink: 0; color: rgba(255, 255, 255, 0.6); }
-.col-create { width: 160px; flex-shrink: 0; color: rgba(255, 255, 255, 0.6); }
-.col-exec { width: 160px; flex-shrink: 0; color: rgba(255, 255, 255, 0.6); }
-.col-result { width: 90px; flex-shrink: 0; text-align: center; }
-.col-status { width: 90px; flex-shrink: 0; text-align: center; }
-.col-action { width: 320px; flex-grow: 1; flex-shrink: 0; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 
 .link-col {
   cursor: pointer;

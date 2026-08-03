@@ -30,7 +30,8 @@ from app.core.db_import import (
     STATUS_PENDING, STATUS_UPLOADING, STATUS_MERGING,
     STATUS_IMPORTING, STATUS_COMPLETED, STATUS_FAILED, STATUS_CANCELED,
 )
-from app.services.sample_minio_service import is_minio_enabled
+from app.services.sample_minio_service import is_minio_enabled, sanitize_sub_dir
+from app.core.db_sample import get_dir_path_by_id
 
 logger = logging.getLogger("app.upload_chunk")
 
@@ -110,6 +111,7 @@ async def init_chunk_upload(
     source: str = Form(..., description="sample=高质量样本, original=原始样本"),
     majorVersionChange: str = Form("false"),
     versionRemark: str = Form(""),
+    dirId: str = Form("", description="上传目标目录编号（空=样本集根目录）"),
 ):
     """初始化分片上传任务，返回 taskNo
 
@@ -128,6 +130,7 @@ async def init_chunk_upload(
         return {"code": 1, "message": "变更说明不能超过 150 个字"}
 
     manual_major = 1 if (majorVersionChange or "").strip().lower() in ("true", "1", "on", "yes") else 0
+    dir_id = dirId.strip() if dirId else ""
 
     try:
         task_no = generate_import_task_no()
@@ -142,6 +145,7 @@ async def init_chunk_upload(
             source=source,
             major_version_change=manual_major,
             version_remark=version_remark,
+            dir_id=dir_id,
         )
         # 预创建分片目录
         _get_chunk_dir(task_no)
@@ -355,6 +359,11 @@ def _merge_and_import(task_no: str):
     total_chunks = int(task.get("total_chunks") or 0)
     major_version_change = int(task.get("major_version_change") or 0)
     version_remark = task.get("version_remark", "") or ""
+    dir_id = task.get("dir_id", "") or ""
+
+    # 通过 dir_id 查目录路径，用于构建 file_path
+    dir_path = get_dir_path_by_id(dir_id) if dir_id else ""
+    sub_dir = sanitize_sub_dir(dir_path)
 
     chunk_dir = _get_chunk_dir(task_no)
     merged_path = _get_merged_path(task_no, file_name)
@@ -399,7 +408,7 @@ def _merge_and_import(task_no: str):
         logger.info(f"任务 {task_no} 开始解压导入")
 
         use_minio = is_minio_enabled()
-        target_dir = None if use_minio else os.path.join(settings.sample_upload_dir, set_name)
+        target_dir = None if use_minio else (os.path.join(settings.sample_upload_dir, set_no, sub_dir) if sub_dir else os.path.join(settings.sample_upload_dir, set_no))
 
         from app.services.sample_import_service import extract_zip_and_import
 
@@ -420,6 +429,7 @@ def _merge_and_import(task_no: str):
                 use_minio=use_minio,
                 write_txt_to_db=True,
                 update_set_labels_callback=update_sample_set_labels,
+                dir_id=dir_id or None,
             )
         else:
             # 原始样本：仅导入图片，跳过 txt
@@ -434,6 +444,7 @@ def _merge_and_import(task_no: str):
                 use_minio=use_minio,
                 write_txt_to_db=False,
                 update_set_labels_callback=None,
+                dir_id=dir_id or None,
             )
 
         image_count = result.get("image_count", 0)

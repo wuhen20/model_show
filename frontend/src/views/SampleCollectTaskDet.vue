@@ -568,28 +568,28 @@ onMounted(() => {
           </div>
 
           <div v-if="columnsQueried && tableColumns.length > 0" class="mapping-area">
-            <div class="mapping-header">
-              <span class="mapping-col mapping-col-source">源字段/别名</span>
-              <span class="mapping-col mapping-col-target">目标字段</span>
-              <span class="mapping-col mapping-col-info">类型</span>
-              <span class="mapping-col mapping-col-info">注释</span>
-            </div>
-            <div class="mapping-row" v-for="(item, idx) in mappings" :key="idx">
-              <span class="mapping-col mapping-col-source">
-                <el-input v-model="item.sourceColumn" placeholder="源字段" maxlength="32" size="small" />
-              </span>
-              <span class="mapping-col mapping-col-target">
-                <span class="field-text">{{ item.targetColumn }}</span>
-              </span>
-              <span class="mapping-col mapping-col-info">
-                <span class="field-text">{{ tableColumns.find(c => c.columnName === item.targetColumn)?.columnType || '-' }}</span>
-              </span>
-              <span class="mapping-col mapping-col-info">
-                <span class="field-text" :title="tableColumns.find(c => c.columnName === item.targetColumn)?.columnComment">
-                  {{ tableColumns.find(c => c.columnName === item.targetColumn)?.columnComment || '-' }}
-                </span>
-              </span>
-            </div>
+            <el-table :data="mappings" style="width: 100%" class="mapping-table">
+              <el-table-column label="源字段/别名" min-width="200">
+                <template #default="{ row }">
+                  <el-input v-model="row.sourceColumn" placeholder="源字段" maxlength="32" size="small" />
+                </template>
+              </el-table-column>
+              <el-table-column label="目标字段" min-width="150" show-overflow-tooltip>
+                <template #default="{ row }">
+                  <span class="field-text">{{ row.targetColumn }}</span>
+                </template>
+              </el-table-column>
+              <el-table-column label="类型" width="120" show-overflow-tooltip>
+                <template #default="{ row }">
+                  <span class="field-text">{{ tableColumns.find(c => c.columnName === row.targetColumn)?.columnType || '-' }}</span>
+                </template>
+              </el-table-column>
+              <el-table-column label="注释" min-width="180" show-overflow-tooltip>
+                <template #default="{ row }">
+                  <span class="field-text">{{ tableColumns.find(c => c.columnName === row.targetColumn)?.columnComment || '-' }}</span>
+                </template>
+              </el-table-column>
+            </el-table>
           </div>
 
           <div v-else-if="columnsQueried && tableColumns.length === 0" class="empty-columns">
@@ -817,60 +817,7 @@ onMounted(() => {
   overflow: hidden;
 }
 
-.mapping-header {
-  display: flex;
-  align-items: center;
-  padding: 10px 16px;
-  background: rgba(0, 212, 255, 0.08);
-  border-bottom: 1px solid rgba(0, 212, 255, 0.15);
-  font-size: 13px;
-  font-weight: 600;
-  color: rgba(255, 255, 255, 0.65);
-}
-
-.mapping-row {
-  display: flex;
-  align-items: center;
-  padding: 8px 16px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
-  transition: background 0.2s;
-
-  &:hover {
-    background: rgba(0, 212, 255, 0.04);
-  }
-
-  &:last-child {
-    border-bottom: none;
-  }
-}
-
-.mapping-col {
-  padding: 0 6px;
-  font-size: 13px;
-  color: rgba(255, 255, 255, 0.8);
-}
-
-.mapping-col-source {
-  flex: 1;
-  min-width: 0;
-}
-
-.mapping-col-target {
-  flex: 1;
-  min-width: 0;
-}
-
-.mapping-col-info {
-  width: 140px;
-  flex-shrink: 0;
-}
-
 .field-text {
-  display: inline-block;
-  max-width: 120px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
   color: rgba(255, 255, 255, 0.6);
   font-size: 12px;
 }

@@ -91,6 +91,7 @@ def extract_zip_and_import(
     use_minio: bool = False,
     write_txt_to_db: bool = False,
     update_set_labels_callback=None,
+    dir_id: str = None,
 ) -> dict:
     """解压 ZIP 压缩包并导入图片样本到目标目录/MinIO 和数据库。
 
@@ -115,12 +116,13 @@ def extract_zip_and_import(
         set_no: 样本集编号
         type_code: 样本类型编码
         insert_callback: 写入数据库的回调函数，签名:
-            (set_no, sample_name, suffix, type_code, file_path, file_size_bytes, label_flag, label_content="") -> None
+            (set_no, sample_name, suffix, type_code, file_path, file_size_bytes, label_flag, label_content="", dir_id=None) -> None
         zip_bytes: ZIP 文件的字节内容（小文件用，已废弃不推荐）
         zip_path: ZIP 文件的磁盘路径（推荐，避免大文件读入内存）
         use_minio: 是否使用 MinIO 模式
         write_txt_to_db: 是否将 .txt 标注内容写入 DB（True=高质量样本，False=原始样本）
         update_set_labels_callback: classes.txt 内容更新回调，签名: (set_no, sample_labels_content) -> None
+        dir_id: 上传目标目录编号（None 表示样本集根目录）
 
     返回: {image_count, txt_count, skipped_count, errors}
     """
@@ -138,10 +140,17 @@ def extract_zip_and_import(
     if not use_minio and target_dir:
         os.makedirs(target_dir, exist_ok=True)
 
+    # 通过 dir_id 查目录路径，用于构建 MinIO 前缀和列出已有对象
+    from app.core.db_sample import get_dir_path_by_id
+    from app.services.sample_minio_service import sanitize_sub_dir
+    dir_path = get_dir_path_by_id(dir_id) if dir_id else ""
+    sub_dir = sanitize_sub_dir(dir_path)
+
     # MinIO 上传相关：避免覆盖已有对象
+    minio_prefix = f"{set_no}/{sub_dir}" if sub_dir else set_no
     if use_minio:
         from app.services.sample_minio_service import list_object_names as minio_list_object_names, upload_image as minio_upload_image
-        used_names = minio_list_object_names(set_no)
+        used_names = minio_list_object_names(set_no, sub_dir)
     else:
         used_names = set()
 
@@ -262,7 +271,7 @@ def extract_zip_and_import(
                 data = zf.read(zip_filename)  # 线程安全：每个线程独立 ZipFile 实例
                 if use_minio:
                     ct = _CONTENT_TYPE_MAP.get(ext, "application/octet-stream")
-                    file_path = minio_upload_image(set_no, unique_name, data, content_type=ct)
+                    file_path = minio_upload_image(minio_prefix, unique_name, data, content_type=ct)
                 else:
                     target_path = os.path.join(target_dir, unique_name)
                     with open(target_path, "wb") as f:
@@ -317,7 +326,7 @@ def extract_zip_and_import(
             try:
                 insert_callback(set_no, unique_name, ext.lstrip("."), type_code,
                                 result["file_path"], result["data_size"],
-                                label_flag, label_content)
+                                label_flag, label_content, dir_id)
                 image_count += 1
             except Exception as e:
                 errors.append(f"{basename}: {e}")

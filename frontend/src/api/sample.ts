@@ -76,11 +76,71 @@ export interface SampleInfoRow {
   [key: string]: any
 }
 
-export async function getSamples(setNo: string): Promise<SampleInfoRow[]> {
-  const res = await fetch(`${BASE_URL}/get-samples?setNo=${encodeURIComponent(setNo)}`)
+export async function getSamples(setNo: string, dirId?: string): Promise<SampleInfoRow[]> {
+  let url = `${BASE_URL}/get-samples?setNo=${encodeURIComponent(setNo)}`
+  if (dirId !== undefined) {
+    url += `&dirId=${encodeURIComponent(dirId)}`
+  }
+  const res = await fetch(url)
   const json = await res.json()
   if (json.code !== 0) throw new Error(json.message || '查询样本信息失败')
   return json.data || []
+}
+
+// ========== 目录管理 ==========
+
+export interface DirectoryNode {
+  dirId: string
+  setNo: string
+  parentId: string | null
+  dirName: string
+  dirPath: string
+  createTime: string
+  children?: DirectoryNode[]
+}
+
+export interface DirectoryPathItem {
+  dirId: string
+  dirName: string
+  dirPath: string
+}
+
+export async function getDirectoryTree(setNo: string): Promise<DirectoryNode[]> {
+  const res = await fetch(`${BASE_URL}/get-directory-tree?setNo=${encodeURIComponent(setNo)}`)
+  const json = await res.json()
+  if (json.code !== 0) throw new Error(json.message || '查询目录树失败')
+  return json.data || []
+}
+
+export async function getDirectoryPath(dirId: string): Promise<DirectoryPathItem[]> {
+  const res = await fetch(`${BASE_URL}/get-directory-path?dirId=${encodeURIComponent(dirId)}`)
+  const json = await res.json()
+  if (json.code !== 0) throw new Error(json.message || '查询目录路径失败')
+  return json.data || []
+}
+
+export async function createDirectory(setNo: string, parentId: string, dirName: string): Promise<DirectoryNode> {
+  const params = new URLSearchParams({ setNo, parentId, dirName })
+  const res = await fetch(`${BASE_URL}/create-directory?${params}`, { method: 'POST' })
+  const json = await res.json()
+  if (json.code !== 0) throw new Error(json.message || '创建目录失败')
+  return json.data
+}
+
+export async function deleteDirectory(dirId: string): Promise<void> {
+  const res = await fetch(`${BASE_URL}/delete-directory?dirId=${encodeURIComponent(dirId)}`, { method: 'POST' })
+  const json = await res.json()
+  if (json.code !== 0) throw new Error(json.message || '删除目录失败')
+}
+
+export async function deleteSampleSet(setNo: string): Promise<void> {
+  const res = await fetch(`${BASE_URL}/delete-sample-set`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ setNo }),
+  })
+  const json = await res.json()
+  if (json.code !== 0) throw new Error(json.message || '删除样本集失败')
 }
 
 export function getImageUrl(filePath: string): string {
@@ -184,11 +244,12 @@ export async function getSampleTrend(): Promise<SampleTrend> {
   return json.data
 }
 
-export async function uploadSamples(setNo: string, setName: string, typeCode: string, files: File[]): Promise<string> {
+export async function uploadSamples(setNo: string, setName: string, typeCode: string, files: File[], dirId: string = ''): Promise<string> {
   const formData = new FormData()
   formData.append('setNo', setNo)
   formData.append('setName', setName)
   formData.append('typeCode', typeCode)
+  formData.append('dirId', dirId)
   files.forEach(f => formData.append('files', f))
   const res = await fetch(`${BASE_URL}/upload-samples`, { method: 'POST', body: formData })
   const json = await res.json()
@@ -202,7 +263,8 @@ export async function uploadSamplesBatch(
   typeCode: string,
   file: File,
   majorVersionChange: boolean = false,
-  versionRemark: string = ''
+  versionRemark: string = '',
+  dirId: string = ''
 ): Promise<string> {
   const formData = new FormData()
   formData.append('setNo', setNo)
@@ -211,6 +273,7 @@ export async function uploadSamplesBatch(
   formData.append('file', file)
   formData.append('majorVersionChange', String(majorVersionChange))
   formData.append('versionRemark', versionRemark)
+  formData.append('dirId', dirId)
   const res = await fetch(`${BASE_URL}/upload-samples-batch`, { method: 'POST', body: formData })
   const json = await res.json()
   if (json.code !== 0) throw new Error(json.message || '批量导入失败')

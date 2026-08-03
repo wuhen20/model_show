@@ -15,6 +15,7 @@ from app.core.database import (
     _is_oracle,
     _get_next_sequence,
     _get_next_sequence_batch,
+    generate_directory_no,
 )
 
 
@@ -73,10 +74,27 @@ def query_sample_set():
         conn.close()
 
 
-def query_sample_info(set_no: str):
+def query_sample_info(set_no: str, dir_id: str = None):
+    """查询高质量样本列表。
+
+    dir_id 为 None 时不筛选目录，返回样本集下所有样本。
+    dir_id 为空字符串 '' 时筛选根目录下的样本（dir_id IS NULL）。
+    dir_id 为具体值时筛选该目录下的样本。
+    """
     conn = get_connection()
     try:
         with conn.cursor() as cursor:
+            where_extra = ""
+            params: tuple
+            if dir_id is not None:
+                if dir_id == "":
+                    where_extra = " AND s.dir_id IS NULL"
+                    params = (set_no,)
+                else:
+                    where_extra = " AND s.dir_id = %s"
+                    params = (set_no, dir_id)
+            else:
+                params = (set_no,)
             sql = f"""
                 select
                     sample_no,
@@ -99,14 +117,15 @@ def query_sample_info(set_no: str):
 	                case s.label_flag when 1 then '已标注' else '未标注' end as label_flag,
                     s.sample_score,
                     s.label_think,
-                    s.label_content
+                    s.label_content,
+                    s.dir_id
                 from
                     s_sample_info s
                 where
-                    set_no = %s
+                    set_no = %s{where_extra}
                 order by update_time desc, create_time desc
             """
-            _execute(cursor, sql, (set_no,))
+            _execute(cursor, sql, params)
             return cursor.fetchall()
     finally:
         conn.close()
@@ -213,11 +232,12 @@ def query_audio_text(sample_no: str, sample_name: str):
         conn.close()
 
 
-def insert_sample_info(set_no: str, sample_name: str, suffix: str, type_code: str, file_path: str, file_size: int, label_flag: int = 0, label_content: str = ""):
+def insert_sample_info(set_no: str, sample_name: str, suffix: str, type_code: str, file_path: str, file_size: int, label_flag: int = 0, label_content: str = "", dir_id: str = None):
     """插入样本信息到 s_sample_info 表，自动生成 sample_no（set_no + 5位序列号）
 
     label_flag: 0-未标注, 1-已标注（图片有同名txt标注文件时为1）
     label_content: 图片同名 txt 标注文件的原始内容（仅图片类型，保持原内容不变形）
+    dir_id: 所属目录编号（NULL 表示样本集根目录）
     """
     # 生成 sample_no: set_no + 5位序列号
     seq = _get_next_sequence(f'SAMPLE_NO_{set_no}', set_no)
@@ -227,10 +247,10 @@ def insert_sample_info(set_no: str, sample_name: str, suffix: str, type_code: st
     try:
         with conn.cursor() as cursor:
             sql = """
-                INSERT INTO s_sample_info (sample_no, set_no, sample_name, suffix, type_code, file_path, file_size, label_flag, label_content)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                INSERT INTO s_sample_info (sample_no, set_no, sample_name, suffix, type_code, file_path, file_size, label_flag, label_content, dir_id)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             """
-            _execute(cursor, sql, (sample_no, set_no, sample_name, suffix, type_code, file_path, file_size, label_flag, label_content))
+            _execute(cursor, sql, (sample_no, set_no, sample_name, suffix, type_code, file_path, file_size, label_flag, label_content, dir_id))
         conn.commit()
         return cursor.rowcount
     finally:
@@ -481,7 +501,7 @@ def query_original_sample_set():
                     where
                         scd.code_value = s.sample_field
                         and scd.sort_no = 'SAMPLE_FIELD') as sample_field,
-                    (select count(*) from s_original_sample_info si where si.set_no = s.set_no) as sample_count
+                    (select count(*) from s_original_sample_info si where si.set_no = s.set_no and (si.clean_flag = '0' or si.clean_flag is null)) as sample_count
                 from
                     s_original_sample_set s
                 order by update_time desc, create_time desc
@@ -547,11 +567,27 @@ def update_original_sample_set(data: dict):
         conn.close()
 
 
-def query_original_sample_info(set_no: str):
-    """查询原始样本集下的样本列表"""
+def query_original_sample_info(set_no: str, dir_id: str = None):
+    """查询原始样本集下的样本列表。
+
+    dir_id 为 None 时不筛选目录，返回样本集下所有样本。
+    dir_id 为空字符串 '' 时筛选根目录下的样本（dir_id IS NULL）。
+    dir_id 为具体值时筛选该目录下的样本。
+    """
     conn = get_connection()
     try:
         with conn.cursor() as cursor:
+            where_extra = ""
+            params: tuple
+            if dir_id is not None:
+                if dir_id == "":
+                    where_extra = " AND s.dir_id IS NULL"
+                    params = (set_no,)
+                else:
+                    where_extra = " AND s.dir_id = %s"
+                    params = (set_no, dir_id)
+            else:
+                params = (set_no,)
             sql = f"""
                 select
                     sample_no,
@@ -573,14 +609,17 @@ def query_original_sample_info(set_no: str):
                     s.label_flag as label_flag_code,
 	                case s.label_flag when 1 then '已标注' else '未标注' end as label_flag,
                     s.sample_score,
-                    s.label_think
+                    s.label_think,
+                    s.dir_id
                 from
                     s_original_sample_info s
                 where
                     set_no = %s
+                    AND (s.clean_flag = '0' OR s.clean_flag IS NULL)
+                    {where_extra}
                 order by update_time desc, create_time desc
             """
-            _execute(cursor, sql, (set_no,))
+            _execute(cursor, sql, params)
             return cursor.fetchall()
     finally:
         conn.close()
@@ -667,11 +706,12 @@ def query_time_series_data_by_set_no(set_no: str, page: int = 1, page_size: int 
         conn.close()
 
 
-def insert_original_sample_info(set_no: str, sample_name: str, suffix: str, type_code: str, file_path: str, file_size: int, label_flag: int = 0, label_content: str = ""):
+def insert_original_sample_info(set_no: str, sample_name: str, suffix: str, type_code: str, file_path: str, file_size: int, label_flag: int = 0, label_content: str = "", dir_id: str = None):
     """插入原始样本信息，自动生成 sample_no（set_no + 5位序列号）
 
     label_flag: 0-未标注, 1-已标注（图片有同名txt标注文件时为1）
     label_content: 接受该参数以与 insert_sample_info 保持一致的回调签名，但原始样本不写标注内容，直接忽略。
+    dir_id: 所属目录编号（NULL 表示样本集根目录）
     """
     # 生成 sample_no: set_no + 5位序列号
     seq = _get_next_sequence(f'SAMPLE_NO_{set_no}', set_no)
@@ -681,10 +721,10 @@ def insert_original_sample_info(set_no: str, sample_name: str, suffix: str, type
     try:
         with conn.cursor() as cursor:
             sql = """
-                INSERT INTO s_original_sample_info (sample_no, set_no, sample_name, suffix, type_code, file_path, file_size, label_flag)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                INSERT INTO s_original_sample_info (sample_no, set_no, sample_name, suffix, type_code, file_path, file_size, label_flag, dir_id)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
             """
-            _execute(cursor, sql, (sample_no, set_no, sample_name, suffix, type_code, file_path, file_size, label_flag))
+            _execute(cursor, sql, (sample_no, set_no, sample_name, suffix, type_code, file_path, file_size, label_flag, dir_id))
         conn.commit()
         return cursor.rowcount
     finally:
@@ -694,7 +734,7 @@ def insert_original_sample_info(set_no: str, sample_name: str, suffix: str, type
 def batch_insert_original_sample_info(records: list[dict]):
     """批量插入原始样本信息，预生成 sample_no（set_no + 5位序列号）
 
-    records 字段：set_no, sample_name, suffix, type_code, file_path, file_size
+    records 字段：set_no, sample_name, suffix, type_code, file_path, file_size, dir_id(可选)
     返回插入条数。
 
     注意：为避免并发序列号冲突，sample_no 在本函数内一次性顺序生成，调用方无需传入。
@@ -715,13 +755,14 @@ def batch_insert_original_sample_info(records: list[dict]):
             "suffix": r.get("suffix", ""),
             "file_path": r.get("file_path", ""),
             "file_size": r.get("file_size", 0),
+            "dir_id": r.get("dir_id"),
         })
     conn = get_connection()
     try:
         with conn.cursor() as cursor:
             sql = """
-                INSERT INTO s_original_sample_info (sample_no, set_no, sample_name, suffix, type_code, file_path, file_size, label_flag)
-                VALUES (%(sample_no)s, %(set_no)s, %(sample_name)s, %(suffix)s, %(type_code)s, %(file_path)s, %(file_size)s, 0)
+                INSERT INTO s_original_sample_info (sample_no, set_no, sample_name, suffix, type_code, file_path, file_size, label_flag, dir_id)
+                VALUES (%(sample_no)s, %(set_no)s, %(sample_name)s, %(suffix)s, %(type_code)s, %(file_path)s, %(file_size)s, 0, %(dir_id)s)
             """
             _executemany(cursor, sql, prepared)
         conn.commit()
@@ -816,7 +857,7 @@ def query_original_samples(set_no: str):
     """查询原始样本集下所有样本的完整信息（用于图像清洗）
 
     返回 list[dict]：{sample_no, sample_name, file_path}
-    仅返回 file_path 不为空的记录，避免空路径参与清洗。
+    仅返回 file_path 不为空且未被清洗（CLEAN_FLAG='0' 或 NULL）的记录。
     """
     conn = get_connection()
     try:
@@ -825,6 +866,7 @@ def query_original_samples(set_no: str):
                 SELECT sample_no, sample_name, file_path
                 FROM s_original_sample_info
                 WHERE set_no = %s AND file_path IS NOT NULL
+                  AND (clean_flag = '0' OR clean_flag IS NULL)
             """
             _execute(cursor, sql, (set_no,))
             return cursor.fetchall()
@@ -841,5 +883,266 @@ def delete_original_sample_info_by_path(file_path: str):
             _execute(cursor, sql, (file_path,))
         conn.commit()
         return cursor.rowcount
+    finally:
+        conn.close()
+
+
+def batch_update_clean_flag(sample_nos: list[str], flag: str):
+    """批量更新原始样本的清洗标记（CLEAN_FLAG）
+
+    Args:
+        sample_nos: 样本编号列表
+        flag: '1' 标记为已清洗, '0' 恢复为未清洗
+    """
+    if not sample_nos:
+        return 0
+    conn = get_connection()
+    try:
+        with conn.cursor() as cursor:
+            # 分批处理，避免 IN 列表过长
+            batch_size = 500
+            total = 0
+            for i in range(0, len(sample_nos), batch_size):
+                batch = sample_nos[i:i + batch_size]
+                placeholders = ",".join(["%s"] * len(batch))
+                sql = f"UPDATE s_original_sample_info SET clean_flag = %s WHERE sample_no IN ({placeholders})"
+                _execute(cursor, sql, (flag, *batch))
+                total += cursor.rowcount
+        conn.commit()
+        return total
+    finally:
+        conn.close()
+
+
+# ==================== 样本目录管理（s_sample_directory）====================
+
+def create_directory(set_no: str, parent_id: str, dir_name: str) -> dict:
+    """创建目录，返回新目录信息 {dir_id, set_no, parent_id, dir_name, dir_path}
+
+    parent_id 为空字符串或 None 时，创建样本集根目录下的第一级子目录。
+    dir_path 自动构建：父目录 dir_path + '/' + dir_name（根目录下则为 dir_name）。
+    """
+    dir_id = generate_directory_no()
+    parent_id = parent_id or None
+
+    conn = get_connection()
+    try:
+        with conn.cursor() as cursor:
+            # 查父目录的 dir_path
+            parent_path = ""
+            if parent_id:
+                _execute(cursor, "SELECT dir_path FROM s_sample_directory WHERE dir_id = %s", (parent_id,))
+                row = cursor.fetchone()
+                if row:
+                    parent_path = row["dir_path"] if isinstance(row, dict) else row[0]
+
+            dir_path = f"{parent_path}/{dir_name}" if parent_path else dir_name
+
+            sql = """
+                INSERT INTO s_sample_directory (dir_id, set_no, parent_id, dir_name, dir_path)
+                VALUES (%s, %s, %s, %s, %s)
+            """
+            _execute(cursor, sql, (dir_id, set_no, parent_id, dir_name, dir_path))
+        conn.commit()
+        return {"dir_id": dir_id, "set_no": set_no, "parent_id": parent_id, "dir_name": dir_name, "dir_path": dir_path}
+    finally:
+        conn.close()
+
+
+def query_directory_tree(set_no: str) -> list[dict]:
+    """查询样本集下所有目录（扁平列表），前端构建树结构"""
+    conn = get_connection()
+    try:
+        with conn.cursor() as cursor:
+            sql = f"""
+                SELECT dir_id, set_no, parent_id, dir_name, dir_path,
+                       {_date_format('create_time')} as create_time
+                FROM s_sample_directory
+                WHERE set_no = %s
+                ORDER BY dir_path
+            """
+            _execute(cursor, sql, (set_no,))
+            return cursor.fetchall()
+    finally:
+        conn.close()
+
+
+def query_directory_by_id(dir_id: str) -> dict:
+    """查询单个目录信息"""
+    if not dir_id:
+        return None
+    conn = get_connection()
+    try:
+        with conn.cursor() as cursor:
+            sql = f"""
+                SELECT dir_id, set_no, parent_id, dir_name, dir_path,
+                       {_date_format('create_time')} as create_time
+                FROM s_sample_directory
+                WHERE dir_id = %s
+            """
+            _execute(cursor, sql, (dir_id,))
+            rows = cursor.fetchall()
+            return rows[0] if rows else None
+    finally:
+        conn.close()
+
+
+def query_directory_path(dir_id: str) -> list[dict]:
+    """查询目录的祖先链（面包屑导航），从根到当前目录。
+
+    返回 [{dir_id, dir_name, dir_path}, ...]，dir_id 为空时返回空列表。
+    """
+    if not dir_id:
+        return []
+    conn = get_connection()
+    try:
+        with conn.cursor() as cursor:
+            # 逐级向上查询（目录树一般不深，递归查询即可）
+            chain = []
+            current_id = dir_id
+            while current_id:
+                sql = "SELECT dir_id, parent_id, dir_name, dir_path FROM s_sample_directory WHERE dir_id = %s"
+                _execute(cursor, sql, (current_id,))
+                row = cursor.fetchone()
+                if not row:
+                    break
+                chain.append({
+                    "dir_id": row["dir_id"],
+                    "dir_name": row["dir_name"],
+                    "dir_path": row["dir_path"],
+                })
+                current_id = row["parent_id"]
+            chain.reverse()
+            return chain
+    finally:
+        conn.close()
+
+
+def delete_directory(dir_id: str, table: str = "s_sample_info") -> dict:
+    """删除目录。
+
+    table: "s_sample_info" 或 "s_original_sample_info"，用于检查目录下是否有样本。
+    非空目录（含样本或子目录）拒绝删除，返回 {success: False, reason: ...}。
+    空目录直接删除，返回 {success: True}。
+    """
+    if not dir_id:
+        return {"success": False, "reason": "dir_id 不能为空"}
+
+    conn = get_connection()
+    try:
+        with conn.cursor() as cursor:
+            # 检查是否有子目录
+            _execute(cursor, "SELECT COUNT(*) AS cnt FROM s_sample_directory WHERE parent_id = %s", (dir_id,))
+            row = cursor.fetchone()
+            child_count = row["cnt"] if isinstance(row, dict) else row[0]
+            if child_count > 0:
+                return {"success": False, "reason": f"目录下有 {child_count} 个子目录，请先删除子目录"}
+
+            # 检查是否有样本
+            _execute(cursor, f"SELECT COUNT(*) AS cnt FROM {table} WHERE dir_id = %s", (dir_id,))
+            row = cursor.fetchone()
+            sample_count = row["cnt"] if isinstance(row, dict) else row[0]
+            if sample_count > 0:
+                return {"success": False, "reason": f"目录下有 {sample_count} 个样本，请先移除或删除样本"}
+
+            # 空目录，直接删除
+            _execute(cursor, "DELETE FROM s_sample_directory WHERE dir_id = %s", (dir_id,))
+        conn.commit()
+        return {"success": True}
+    finally:
+        conn.close()
+
+
+def get_dir_path_by_id(dir_id: str) -> str:
+    """通过 dir_id 查询目录的完整路径（dir_path），用于构建 file_path。
+
+    dir_id 为空或 None 时返回空字符串（根目录）。
+    """
+    if not dir_id:
+        return ""
+    conn = get_connection()
+    try:
+        with conn.cursor() as cursor:
+            _execute(cursor, "SELECT dir_path FROM s_sample_directory WHERE dir_id = %s", (dir_id,))
+            row = cursor.fetchone()
+            if row:
+                return row["dir_path"] if isinstance(row, dict) else row[0]
+            return ""
+    finally:
+        conn.close()
+
+
+def delete_sample_set(set_no: str) -> dict:
+    """删除高质量样本集（仅允许删除空样本集）。
+
+    检查项：
+      1. s_sample_info 中是否有样本
+    通过后删除 s_sample_set 记录及 s_sample_directory 中的目录记录，并返回 set_path 用于清理存储。
+    返回: {success: bool, reason?: str, set_path?: str}
+    """
+    conn = get_connection()
+    try:
+        with conn.cursor() as cursor:
+            # 检查是否有样本
+            _execute(cursor, "SELECT COUNT(*) AS cnt FROM s_sample_info WHERE set_no = %s", (set_no,))
+            row = cursor.fetchone()
+            sample_count = row["cnt"] if isinstance(row, dict) else row[0]
+            if sample_count > 0:
+                return {"success": False, "reason": f"样本集下有 {sample_count} 个样本，请先删除所有样本"}
+
+            # 查询 set_path 用于清理存储
+            _execute(cursor, "SELECT set_path FROM s_sample_set WHERE set_no = %s", (set_no,))
+            row = cursor.fetchone()
+            set_path = row["set_path"] if isinstance(row, dict) else row[0] if row else None
+
+            # 删除目录记录
+            _execute(cursor, "DELETE FROM s_sample_directory WHERE set_no = %s", (set_no,))
+
+            # 删除样本集记录
+            _execute(cursor, "DELETE FROM s_sample_set WHERE set_no = %s", (set_no,))
+        conn.commit()
+        return {"success": True, "set_path": set_path}
+    finally:
+        conn.close()
+
+
+def delete_original_sample_set(set_no: str) -> dict:
+    """删除原始样本集（仅允许删除空样本集）。
+
+    检查项：
+      1. s_original_sample_info 中是否有样本
+      2. s_data_collect_task 中是否有关联的采集任务
+    通过后删除 s_original_sample_set 记录及 s_sample_directory 中的目录记录，并返回 set_path 用于清理存储。
+    返回: {success: bool, reason?: str, set_path?: str}
+    """
+    conn = get_connection()
+    try:
+        with conn.cursor() as cursor:
+            # 检查是否有样本
+            _execute(cursor, "SELECT COUNT(*) AS cnt FROM s_original_sample_info WHERE set_no = %s", (set_no,))
+            row = cursor.fetchone()
+            sample_count = row["cnt"] if isinstance(row, dict) else row[0]
+            if sample_count > 0:
+                return {"success": False, "reason": f"样本集下有 {sample_count} 个样本，请先删除所有样本"}
+
+            # 检查是否被采集任务引用
+            _execute(cursor, "SELECT COUNT(*) AS cnt FROM s_data_collect_task WHERE original_sample_set_no = %s", (set_no,))
+            row = cursor.fetchone()
+            task_count = row["cnt"] if isinstance(row, dict) else row[0]
+            if task_count > 0:
+                return {"success": False, "reason": f"该样本集被 {task_count} 个采集任务引用，请先删除相关采集任务"}
+
+            # 查询 set_path 用于清理存储
+            _execute(cursor, "SELECT set_path FROM s_original_sample_set WHERE set_no = %s", (set_no,))
+            row = cursor.fetchone()
+            set_path = row["set_path"] if isinstance(row, dict) else row[0] if row else None
+
+            # 删除目录记录
+            _execute(cursor, "DELETE FROM s_sample_directory WHERE set_no = %s", (set_no,))
+
+            # 删除原始样本集记录
+            _execute(cursor, "DELETE FROM s_original_sample_set WHERE set_no = %s", (set_no,))
+        conn.commit()
+        return {"success": True, "set_path": set_path}
     finally:
         conn.close()

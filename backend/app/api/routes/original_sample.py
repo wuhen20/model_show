@@ -7,6 +7,9 @@ from app.core.db_sample import (
     save_original_sample_set, update_original_sample_set, insert_original_sample_info,
     update_original_sample_score, update_original_label_think, query_audio_text,
     query_time_series_data_by_set_no, get_original_sample_set_path,
+    create_directory, query_directory_tree, query_directory_by_id,
+    query_directory_path, delete_directory, get_dir_path_by_id,
+    delete_original_sample_set,
 )
 from app.services.sample_minio_service import (
     is_minio_enabled, is_minio_path,
@@ -14,9 +17,13 @@ from app.services.sample_minio_service import (
     download_image as minio_download_image,
     build_set_path as minio_build_set_path,
     list_object_names as minio_list_object_names,
+    sanitize_sub_dir as minio_sanitize_sub_dir,
+    build_object_prefix as minio_build_object_prefix,
+    delete_object as minio_delete_object,
 )
 import os
 import io
+import shutil
 import logging
 import zipfile
 
@@ -85,6 +92,57 @@ class UpdateSampleSetRequest(BaseModel):
     sampleFieldName: str = ""
 
 
+class DeleteOriginalSampleSetRequest(BaseModel):
+    setNo: str
+
+
+@router.post("/delete-original-sample-set")
+def delete_original_sample_set_api(req: DeleteOriginalSampleSetRequest):
+    """删除原始样本集（仅允许删除空样本集）"""
+    try:
+        if not req.setNo:
+            return {"code": 1, "message": "样本集编号不能为空"}
+        result = delete_original_sample_set(req.setNo)
+        if not result["success"]:
+            return {"code": 1, "message": result["reason"]}
+
+        # 清理存储
+        set_path = result.get("set_path")
+        _cleanup_storage(req.setNo, set_path)
+
+        return {"code": 0, "message": "删除成功"}
+    except Exception as e:
+        logger.exception("删除原始样本集失败")
+        return {"code": 1, "message": f"删除失败: {str(e)}"}
+
+
+def _cleanup_storage(set_no: str, set_path: str | None):
+    """清理样本集的本地/MinIO 存储"""
+    if is_minio_enabled():
+        try:
+            from app.services.sample_minio_service import _get_client
+            from app.core.config import settings
+            client = _get_client()
+            bucket = settings.minio_bucket
+            prefix = f"{set_no}/"
+            objects_to_delete = []
+            for obj in client.list_objects(bucket, prefix=prefix, recursive=True):
+                objects_to_delete.append(obj.object_name)
+            if objects_to_delete:
+                errors = client.remove_objects(bucket, objects_to_delete)
+                for err in errors:
+                    logger.warning(f"MinIO 删除对象失败: {err}")
+            logger.info(f"MinIO 清理完成: bucket={bucket}, prefix={prefix}, 删除 {len(objects_to_delete)} 个对象")
+        except Exception as e:
+            logger.warning(f"MinIO 清理失败: {e}")
+    elif set_path and os.path.isdir(set_path):
+        try:
+            shutil.rmtree(set_path)
+            logger.info(f"本地存储清理完成: {set_path}")
+        except Exception as e:
+            logger.warning(f"本地存储清理失败: {set_path}, error: {e}")
+
+
 @router.post("/save-sample-set")
 def save_sample_set_api(req: SaveSampleSetRequest):
     try:
@@ -94,8 +152,8 @@ def save_sample_set_api(req: SaveSampleSetRequest):
         if is_minio_enabled():
             set_path = minio_build_set_path(set_no)
         else:
-            # 本地模式：生成以样本集名称命名的文件夹
-            set_path = os.path.join(settings.sample_upload_dir, req.setName)
+            # 本地模式：以 setNo 作为目录名（与 MinIO 模式对齐）
+            set_path = os.path.join(settings.sample_upload_dir, set_no)
             os.makedirs(set_path, exist_ok=True)
         # 只保留 SQL 需要的字段，避免 Oracle 报错多余的参数
         data = {
@@ -136,14 +194,77 @@ def update_sample_set_api(req: UpdateSampleSetRequest):
 
 
 @router.get("/get-samples")
-def get_samples_api(setNo: str = Query(..., description="样本集编号")):
+def get_samples_api(
+    setNo: str = Query(..., description="样本集编号"),
+    dirId: str = Query(None, description="目录编号筛选（不传=全部，空字符串=根目录，具体值=指定目录）"),
+):
     try:
-        rows = query_original_sample_info(setNo)
+        rows = query_original_sample_info(setNo, dirId)
         data = [_row_to_camel(row) for row in rows]
         return {"code": 0, "data": data}
     except Exception as e:
         logger.exception("接口异常")
         return {"code": 1, "message": f"查询失败: {str(e)}"}
+
+
+@router.get("/get-directory-tree")
+def get_directory_tree_api(setNo: str = Query(..., description="样本集编号")):
+    """查询样本集的目录树（扁平列表，前端构建树结构）"""
+    try:
+        rows = query_directory_tree(setNo)
+        data = [_row_to_camel(row) for row in rows]
+        return {"code": 0, "data": data}
+    except Exception as e:
+        logger.exception("接口异常")
+        return {"code": 1, "message": f"查询目录树失败: {str(e)}"}
+
+
+@router.get("/get-directory-path")
+def get_directory_path_api(dirId: str = Query(..., description="目录编号")):
+    """查询目录的祖先链（面包屑导航），从根到当前目录"""
+    try:
+        chain = query_directory_path(dirId)
+        data = [_row_to_camel(row) for row in chain]
+        return {"code": 0, "data": data}
+    except Exception as e:
+        logger.exception("接口异常")
+        return {"code": 1, "message": f"查询目录路径失败: {str(e)}"}
+
+
+@router.post("/create-directory")
+def create_directory_api(
+    setNo: str = Query(..., description="样本集编号"),
+    parentId: str = Query("", description="父目录编号（空=根目录下创建）"),
+    dirName: str = Query(..., description="目录名称"),
+):
+    """创建子目录"""
+    try:
+        dir_name = dirName.strip()
+        if not dir_name:
+            return {"code": 1, "message": "目录名称不能为空"}
+        if "/" in dir_name or "\\" in dir_name:
+            return {"code": 1, "message": "目录名称不能包含斜杠"}
+        info = create_directory(setNo, parentId, dir_name)
+        return {"code": 0, "data": info, "message": "创建成功"}
+    except Exception as e:
+        logger.exception("接口异常")
+        return {"code": 1, "message": f"创建目录失败: {str(e)}"}
+
+
+@router.post("/delete-directory")
+def delete_directory_api(
+    dirId: str = Query(..., description="目录编号"),
+):
+    """删除空目录（非空目录拒绝删除）"""
+    try:
+        result = delete_directory(dirId, table="s_original_sample_info")
+        if result["success"]:
+            return {"code": 0, "message": "删除成功"}
+        else:
+            return {"code": 1, "message": result["reason"]}
+    except Exception as e:
+        logger.exception("接口异常")
+        return {"code": 1, "message": f"删除目录失败: {str(e)}"}
 
 
 @router.get("/get-classes")
@@ -407,28 +528,35 @@ async def upload_samples(
     setNo: str = Form(...),
     setName: str = Form(...),
     typeCode: str = Form(...),
+    dirId: str = Form("", description="上传目标目录编号（空=样本集根目录）"),
     files: list[UploadFile] = File(...),
 ):
     """上传原始样本文件
 
     - 原始样本管理仅上传图片，不涉及 classes.txt 和标注 txt 文件
-    - 本地模式：保存到 sample_upload_dir/setName/ 目录，写入 s_original_sample_info
-    - MinIO 模式：上传到 MinIO，对象 ID 写入 s_original_sample_info.file_path
+    - 本地模式：保存到 sample_upload_dir/setNo/[dirPath/] 目录，写入 s_original_sample_info
+    - MinIO 模式：上传到 MinIO（对象 key 为 setNo/[dirPath/]file），对象 ID 写入 s_original_sample_info.file_path
+    - dirId 为空时上传到样本集根目录，非空时上传到指定目录
     """
     from app.core.config import settings
     from app.services.sample_import_service import _get_unique_filename, _get_unique_filename_for_minio
 
     use_minio = is_minio_enabled()
+    # 通过 dirId 查目录路径，用于构建 file_path
+    dir_id = dirId.strip() if dirId else ""
+    dir_path = get_dir_path_by_id(dir_id) if dir_id else ""
+    sub_dir = minio_sanitize_sub_dir(dir_path)
+    minio_prefix = minio_build_object_prefix(setNo, sub_dir)
     target_dir = None
     if not use_minio:
-        target_dir = os.path.join(settings.sample_upload_dir, setName)
+        target_dir = os.path.join(settings.sample_upload_dir, setNo, sub_dir) if sub_dir else os.path.join(settings.sample_upload_dir, setNo)
         os.makedirs(target_dir, exist_ok=True)
 
     success_count = 0
     errors = []
     # MinIO 模式下预填入桶内已有对象名，避免覆盖
     if use_minio:
-        used_names = minio_list_object_names(setNo)
+        used_names = minio_list_object_names(setNo, sub_dir)
     else:
         used_names = set()
 
@@ -457,7 +585,7 @@ async def upload_samples(
                     ".tif": "image/tiff", ".tiff": "image/tiff",
                 }
                 ct = content_type_map.get(ext, "application/octet-stream")
-                file_path = minio_upload_image(setNo, unique_name, content, content_type=ct)
+                file_path = minio_upload_image(minio_prefix, unique_name, content, content_type=ct)
             else:
                 file_path = os.path.join(target_dir, unique_name)
                 with open(file_path, "wb") as f:
@@ -472,6 +600,7 @@ async def upload_samples(
                 file_path=file_path,
                 file_size=len(content),
                 label_flag=0,
+                dir_id=dir_id or None,
             )
             success_count += 1
         except Exception as e:
@@ -489,6 +618,7 @@ async def upload_samples_batch(
     setName: str = Form(...),
     typeCode: str = Form(...),
     file: UploadFile = File(...),
+    dirId: str = Form(""),
 ):
     """批量导入：上传单个 ZIP，解压图片导入样本集
 
@@ -496,6 +626,7 @@ async def upload_samples_batch(
     - 图片保存到本地或上传到 MinIO
     - .txt 标注文件直接跳过（write_txt_to_db=False）
     - 大文件采用流式写入临时文件再解压，避免一次性读入内存
+    - dirId 非空时解压后图片归入指定目录
     """
     from app.core.config import settings
     from app.services.sample_import_service import extract_zip_and_import
@@ -504,6 +635,10 @@ async def upload_samples_batch(
         return {"code": 1, "message": "批量导入仅支持图片类型（05）样本集"}
 
     use_minio = is_minio_enabled()
+    # 通过 dirId 查目录路径，用于构建 file_path
+    dir_id = dirId.strip() if dirId else ""
+    dir_path = get_dir_path_by_id(dir_id) if dir_id else ""
+    sub_dir = minio_sanitize_sub_dir(dir_path)
     # 流式写入临时文件，避免大 ZIP 一次性读入内存触发 400
     tmp_path = None
     try:
@@ -521,7 +656,7 @@ async def upload_samples_batch(
         if not zipfile.is_zipfile(tmp_path):
             return {"code": 1, "message": "上传文件不是有效的 ZIP 文件"}
 
-        target_dir = None if use_minio else os.path.join(settings.sample_upload_dir, setName)
+        target_dir = None if use_minio else (os.path.join(settings.sample_upload_dir, setNo, sub_dir) if sub_dir else os.path.join(settings.sample_upload_dir, setNo))
         result = extract_zip_and_import(
             target_dir=target_dir,
             set_no=setNo,
@@ -532,6 +667,7 @@ async def upload_samples_batch(
             use_minio=use_minio,
             write_txt_to_db=False,
             update_set_labels_callback=None,
+            dir_id=dir_id or None,
         )
         msg = (f"成功导入 {result['image_count']} 张图片，"
                f"跳过 {result['skipped_count']} 个文件")

@@ -102,6 +102,39 @@ def parse_object_id(object_id: str) -> tuple[str, str]:
     return bucket, object_key
 
 
+def sanitize_sub_dir(sub_dir: str) -> str:
+    """校验并规范化子目录字符串（本地/MinIO 通用）。
+
+    规则：
+    - 去除首尾空白、首尾斜杠
+    - 反斜杠统一为正斜杠
+    - 禁止路径穿越（任一级为 .. 或 .）、绝对路径（以 / 开头或含盘符 :）、空字节
+
+    Returns:
+        合法时返回规范化后的字符串（如 "7月/批次A"）；
+        非法或为空返回 ""（等价于不指定子目录，落到样本集根目录）
+    """
+    if not sub_dir:
+        return ""
+    s = str(sub_dir).strip().replace("\\", "/").strip("/")
+    if not s or "\x00" in s or ":" in s:
+        return ""
+    parts = [p for p in s.split("/") if p]
+    if not parts or any(p in ("..", ".") for p in parts):
+        return ""
+    return "/".join(parts)
+
+
+def build_object_prefix(set_no: str, sub_dir: str = "") -> str:
+    """构建 MinIO 对象 key 前缀（不含文件名）。
+
+    sub_dir 非空时返回 "setNo/subDir"，否则返回 "setNo"。
+    sub_dir 会先经 sanitize_sub_dir 校验。
+    """
+    clean = sanitize_sub_dir(sub_dir)
+    return f"{set_no}/{clean}" if clean else set_no
+
+
 def upload_image(set_no: str, file_name: str, content: bytes, content_type: str = "application/octet-stream",
                  bucket_name: Optional[str] = None) -> str:
     """上传图片到 MinIO，返回对象 ID
@@ -160,23 +193,34 @@ def delete_object(object_id: str) -> None:
         logger.warning(f"MinIO 删除对象失败: {object_id}, error: {e}")
 
 
-def list_object_names(set_no: str, bucket_name: Optional[str] = None) -> set:
-    """列出 MinIO 中指定 set_no 前缀下的所有对象文件名
+def list_object_names(set_no: str, sub_dir: str = "", bucket_name: Optional[str] = None) -> set:
+    """列出 MinIO 中指定 set_no（可含 sub_dir）前缀下"当前层级"的对象文件名
 
-    用于上传时检测文件名冲突（与本地模式 os.listdir 行为对应）。
-    返回文件名集合（不含 setNo/ 前缀）。
+    用于上传时检测文件名冲突。采用非递归列举，仅返回当前层级的文件名，
+    这样不同子目录下的同名文件不会被判为冲突。
+
+    Args:
+        set_no: 样本集编号
+        sub_dir: 子目录（可选，会经 sanitize_sub_dir 校验）
+        bucket_name: 桶名，为空则使用配置默认值
+
+    Returns:
+        文件名集合（不含 "setNo/" 或 "setNo/subDir/" 前缀）。
+        子目录对象（以 / 结尾）会被过滤，仅保留文件。
     """
     bucket = bucket_name or settings.minio_bucket
     client = _get_client()
-    prefix = f"{set_no}/"
+    clean = sanitize_sub_dir(sub_dir)
+    prefix = f"{set_no}/{clean}/" if clean else f"{set_no}/"
     names = set()
     try:
         for obj in client.list_objects(bucket, prefix=prefix, recursive=False):
-            # object_name 形如 "SET001/img.jpg"，去掉前缀
+            # object_name 形如 "SET001/7月1日/img.jpg"，去掉前缀得到文件名
             name = obj.object_name
             if name.startswith(prefix):
                 name = name[len(prefix):]
-            if name:
+            # 过滤子目录对象（以 / 结尾）和空名
+            if name and not name.endswith("/"):
                 names.add(name)
     except Exception as e:
         logger.warning(f"MinIO 列举对象失败: bucket={bucket}, prefix={prefix}, error={e}")

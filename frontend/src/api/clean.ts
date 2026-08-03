@@ -164,6 +164,7 @@ export interface CleanResult {
   taskNo: string
   taskName: string
   sampleTypeCode: string
+  executeStatus: string
   startTime: string
   endTime: string
   resultCount: number

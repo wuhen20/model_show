@@ -29,6 +29,7 @@ from app.core.db_sample import (
     apply_sample_set_version_change,
     query_sample_set_options,
     query_original_samples,
+    batch_update_clean_flag,
 )
 from app.core.db_clean import (
     query_data_clean_tasks,
@@ -51,9 +52,10 @@ from app.core.db_clean import (
     insert_clean_pic_records_batch,
     query_clean_pic_records,
     delete_clean_pic_records,
+    update_clean_log_status,
 )
 from app.services.sample_minio_service import (
-    is_minio_path, download_image, upload_image, delete_object,
+    is_minio_path, download_image, upload_image, delete_object, parse_object_id,
 )
 
 router = APIRouter()
@@ -323,6 +325,7 @@ def _execute_image_clean_task(task: dict, task_no: str, log_id: int):
         "insert_clean_pic_record": insert_clean_pic_record,
         "insert_clean_pic_records_batch": insert_clean_pic_records_batch,
         "delete_original_sample_info_by_path": delete_original_sample_info_by_path,
+        "batch_update_clean_flag": batch_update_clean_flag,
     }
     execute_image_clean_task(task, task_no, set_no, clean_type_codes, deps, log_id)
 
@@ -440,7 +443,7 @@ def query_clean_log_api(taskNo: str = Query(..., description="任务编号")):
 
 @router.get("/query-clean-results")
 def query_clean_results_api():
-    """查询清洗结果列表（仅已完成 execute_status=03 的记录）"""
+    """查询清洗结果列表（已完成 execute_status=03 或已回滚 execute_status=05 的记录）"""
     try:
         rows = query_clean_results()
         results = []
@@ -840,7 +843,7 @@ class RollbackCleanPicsRequest(BaseModel):
 
 @router.post("/rollback-clean-pics")
 def rollback_clean_pics_api(req: RollbackCleanPicsRequest):
-    """回滚图像清洗：将隔离目录中的图片移回原始样本集目录，并恢复 s_original_sample_info 记录
+    """回滚图像清洗：将 CLEAN_FLAG 改回 0，删除清洗图片记录（纯数据库操作，不移动文件）
 
     支持 cleanLogId 精确回滚某次执行结果，避免多次执行后回滚错误。
     """
@@ -850,187 +853,47 @@ def rollback_clean_pics_api(req: RollbackCleanPicsRequest):
         return {"code": 1, "message": "任务编号不能为空"}
 
     try:
-        # 1. 查询任务节点，获取原始样本集编号（set_no）
-        task = get_clean_task_raw(task_no)
-        if not task:
-            return {"code": 1, "message": "未找到清洗任务"}
-
-        set_no = ""
-        for node in task.get("nodes", []):
-            if node.get("node_type") == "image_clean":
-                set_no = node.get("node_id", "")
-                break
-        if not set_no:
-            return {"code": 1, "message": "清洗任务未关联原始样本集，无法回滚"}
-
-        # 2. 查询原始样本集的 set_path 和 type_code
-        set_row = get_original_sample_set_path(set_no)
-        if not set_row:
-            return {"code": 1, "message": "原始样本集不存在"}
-        set_path = set_row.get("set_path", "") or ""
-        type_code = set_row.get("type_code", "") or "05"
-
-        # 3. 查询被清洗图片记录（优先用 cleanLogId 精确查询）
+        # 1. 查询被清洗图片记录，提取 sample_no 列表
         pic_rows = query_clean_pic_records(task_no=task_no, clean_log_id=clean_log_id)
         if not pic_rows:
             return {"code": 1, "message": "无可回滚的清洗图片记录"}
 
-        # 按 file_path(隔离路径) 去重，保留 file_name
-        unique_files = {}
+        # 收集所有 sample_no（去重，过滤空值）
+        sample_nos = []
+        seen = set()
         for row in pic_rows:
-            iso_path = row.get("file_path", "")
-            file_name = row.get("file_name", "")
-            if iso_path and iso_path not in unique_files:
-                unique_files[iso_path] = file_name
+            sno = row.get("sample_no")
+            if sno and sno not in seen:
+                seen.add(sno)
+                sample_nos.append(sno)
 
-        # 4. 并行处理 MinIO 下载+上传（本地模式 move 很快，串行即可），
-        #    收集成功项后统一批量插入数据库
+        # 2. 批量恢复 CLEAN_FLAG=0
         restored_count = 0
         skipped_count = 0
-        errors = []
+        if sample_nos:
+            restored_count = batch_update_clean_flag(sample_nos, "0")
+            skipped_count = len(sample_nos) - restored_count
+            logger.info(f"回滚任务 {task_no}: 恢复 {restored_count} 条记录的 CLEAN_FLAG=0")
 
-        # 分离 MinIO 和本地两类任务
-        minio_tasks = []   # [(iso_path, file_name)]
-        local_tasks = []   # [(iso_path, file_name)]
-        for iso_path, file_name in unique_files.items():
-            if is_minio_path(iso_path):
-                minio_tasks.append((iso_path, file_name))
-            else:
-                local_tasks.append((iso_path, file_name))
-
-        # 成功恢复的记录，供批量插入
-        restored_records = []
-
-        # ---------- MinIO 模式：线程池并行下载+上传 ----------
-        def _restore_minio(task):
-            iso_path, file_name = task
-            if not set_path:
-                return ("skip", file_name, "原始样本集未配置 set_path")
-            try:
-                image_bytes = download_image(iso_path)
-                if not image_bytes:
-                    return ("skip", file_name, "隔离文件不存在")
-                ext = os.path.splitext(file_name)[1].lower()
-                ct_map = {
-                    ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png",
-                    ".bmp": "image/bmp", ".gif": "image/gif", ".webp": "image/webp",
-                }
-                content_type = ct_map.get(ext, "application/octet-stream")
-                new_path = upload_image(set_no, file_name, image_bytes, content_type=content_type)
-                # 删除隔离对象
-                try:
-                    delete_object(iso_path)
-                except Exception:
-                    pass
-                suffix = ext.lstrip(".").lower()
-                file_size = len(image_bytes)
-                return ("ok", {
-                    "set_no": set_no,
-                    "sample_name": file_name,
-                    "suffix": suffix,
-                    "type_code": type_code,
-                    "file_path": new_path,
-                    "file_size": file_size,
-                }, None)
-            except Exception as e_restore:
-                return ("err", file_name, str(e_restore))
-
-        if minio_tasks:
-            max_workers = min(8, max(1, len(minio_tasks)))
-            with ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="rollback") as pool:
-                futures = [pool.submit(_restore_minio, t) for t in minio_tasks]
-                for fut in as_completed(futures):
-                    status, payload, msg = fut.result()
-                    if status == "ok":
-                        restored_records.append(payload)
-                    elif status == "skip":
-                        skipped_count += 1
-                        errors.append(f"{payload}: {msg}")
-                    else:
-                        skipped_count += 1
-                        errors.append(f"{payload}: 恢复失败 - {msg}")
-
-        # ---------- 本地模式：串行 move（同盘 rename 极快，无需并行） ----------
-        for iso_path, file_name in local_tasks:
-            if not set_path:
-                errors.append(f"{file_name}: 原始样本集未配置 set_path，跳过")
-                skipped_count += 1
-                continue
-            os.makedirs(set_path, exist_ok=True)
-            iso_path_norm = os.path.normpath(iso_path)
-            if not os.path.isfile(iso_path_norm):
-                errors.append(f"{file_name}: 隔离文件不存在，跳过")
-                skipped_count += 1
-                continue
-
-            restore_path = os.path.join(set_path, file_name)
-            # 处理同名文件冲突
-            if os.path.exists(restore_path):
-                name, ext = os.path.splitext(file_name)
-                idx = 1
-                while os.path.exists(os.path.join(set_path, f"{name}_{idx}{ext}")):
-                    idx += 1
-                restore_path = os.path.join(set_path, f"{name}_{idx}{ext}")
-
-            try:
-                file_size = os.path.getsize(iso_path_norm)
-                shutil.move(iso_path_norm, restore_path)
-                suffix = os.path.splitext(file_name)[1].lstrip(".").lower()
-                restored_records.append({
-                    "set_no": set_no,
-                    "sample_name": os.path.basename(restore_path),
-                    "suffix": suffix,
-                    "type_code": type_code,
-                    "file_path": restore_path,
-                    "file_size": file_size,
-                })
-            except Exception as e_restore:
-                errors.append(f"{file_name}: 恢复失败 - {e_restore}")
-                skipped_count += 1
-
-        # ---------- 批量插入数据库记录 ----------
-        if restored_records:
-            try:
-                batch_insert_original_sample_info(restored_records)
-                restored_count = len(restored_records)
-            except Exception as e_batch:
-                logger.exception("批量插入恢复记录失败，回退到逐条插入")
-                # 回退到逐条插入，保证健壮性
-                for r in restored_records:
-                    try:
-                        insert_original_sample_info(
-                            set_no=r["set_no"],
-                            sample_name=r["sample_name"],
-                            suffix=r["suffix"],
-                            type_code=r["type_code"],
-                            file_path=r["file_path"],
-                            file_size=r["file_size"],
-                        )
-                        restored_count += 1
-                    except Exception as e_one:
-                        errors.append(f"{r.get('sample_name')}: 插入失败 - {e_one}")
-                        skipped_count += 1
-
-        # 5. 删除清洗图片记录
+        # 3. 删除清洗图片记录
         delete_clean_pic_records(task_no=task_no, clean_log_id=clean_log_id)
 
-        # 6. 尝试清理空的隔离目录（本地模式）
-        from app.core.config import settings
-        base_dir = getattr(settings, "sample_upload_dir", "")
-        if base_dir:
-            target_dir = os.path.join(base_dir, "clean_result", task_no)
-            if os.path.isdir(target_dir):
-                try:
-                    if not os.listdir(target_dir):
-                        os.rmdir(target_dir)
-                except Exception:
-                    pass
+        # 4. 更新清洗执行记录状态为"已回滚"(05)
+        if clean_log_id:
+            update_clean_log_status(clean_log_id, "05")
+        else:
+            # 兼容旧逻辑：无 clean_log_id 时按 task_no 更新所有已完成记录
+            conn2 = get_connection()
+            try:
+                with conn2.cursor() as cursor2:
+                    _execute(cursor2, "UPDATE s_data_clean_log SET execute_status = '05' WHERE task_no = %s AND execute_status = '03'", (task_no,))
+                conn2.commit()
+            finally:
+                conn2.close()
 
         msg = f"回滚完成，恢复 {restored_count} 张图片"
         if skipped_count:
             msg += f"，跳过 {skipped_count} 张"
-        if errors:
-            msg += f"，失败: {'; '.join(errors[:5])}"
         return {"code": 0, "message": msg, "data": {"restoredCount": restored_count, "skippedCount": skipped_count}}
     except Exception as e:
         logger.exception("回滚图像清洗异常")

@@ -507,6 +507,17 @@ def generate_import_task_no():
     return f"{today}{seq:03d}"
 
 
+def generate_directory_no():
+    """生成样本目录编号：年月日+3位序列号，如 20260701001
+
+    用于 s_sample_directory 表的主键，序列号永不复用。
+    """
+    from datetime import datetime
+    today = datetime.now().strftime('%Y%m%d')
+    seq = _get_next_sequence('DIRECTORY_NO', today)
+    return f"{today}{seq:03d}"
+
+
 # ==================== 工具函数 ====================
 
 def save_query_result_to_desktop(columns: list, rows: list):

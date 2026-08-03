@@ -37,6 +37,7 @@ def create_import_task(
     source: str,
     major_version_change: int = 0,
     version_remark: str = "",
+    dir_id: str = "",
 ) -> int:
     """新增导入任务记录，返回 record_id
 
@@ -51,6 +52,7 @@ def create_import_task(
         source: 任务来源（sample=高质量样本，original=原始样本）
         major_version_change: 是否大版本变更（0/1，仅 source=sample 有效）
         version_remark: 变更说明（仅 source=sample 有效）
+        dir_id: 上传目标目录编号（空=样本集根目录）
     """
     conn = get_connection()
     try:
@@ -60,17 +62,17 @@ def create_import_task(
                     INSERT INTO s_sample_import_task
                         (task_no, set_no, set_name, type_code, source,
                          total_chunks, uploaded_chunks, file_name, file_size,
-                         task_status, major_version_change, version_remark,
+                         task_status, major_version_change, version_remark, dir_id,
                          create_time, update_time)
-                    VALUES (:1, :2, :3, :4, :5, :6, 0, :7, :8, :9, :10, :11,
+                    VALUES (:1, :2, :3, :4, :5, :6, 0, :7, :8, :9, :10, :11, :12,
                             {_now()}, {_now()})
-                    RETURNING record_id INTO :12
+                    RETURNING record_id INTO :13
                 """
                 bind_var = cursor.var(int)
                 cursor.execute(sql, [
                     task_no, set_no, set_name, type_code, source,
                     total_chunks, file_name, file_size,
-                    STATUS_PENDING, major_version_change, version_remark,
+                    STATUS_PENDING, major_version_change, version_remark, dir_id,
                     bind_var,
                 ])
                 new_id = bind_var.getvalue()[0]
@@ -79,15 +81,15 @@ def create_import_task(
                     INSERT INTO s_sample_import_task
                         (task_no, set_no, set_name, type_code, source,
                          total_chunks, uploaded_chunks, file_name, file_size,
-                         task_status, major_version_change, version_remark,
+                         task_status, major_version_change, version_remark, dir_id,
                          create_time, update_time)
-                    VALUES (%s, %s, %s, %s, %s, %s, 0, %s, %s, %s, %s, %s,
+                    VALUES (%s, %s, %s, %s, %s, %s, 0, %s, %s, %s, %s, %s, %s,
                             {_now()}, {_now()})
                 """
                 _execute(cursor, sql, (
                     task_no, set_no, set_name, type_code, source,
                     total_chunks, file_name, file_size,
-                    STATUS_PENDING, major_version_change, version_remark,
+                    STATUS_PENDING, major_version_change, version_remark, dir_id,
                 ))
                 new_id = cursor.lastrowid
         conn.commit()
@@ -105,7 +107,7 @@ def get_import_task_by_no(task_no: str) -> dict | None:
                 SELECT
                     record_id, task_no, set_no, set_name, type_code, source,
                     total_chunks, uploaded_chunks, file_name, file_size,
-                    task_status, major_version_change, version_remark,
+                    task_status, major_version_change, version_remark, dir_id,
                     image_count, txt_count, skipped_count, error_message,
                     {_date_format('create_time')} as create_time,
                     {_date_format('start_time')} as start_time,
@@ -129,7 +131,7 @@ def get_import_task_by_id(record_id: int) -> dict | None:
                 SELECT
                     record_id, task_no, set_no, set_name, type_code, source,
                     total_chunks, uploaded_chunks, file_name, file_size,
-                    task_status, major_version_change, version_remark,
+                    task_status, major_version_change, version_remark, dir_id,
                     image_count, txt_count, skipped_count, error_message,
                     {_date_format('create_time')} as create_time,
                     {_date_format('start_time')} as start_time,

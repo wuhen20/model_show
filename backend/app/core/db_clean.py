@@ -406,7 +406,7 @@ def query_clean_log(task_no: str):
 # ==================== 清洗结果（s_data_clean_log execute_status='03'）====================
 
 def query_clean_results():
-    """查询清洗结果列表（execute_status=03 已完成的记录），关联任务表获取任务名称和数据类型"""
+    """查询清洗结果列表（execute_status=03 已完成 或 05 已回滚的记录），关联任务表获取任务名称和数据类型"""
     conn = get_connection()
     try:
         with conn.cursor() as cursor:
@@ -416,6 +416,7 @@ def query_clean_results():
                     l.task_no,
                     t.task_name,
                     t.sample_type as sample_type_code,
+                    l.execute_status,
                     {_date_format('l.start_time')} as start_time,
                     {_date_format('l.end_time')} as end_time,
                     l.result_count,
@@ -424,7 +425,7 @@ def query_clean_results():
                     l.file_path
                 FROM s_data_clean_log l
                 LEFT JOIN s_data_clean_task t ON l.task_no = t.task_no
-                WHERE l.execute_status = '03'
+                WHERE l.execute_status IN ('03', '05')
                 ORDER BY l.start_time DESC
             """
             _execute(cursor, sql, ())
@@ -454,13 +455,15 @@ def query_pic_clean_type_dict():
 
 def insert_clean_pic_record(task_no: str, clean_type: str, file_name: str, file_path: str,
                             clean_log_id: int = None,
-                            repeat_file_name: str = "", repeat_file_path: str = ""):
+                            repeat_file_name: str = "", repeat_file_path: str = "",
+                            sample_no: str = None):
     """插入图像清洗记录到 s_data_clean_pic
 
     Args:
         clean_log_id: 关联的 s_data_clean_log.record_id，用于区分同一任务多次执行的结果
         repeat_file_name: 重复检测时对比图(被重复的保留图)的文件名，非重复检测为空串
         repeat_file_path: 重复检测时对比图(被重复的保留图)的路径，非重复检测为空串
+        sample_no: 被清洗样本编号，回滚时按此定位 s_original_sample_info 记录恢复 CLEAN_FLAG
     """
     conn = get_connection()
     try:
@@ -468,12 +471,12 @@ def insert_clean_pic_record(task_no: str, clean_type: str, file_name: str, file_
             sql = """
                 INSERT INTO s_data_clean_pic
                     (task_no, clean_type, file_name, file_path, clean_log_id,
-                     repeat_file_name, repeat_file_path)
-                VALUES (%s, %s, %s, %s, %s, %s, %s)
+                     repeat_file_name, repeat_file_path, sample_no)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
             """
             _execute(cursor, sql, (
                 task_no, clean_type, file_name, file_path, clean_log_id,
-                repeat_file_name, repeat_file_path,
+                repeat_file_name, repeat_file_path, sample_no,
             ))
         conn.commit()
     finally:
@@ -492,10 +495,11 @@ def insert_clean_pic_records_batch(records: list[dict]) -> int:
             - task_no (str): 任务编号
             - clean_type (str): 清洗类型编码（多个逗号分隔）
             - file_name (str): 文件名
-            - file_path (str): 隔离区新路径
+            - file_path (str): 原始文件路径（标记法下文件不移动，与原位置相同）
             - clean_log_id (int|None): 关联日志记录 ID
             - repeat_file_name (str): 对比图文件名（重复检测时有值）
             - repeat_file_path (str): 对比图路径（重复检测时有值）
+            - sample_no (str|None): 被清洗样本编号，回滚时按此定位 s_original_sample_info 恢复 CLEAN_FLAG
 
     Returns:
         插入的记录数
@@ -511,8 +515,8 @@ def insert_clean_pic_records_batch(records: list[dict]) -> int:
             sql = """
                 INSERT INTO s_data_clean_pic
                     (task_no, clean_type, file_name, file_path, clean_log_id,
-                     repeat_file_name, repeat_file_path)
-                VALUES (%s, %s, %s, %s, %s, %s, %s)
+                     repeat_file_name, repeat_file_path, sample_no)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
             """
             seq_of_params = [
                 (
@@ -523,6 +527,7 @@ def insert_clean_pic_records_batch(records: list[dict]) -> int:
                     r.get("clean_log_id"),
                     r.get("repeat_file_name", ""),
                     r.get("repeat_file_path", ""),
+                    r.get("sample_no"),
                 )
                 for r in records
             ]
@@ -554,7 +559,8 @@ def query_clean_pic_records(task_no: str = None, clean_log_id: int = None):
                         file_path,
                         clean_log_id,
                         repeat_file_name,
-                        repeat_file_path
+                        repeat_file_path,
+                        sample_no
                     FROM s_data_clean_pic
                     WHERE clean_log_id = %s
                     ORDER BY record_id
@@ -570,7 +576,8 @@ def query_clean_pic_records(task_no: str = None, clean_log_id: int = None):
                         file_path,
                         clean_log_id,
                         repeat_file_name,
-                        repeat_file_path
+                        repeat_file_path,
+                        sample_no
                     FROM s_data_clean_pic
                     WHERE task_no = %s
                     ORDER BY record_id
@@ -615,9 +622,22 @@ def query_clean_pic_records(task_no: str = None, clean_log_id: int = None):
                     "file_path": row.get("file_path", ""),
                     "repeat_file_name": row.get("repeat_file_name") or "",
                     "repeat_file_path": row.get("repeat_file_path") or "",
+                    "sample_no": row.get("sample_no"),
                 })
 
             return result
+    finally:
+        conn.close()
+
+
+def update_clean_log_status(record_id: int, execute_status: str):
+    """更新清洗执行记录的状态（如回滚后标记为 05-已回滚）"""
+    conn = get_connection()
+    try:
+        with conn.cursor() as cursor:
+            sql = "UPDATE s_data_clean_log SET execute_status = %s WHERE record_id = %s"
+            _execute(cursor, sql, (execute_status, record_id))
+        conn.commit()
     finally:
         conn.close()
 

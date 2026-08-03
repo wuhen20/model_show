@@ -3,9 +3,9 @@ import { ref, computed, nextTick, onMounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import Header from '@/components/Header.vue'
 import Sidebar from '@/components/Sidebar.vue'
-import { getSamples, getImageUrl, getAnnotations, getAudioText, updateSampleScore, uploadSamples, uploadSamplesBatch, saveLabelThink, getClasses, getSamplesByLabels, type SampleInfoRow, type AnnotationData, type AnnotationBox } from '@/api/sample'
+import { getSamples, getImageUrl, getAnnotations, getAudioText, updateSampleScore, uploadSamples, uploadSamplesBatch, saveLabelThink, getClasses, getSamplesByLabels, getDirectoryTree, getDirectoryPath, createDirectory, deleteDirectory, type SampleInfoRow, type AnnotationData, type AnnotationBox, type DirectoryNode, type DirectoryPathItem } from '@/api/sample'
 import ChunkUploadDialog from '@/components/ChunkUploadDialog.vue'
-import { ElMessage, ElLoading } from 'element-plus'
+import { ElMessage, ElMessageBox, ElLoading } from 'element-plus'
 
 const route = useRoute()
 const router = useRouter()
@@ -32,6 +32,20 @@ const uploadDialogVisible = ref(false)
 const uploadSaving = ref(false)
 const uploadFileList = ref<File[]>([])
 const uploadDisplayList = ref<any[]>([]) // el-upload 显示的文件列表
+// 上传目标目录（空字符串=根目录）
+const uploadDirId = ref('')
+
+// ========== 目录浏览 ==========
+// 当前浏览目录 ID（空字符串=根目录）
+const currentDirId = ref('')
+// 扁平目录列表（后端返回全部目录）
+const directoryList = ref<DirectoryNode[]>([])
+// 当前目录的祖先链（面包屑）
+const breadcrumb = ref<DirectoryPathItem[]>([])
+// 新建子目录弹框
+const createDirDialogVisible = ref(false)
+const newDirName = ref('')
+const creatingDir = ref(false)
 
 // 样本类型编码 → 允许的文件扩展名
 const typeCodeToExtensions: Record<string, string[]> = {
@@ -52,6 +66,8 @@ const typeCodeToAccept: Record<string, string> = {
 function openUploadDialog() {
   uploadFileList.value = []
   uploadDisplayList.value = []
+  // 默认上传到当前目录
+  uploadDirId.value = currentDirId.value
   uploadDialogVisible.value = true
 }
 
@@ -126,10 +142,12 @@ async function handleUploadConfirm() {
 
   uploadSaving.value = true
   try {
-    const msg = await uploadSamples(setNo.value, setName.value, typeCode.value, uploadFileList.value)
+    const msg = await uploadSamples(setNo.value, setName.value, typeCode.value, uploadFileList.value, uploadDirId.value)
     ElMessage.success(msg)
     uploadDialogVisible.value = false
     loadSamples()
+    // 上传后刷新目录树（可能用户在根目录上传了新目录关联的样本）
+    if (isImageSet.value) loadDirectoryTree()
   } catch (e: any) {
     ElMessage.error(e.message || '上传失败')
   } finally {
@@ -150,6 +168,7 @@ function openBatchDialog() {
 
 function handleBatchUploadSuccess() {
   loadSamples()
+  if (isImageSet.value) loadDirectoryTree()
 }
 
 // 筛选条件
@@ -158,6 +177,116 @@ const filterLabelFlag = ref('')
 const filterLabels = ref<string[]>([]) // 标签筛选（多选）
 const classOptions = ref<string[]>([]) // classes.txt 中的标签选项
 const labelFilteredSamples = ref<SampleInfoRow[] | null>(null) // 标签筛选结果（null 表示未启用标签筛选）
+
+// 子目录筛选已废弃，改为目录浏览模式
+
+// 当前目录下的子目录（通过扁平列表过滤）
+const subDirectories = computed(() => {
+  if (!isImageSet.value) return []
+  return directoryList.value.filter(d => {
+    if (currentDirId.value === '') {
+      return !d.parentId  // 根目录下的子目录
+    }
+    return d.parentId === currentDirId.value
+  })
+})
+
+// el-tree-select 目录树（用于上传弹框选择目标目录）
+const dirTreeOptions = computed(() => {
+  if (!isImageSet.value) return []
+  // 扁平列表 → 树结构
+  const nodeMap = new Map<string, any>()
+  const root: any[] = []
+  for (const d of directoryList.value) {
+    nodeMap.set(d.dirId, { value: d.dirId, label: d.dirName, children: [] })
+  }
+  for (const d of directoryList.value) {
+    const node = nodeMap.get(d.dirId)!
+    if (d.parentId && nodeMap.has(d.parentId)) {
+      nodeMap.get(d.parentId)!.children.push(node)
+    } else {
+      root.push(node)
+    }
+  }
+  return root
+})
+
+// 加载目录树
+async function loadDirectoryTree() {
+  if (!setNo.value || !isImageSet.value) return
+  try {
+    directoryList.value = await getDirectoryTree(setNo.value)
+  } catch {
+    directoryList.value = []
+  }
+}
+
+// 导航到目录
+async function navigateToDir(dirId: string) {
+  currentDirId.value = dirId
+  currentPage.value = 1
+  // 更新面包屑
+  if (dirId) {
+    try {
+      breadcrumb.value = await getDirectoryPath(dirId)
+    } catch {
+      breadcrumb.value = []
+    }
+  } else {
+    breadcrumb.value = []
+  }
+  await loadSamples()
+}
+
+// 打开新建子目录弹框
+function openCreateDirDialog() {
+  newDirName.value = ''
+  createDirDialogVisible.value = true
+}
+
+// 确认创建子目录
+async function handleCreateDir() {
+  const name = newDirName.value.trim()
+  if (!name) {
+    ElMessage.warning('请输入目录名称')
+    return
+  }
+  if (name.includes('/') || name.includes('\\')) {
+    ElMessage.warning('目录名称不能包含斜杠')
+    return
+  }
+  creatingDir.value = true
+  try {
+    await createDirectory(setNo.value, currentDirId.value, name)
+    ElMessage.success('创建成功')
+    createDirDialogVisible.value = false
+    await loadDirectoryTree()
+  } catch (e: any) {
+    ElMessage.error(e.message || '创建目录失败')
+  } finally {
+    creatingDir.value = false
+  }
+}
+
+// 删除目录
+async function handleDeleteDir(dir: DirectoryNode) {
+  try {
+    await ElMessageBox.confirm(`确认删除目录「${dir.dirName}」？（仅空目录可删除）`, '删除确认', {
+      type: 'warning',
+      confirmButtonText: '删除',
+      cancelButtonText: '取消',
+    })
+  } catch {
+    return
+  }
+  try {
+    await deleteDirectory(dir.dirId)
+    ElMessage.success('删除成功')
+    await loadDirectoryTree()
+  } catch (e: any) {
+    ElMessage.error(e.message || '删除目录失败')
+  }
+}
 
 // 分页
 const currentPage = ref(1)
@@ -222,17 +351,23 @@ async function loadSamples() {
   if (!setNo.value) return
   loading.value = true
   try {
-    const data = await getSamples(setNo.value)
+    // 按当前目录筛选：空字符串=根目录，具体值=指定目录
+    const data = await getSamples(setNo.value, currentDirId.value)
     sampleList.value = data
-    // 根据返回数据动态生成列
+    // 根据返回数据动态生成列（filePath 固定放最后）
     if (data.length > 0) {
-      columns.value = Object.keys(data[0]).map(key => ({
+      const keys = Object.keys(data[0])
+      keys.sort((a, b) => {
+        if (a === 'filePath') return 1
+        if (b === 'filePath') return -1
+        return 0
+      })
+      columns.value = keys.map(key => ({
         key,
         label: keyToLabel(key)
       }))
-    } else {
-      columns.value = []
     }
+    // 数据为空时保留已有列定义，不清空，确保表头完整显示
     // 图片类型样本集：加载标签选项
     if (isImageSet.value) {
       try {
@@ -272,6 +407,18 @@ const labelMap: Record<string, string> = {
 
 function keyToLabel(key: string): string {
   return labelMap[key] || key
+}
+
+// 文件大小单位转换（字节 → KB/MB/GB）
+function formatFileSize(bytes: number | string | undefined | null): string {
+  if (bytes === undefined || bytes === null || bytes === '') return '-'
+  const n = typeof bytes === 'string' ? parseFloat(bytes) : bytes
+  if (isNaN(n) || n < 0) return '-'
+  if (n === 0) return '0 B'
+  const units = ['B', 'KB', 'MB', 'GB', 'TB']
+  const i = Math.min(Math.floor(Math.log(n) / Math.log(1024)), units.length - 1)
+  const val = n / Math.pow(1024, i)
+  return val.toFixed(i === 0 ? 0 : 2) + ' ' + units[i]
 }
 
 function goBack() {
@@ -350,8 +497,19 @@ function handleDownloadTimeSeries(row: SampleInfoRow) {
 
 // 隐藏的字段（不需要在表格中展示）
 const hiddenColumns = computed(() => {
-  const base = new Set(['recordId', 'sampleNo', 'typeCode', 'filePath', 'fileName', 'labelFlagCode', 'labelFlag', 'sampleScore', 'labelThink', 'labelContent'])
+  const base = new Set(['recordId', 'sampleNo', 'typeCode', 'typeName', 'dirId', 'fileName', 'labelFlagCode', 'labelFlag', 'sampleScore', 'labelThink', 'labelContent', 'updateTime'])
   return base
+})
+
+// el-table 动态列：过滤掉隐藏列，并保证 filePath 排在最后
+const visibleColumns = computed(() => {
+  const visible = columns.value.filter(c => !hiddenColumns.value.has(c.key))
+  visible.sort((a, b) => {
+    if (a.key === 'filePath') return 1
+    if (b.key === 'filePath') return -1
+    return 0
+  })
+  return visible
 })
 
 // ========== 文件预览 ==========
@@ -838,6 +996,10 @@ function getScoreLabel(score: string | null | undefined): string {
 
 onMounted(() => {
   loadSamples()
+  // 图片类型：加载目录树
+  if (isImageSet.value) {
+    loadDirectoryTree()
+  }
 })
 </script>
 
@@ -886,6 +1048,51 @@ onMounted(() => {
           </template>
         </el-dialog>
 
+        <!-- 新建子目录对话框 -->
+        <el-dialog v-model="createDirDialogVisible" title="新建子目录" width="400px" :close-on-click-modal="false">
+          <el-form label-width="80px">
+            <el-form-item label="目录名">
+              <el-input v-model="newDirName" placeholder="如：7月批次A" :disabled="creatingDir" clearable @keyup.enter="handleCreateDir" />
+            </el-form-item>
+          </el-form>
+          <template #footer>
+            <el-button @click="createDirDialogVisible = false">取消</el-button>
+            <el-button type="primary" :loading="creatingDir" @click="handleCreateDir">创建</el-button>
+          </template>
+        </el-dialog>
+
+        <!-- 面包屑导航 + 目录浏览工具栏（仅图片类型） -->
+        <div v-if="isImageSet" class="directory-bar">
+          <div class="breadcrumb">
+            <span class="breadcrumb-item" @click="navigateToDir('')">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
+              根目录/
+            </span>
+            <template v-for="crumb in breadcrumb" :key="crumb.dirId">
+              <span class="breadcrumb-item" @click="navigateToDir(crumb.dirId)">{{ crumb.dirName }}/</span>
+            </template>
+          </div>
+          <el-button size="small" type="primary" plain @click="openCreateDirDialog">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin-right:4px"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/><line x1="12" y1="11" x2="12" y2="17"/><line x1="9" y1="14" x2="15" y2="14"/></svg>
+            新建子目录
+          </el-button>
+        </div>
+
+        <!-- 子目录卡片区域（仅图片类型且有子目录时显示） -->
+        <div v-if="isImageSet && subDirectories.length > 0" class="subdir-grid">
+          <div class="subdir-card" v-for="dir in subDirectories" :key="dir.dirId" @click="navigateToDir(dir.dirId)">
+            <div class="subdir-icon">
+              <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="rgba(0,212,255,0.6)" stroke-width="1.5"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+            </div>
+            <div class="subdir-name" :title="dir.dirName">{{ dir.dirName }}</div>
+            <div class="subdir-actions">
+              <span class="subdir-delete" @click.stop="handleDeleteDir(dir)" title="删除目录">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+              </span>
+            </div>
+          </div>
+        </div>
+
         <!-- 筛选条件 -->
         <div class="filter-bar">
           <div class="filter-item">
@@ -931,51 +1138,56 @@ onMounted(() => {
 
         <!-- 列表视图 -->
         <div class="table-wrapper" v-if="!isImageSet || viewMode === 'list'" v-loading="loading">
-          <table v-if="pagedList.length > 0" class="sample-table">
-            <thead>
-              <tr>
-                <th class="col-index">#</th>
-                <th v-for="col in columns" :key="col.key" v-show="!hiddenColumns.has(col.key)">{{ col.label }}</th>
-                <th v-if="!isTimeSeriesSet" class="col-score">质量评分</th>
-                <th v-if="isTimeSeriesSet" class="col-action">操作</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr v-for="(row, idx) in pagedList" :key="idx">
-                <td class="col-index">{{ (currentPage - 1) * pageSize + idx + 1 }}</td>
-                <td v-for="col in columns" :key="col.key" v-show="!hiddenColumns.has(col.key)">
-                  <template v-if="col.key === 'sampleName' && isPreviewable(row)">
-                    <span class="link-name" @click="openPreview(row)">{{ row[col.key] ?? '-' }}</span>
-                  </template>
+          <el-table :data="pagedList" style="width: 100%" class="sample-table">
+            <el-table-column type="index" label="#" width="50" :index="(i: number) => (currentPage - 1) * pageSize + i + 1" />
+            <template v-for="col in visibleColumns" :key="col.key">
+              <el-table-column
+                :prop="col.key"
+                :label="col.label"
+                :min-width="col.key === 'filePath' ? 200 : col.key === 'sampleName' ? 180 : undefined"
+              >
+                <template v-if="col.key === 'sampleName'" #default="{ row }">
+                  <span v-if="isPreviewable(row)" class="link-name" @click="openPreview(row)">{{ row[col.key] ?? '-' }}</span>
                   <template v-else>{{ row[col.key] ?? '-' }}</template>
-                </td>
-                <td v-if="!isTimeSeriesSet" class="col-score">
-                  <div class="star-rating">
-                    <span
-                      v-for="star in 5"
-                      :key="star"
-                      class="star-item"
-                      :class="{ active: star <= getScoreStars(row.sampleScore), loading: ratingLoading === `${row.sampleNo}_${row.sampleName}` }"
-                      @click="handleRate(row, star)"
-                      :title="`${star}星 - ${starLabels[star]}`"
-                    >★</span>
-                    <span class="score-label" :class="`score-${getScoreStars(row.sampleScore)}`">{{ getScoreLabel(row.sampleScore) }}</span>
-                  </div>
-                </td>
-                <td v-if="isTimeSeriesSet" class="col-action">
-                  <el-button size="small" @click="handleViewTimeSeries(row)">查看</el-button>
-                  <el-button size="small" @click="handleDownloadTimeSeries(row)">下载</el-button>
-                </td>
-              </tr>
-            </tbody>
-          </table>
-
-          <div v-else-if="!loading" class="empty-state">
-            <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="rgba(0,212,255,0.3)" stroke-width="1">
-              <path d="M4 20h16v-2H4v2zm0-6h16v-2H4v2zm0-6h16V6H4v2z"/>
-            </svg>
-            <p>暂无样本数据</p>
-          </div>
+                </template>
+                <template v-else-if="col.key === 'filePath'" #default="{ row }">
+                  <span class="filepath-cell" :title="row[col.key]">{{ row[col.key] ?? '-' }}</span>
+                </template>
+                <template v-else-if="col.key === 'fileSize'" #default="{ row }">
+                  {{ formatFileSize(row[col.key]) }}
+                </template>
+              </el-table-column>
+            </template>
+            <el-table-column v-if="!isTimeSeriesSet" label="质量评分" width="220">
+              <template #default="{ row }">
+                <div class="star-rating">
+                  <span
+                    v-for="star in 5"
+                    :key="star"
+                    class="star-item"
+                    :class="{ active: star <= getScoreStars(row.sampleScore), loading: ratingLoading === `${row.sampleNo}_${row.sampleName}` }"
+                    @click="handleRate(row, star)"
+                    :title="`${star}星 - ${starLabels[star]}`"
+                  >★</span>
+                  <span class="score-label" :class="`score-${getScoreStars(row.sampleScore)}`">{{ getScoreLabel(row.sampleScore) }}</span>
+                </div>
+              </template>
+            </el-table-column>
+            <el-table-column v-if="isTimeSeriesSet" label="操作" width="160">
+              <template #default="{ row }">
+                <el-button size="small" @click="handleViewTimeSeries(row)">查看</el-button>
+                <el-button size="small" @click="handleDownloadTimeSeries(row)">下载</el-button>
+              </template>
+            </el-table-column>
+            <template #empty>
+              <div class="empty-state">
+                <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="rgba(0,212,255,0.3)" stroke-width="1">
+                  <path d="M4 20h16v-2H4v2zm0-6h16v-2H4v2zm0-6h16V6H4v2z"/>
+                </svg>
+                <p>暂无样本数据</p>
+              </div>
+            </template>
+          </el-table>
         </div>
 
         <!-- 分页 -->
@@ -1002,6 +1214,22 @@ onMounted(() => {
         <div class="upload-info-row">
           <span class="upload-info-label">允许格式：</span>
           <span class="upload-info-value">{{ typeCode === '05' ? '图像文件（jpg/png/bmp等）' : typeCode === '02' ? '文本文件（txt/csv/doc等）' : typeCode === '03' ? '音频文件（mp3/wav等）' : typeCode === '04' ? '视频文件（mp4/avi等）' : '不限' }}</span>
+        </div>
+        <div class="upload-subdir-row" v-if="typeCode === '05'">
+          <span class="upload-info-label">目标目录</span>
+          <el-tree-select
+            v-model="uploadDirId"
+            :data="dirTreeOptions"
+            :props="{ label: 'label', value: 'value', children: 'children' }"
+            :render-after-expand="false"
+            check-strictly
+            default-expand-all
+            placeholder="根目录"
+            :disabled="uploadSaving"
+            clearable
+            style="flex: 1"
+          />
+          <span class="upload-subdir-tip">留空则上传到根目录</span>
         </div>
         <el-upload
           :accept="typeCodeToAccept[typeCode] || ''"
@@ -1036,6 +1264,8 @@ onMounted(() => {
       source="sample"
       title="批量导入（ZIP 分片上传）"
       description="上传 ZIP，自动分片上传并解压图片；同名 .txt 标注和 classes.txt 内容将写入数据库"
+      :directoryTree="dirTreeOptions"
+      :currentDirId="currentDirId"
       @success="handleBatchUploadSuccess"
     />
 
@@ -1274,23 +1504,22 @@ onMounted(() => {
           <span>结果数据：<b style="color:#00ff88">{{ tsViewData.resultCount }}</b> 条</span>
         </div>
         <div class="ts-view-table-wrap">
-          <table class="ts-view-table">
-            <thead>
-              <tr>
-                <th class="th-index">#</th>
-                <th v-for="col in tsViewData.columns" :key="col">{{ col }}</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr v-for="(row, idx) in tsViewPagedRows" :key="idx">
-                <td class="td-index">{{ (tsViewCurrentPage - 1) * tsViewPageSize + idx + 1 }}</td>
-                <td v-for="col in tsViewData.columns" :key="col" :title="String(row[col] ?? '')">{{ row[col] ?? '' }}</td>
-              </tr>
-              <tr v-if="tsViewPagedRows.length === 0">
-                <td :colspan="tsViewData.columns.length + 1" class="td-empty">暂无数据</td>
-              </tr>
-            </tbody>
-          </table>
+          <el-table :data="tsViewPagedRows" style="width: 100%" max-height="500" class="ts-view-table">
+            <el-table-column type="index" label="#" width="50" :index="(i: number) => (tsViewCurrentPage - 1) * tsViewPageSize + i + 1" />
+            <el-table-column
+              v-for="col in tsViewData.columns"
+              :key="col"
+              :prop="col"
+              :label="col"
+              min-width="120"
+              show-overflow-tooltip
+            >
+              <template #default="{ row }">{{ row[col] ?? '' }}</template>
+            </el-table-column>
+            <template #empty>
+              <div class="td-empty">暂无数据</div>
+            </template>
+          </el-table>
         </div>
         <div class="ts-view-pagination" v-if="tsViewData.rows.length > tsViewPageSize">
           <el-pagination
@@ -1413,6 +1642,94 @@ onMounted(() => {
   }
 }
 
+// ========== 目录浏览 ==========
+.directory-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 16px;
+  margin-bottom: 8px;
+  background: rgba(0, 212, 255, 0.04);
+  border: 1px solid rgba(0, 212, 255, 0.15);
+  border-radius: 8px;
+}
+.breadcrumb {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px;
+  font-size: 14px;
+  .breadcrumb-item {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    color: #00d4ff;
+    cursor: pointer;
+    padding: 2px 6px;
+    border-radius: 4px;
+    &:hover {
+      background: rgba(0, 212, 255, 0.1);
+    }
+  }
+  .breadcrumb-sep {
+    color: rgba(255, 255, 255, 0.3);
+  }
+}
+.subdir-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(110px, 1fr));
+  gap: 10px;
+  padding: 0 0 12px 0;
+}
+.subdir-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 12px 8px;
+  background: linear-gradient(135deg, rgba(17, 24, 39, 0.9) 0%, rgba(26, 35, 50, 0.8) 100%);
+  border: 1px solid rgba(0, 212, 255, 0.2);
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.2s;
+  &:hover {
+    border-color: rgba(0, 212, 255, 0.5);
+    transform: translateY(-2px);
+    box-shadow: 0 4px 12px rgba(0, 212, 255, 0.15);
+  }
+  .subdir-name {
+    font-size: 18px;
+    color: rgba(255, 255, 255, 0.85);
+    text-align: center;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .subdir-actions {
+    position: absolute;
+    top: 6px;
+    right: 6px;
+    .subdir-delete {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 22px;
+      height: 22px;
+      border-radius: 4px;
+      color: rgba(255, 255, 255, 0.3);
+      cursor: pointer;
+      &:hover {
+        color: #ff5555;
+        background: rgba(255, 85, 85, 0.1);
+      }
+    }
+  }
+}
+
 // ========== 缩略图视图 ==========
 .thumbnail-grid {
   display: grid;
@@ -1509,51 +1826,16 @@ onMounted(() => {
 }
 
 .sample-table {
-  width: 100%;
-  border-collapse: collapse;
   font-size: 13px;
 
-  thead {
-    background: rgba(0, 212, 255, 0.08);
-    position: sticky;
-    top: 0;
-    z-index: 1;
-  }
-
-  th {
-    padding: 12px 16px;
-    text-align: left;
-    color: rgba(255, 255, 255, 0.65);
-    font-weight: 600;
-    border-bottom: 1px solid rgba(0, 212, 255, 0.15);
-    white-space: nowrap;
-  }
-
-  td {
-    padding: 10px 16px;
-    color: rgba(255, 255, 255, 0.8);
-    border-bottom: 1px solid rgba(0, 212, 255, 0.08);
-    max-width: 260px;
+  .filepath-cell {
+    display: inline-block;
+    max-width: 100%;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-  }
-
-  tbody tr {
-    transition: background 0.2s;
-    &:hover {
-      background: rgba(0, 212, 255, 0.06);
-    }
-  }
-
-  .col-index {
-    width: 50px;
-    text-align: center;
-    color: rgba(255, 255, 255, 0.4);
-  }
-
-  .col-score {
-    min-width: 180px;
+    vertical-align: middle;
+    cursor: help;
   }
 }
 
@@ -1852,6 +2134,66 @@ onMounted(() => {
   background: linear-gradient(135deg, rgba(17, 24, 39, 0.9) 0%, rgba(26, 35, 50, 0.8) 100%);
   border: 1px solid rgba(0, 212, 255, 0.2);
   border-radius: 12px;
+}
+</style>
+
+<style lang="scss">
+// el-cascader 暗色主题（与筛选栏 el-select 保持一致）
+.el-cascader {
+  --el-cascader-node-text-color: rgba(255, 255, 255, 0.85);
+}
+
+.el-cascader .el-input__wrapper {
+  background-color: rgba(255, 255, 255, 0.05) !important;
+  box-shadow: 0 0 0 1px rgba(0, 212, 255, 0.2) inset !important;
+}
+
+.el-cascader .el-input__inner {
+  color: rgba(255, 255, 255, 0.85) !important;
+}
+
+.el-cascader .el-input__inner::placeholder {
+  color: rgba(255, 255, 255, 0.3) !important;
+}
+
+.el-cascader .el-input.is-focus .el-input__wrapper {
+  box-shadow: 0 0 0 1px #00d4ff inset !important;
+}
+
+// 级联下拉面板暗色主题
+.el-cascader__dropdown {
+  .el-cascader-panel {
+    background: linear-gradient(135deg, rgba(17, 24, 39, 0.98) 0%, rgba(26, 35, 50, 0.98) 100%);
+    border: 1px solid rgba(0, 212, 255, 0.25);
+  }
+
+  .el-cascader-menu {
+    border-right: 1px solid rgba(0, 212, 255, 0.12);
+    color: rgba(255, 255, 255, 0.85);
+  }
+
+  .el-cascader-node {
+    color: rgba(255, 255, 255, 0.75);
+    // 确保整个节点可点击（修复只能点圆点的问题）
+    .el-cascader-node__label {
+      flex: 1;
+      padding: 0 8px;
+      cursor: pointer;
+    }
+    &:hover {
+      background: rgba(0, 212, 255, 0.08);
+    }
+    &.is-active,
+    &.in-active-path {
+      background: rgba(0, 212, 255, 0.15);
+      color: #00d4ff;
+      font-weight: 600;
+    }
+  }
+
+  .el-cascader-node__prefix {
+    color: #00d4ff;
+  }
 }
 </style>
 
@@ -2349,6 +2691,22 @@ onMounted(() => {
   .upload-info-value {
     color: rgba(255, 255, 255, 0.85);
   }
+  .upload-subdir-row {
+    display: flex;
+    align-items: center;
+    margin-bottom: 12px;
+    font-size: 14px;
+    gap: 10px;
+    .upload-info-label {
+      width: 80px;
+      flex-shrink: 0;
+      color: rgba(255, 255, 255, 0.5);
+    }
+    .upload-subdir-tip {
+      color: rgba(255, 255, 255, 0.35);
+      font-size: 12px;
+    }
+  }
   .upload-drag-content {
     text-align: center;
     padding: 20px 0;
@@ -2415,62 +2773,17 @@ onMounted(() => {
 }
 
 .ts-view-table {
-  width: 100%;
-  border-collapse: separate;
-  border-spacing: 0;
   font-size: 13px;
+}
 
-  thead th {
-    position: sticky;
-    top: 0;
-    z-index: 10;
-    background: #0d2137;
-    border-bottom: 2px solid rgba(0, 212, 255, 0.6);
-  }
-
-  th, td {
-    padding: 8px 12px;
-    text-align: left;
-    border-bottom: 1px solid rgba(0, 212, 255, 0.08);
-    white-space: nowrap;
-    max-width: 260px;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-
-  th {
-    color: rgba(255, 255, 255, 0.85);
-    font-weight: 600;
-  }
-
-  td {
-    color: rgba(255, 255, 255, 0.8);
-    background: transparent;
-  }
-
-  .th-index, .td-index {
-    width: 50px;
-    text-align: center;
-    color: rgba(255, 255, 255, 0.4);
-  }
-
-  .td-empty {
-    text-align: center;
-    padding: 40px;
-    color: rgba(255, 255, 255, 0.35);
-  }
-
-  tbody tr:hover td {
-    background: rgba(0, 212, 255, 0.06);
-  }
+.td-empty {
+  text-align: center;
+  padding: 40px;
+  color: rgba(255, 255, 255, 0.35);
 }
 
 .ts-view-pagination {
   display: flex;
   justify-content: flex-end;
-}
-
-.col-action {
-  min-width: 140px;
 }
 </style>

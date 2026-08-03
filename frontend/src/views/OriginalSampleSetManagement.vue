@@ -3,9 +3,9 @@ import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import Header from '@/components/Header.vue'
 import Sidebar from '@/components/Sidebar.vue'
-import { getCodeDict, saveSampleSet, updateSampleSet, querySampleSet, uploadSamples, uploadSamplesBatch } from '@/api/originalSample'
+import { getCodeDict, saveSampleSet, updateSampleSet, querySampleSet, uploadSamples, uploadSamplesBatch, getDirectoryTree, deleteOriginalSampleSet, type DirectoryNode } from '@/api/originalSample'
 import ChunkUploadDialog from '@/components/ChunkUploadDialog.vue'
-import { ElMessage, ElLoading } from 'element-plus'
+import { ElMessage, ElMessageBox, ElLoading } from 'element-plus'
 
 type ViewMode = 'card' | 'list'
 type SortField = 'updateTime' | 'scale' | 'quality'
@@ -185,12 +185,29 @@ function resetFilters() {
 function handleCardCommand(command: string, item: SampleSet) {
   if (command === 'download') {
     downloadSampleSet(item)
-  } else if (command === 'upload') {
-    openUploadDialog(item)
-  } else if (command === 'batch') {
-    openBatchDialog(item)
   } else if (command === 'edit') {
     openEditDialog(item)
+  } else if (command === 'delete') {
+    handleDelete(item)
+  }
+}
+
+async function handleDelete(item: SampleSet) {
+  try {
+    await ElMessageBox.confirm('确定要删除该样本集吗？仅允许删除空样本集（无样本，且未被采集任务引用）。', '提示', {
+      confirmButtonText: '确定',
+      cancelButtonText: '取消',
+      type: 'warning',
+    })
+  } catch {
+    return // 用户取消
+  }
+  try {
+    await deleteOriginalSampleSet(item.setNo)
+    ElMessage.success('删除成功')
+    loadSampleSets()
+  } catch (e: any) {
+    ElMessage.error(e.message || '删除失败')
   }
 }
 
@@ -394,6 +411,10 @@ const uploadDialogVisible = ref(false)
 const uploadSaving = ref(false)
 const uploadTarget = ref<SampleSet | null>(null)
 const uploadFileList = ref<File[]>([])
+// 上传目标目录（空字符串=根目录）
+const uploadDirId = ref('')
+// 当前上传样本集的目录树（el-cascader options）
+const uploadDirTree = ref<any[]>([])
 
 // 样本类型编码 → 允许的文件扩展名
 const typeCodeToExtensions: Record<string, string[]> = {
@@ -414,7 +435,44 @@ const typeCodeToAccept: Record<string, string> = {
 function openUploadDialog(item: SampleSet) {
   uploadTarget.value = item
   uploadFileList.value = []
+  uploadDirId.value = ''
+  uploadDirTree.value = []
   uploadDialogVisible.value = true
+  // 图片类型：加载目录树用于选择目标目录
+  if (item.modality && item.modality[0] === '05') {
+    loadUploadDirTree(item.setNo)
+  }
+}
+
+// 加载目录树并构建 el-cascader options
+async function loadUploadDirTree(setNo: string) {
+  try {
+    const list = await getDirectoryTree(setNo)
+    // 扁平列表 → 树结构
+    const nodeMap = new Map<string, any>()
+    const root: any[] = []
+    for (const d of list) {
+      nodeMap.set(d.dirId, { value: d.dirId, label: d.dirName, children: [] })
+    }
+    for (const d of list) {
+      const node = nodeMap.get(d.dirId)!
+      if (d.parentId && nodeMap.has(d.parentId)) {
+        nodeMap.get(d.parentId)!.children.push(node)
+      } else {
+        root.push(node)
+      }
+    }
+    const cleanChildren = (nodes: any[]) => {
+      for (const n of nodes) {
+        if (n.children.length === 0) delete n.children
+        else cleanChildren(n.children)
+      }
+    }
+    cleanChildren(root)
+    uploadDirTree.value = root
+  } catch {
+    uploadDirTree.value = []
+  }
 }
 
 function handleUploadFileChange(_file: any, fileList: any[]) {
@@ -452,7 +510,8 @@ async function handleUploadConfirm() {
       uploadTarget.value.setNo,
       uploadTarget.value.name,
       typeCode,
-      uploadFileList.value
+      uploadFileList.value,
+      uploadDirId.value
     )
     ElMessage.success(msg)
     uploadDialogVisible.value = false
@@ -475,7 +534,10 @@ function openBatchDialog(item: SampleSet) {
     return
   }
   batchTarget.value = item
+  uploadDirTree.value = []
   batchDialogVisible.value = true
+  // 加载目录树用于选择目标目录
+  loadUploadDirTree(item.setNo)
 }
 
 function handleBatchUploadSuccess() {
@@ -613,10 +675,8 @@ function handleBatchUploadSuccess() {
                 <template #dropdown>
                   <el-dropdown-menu>
                     <el-dropdown-item command="edit">编辑</el-dropdown-item>
-                    <el-dropdown-item command="upload">上传</el-dropdown-item>
-                    <el-dropdown-item v-if="item.modality[0] === '05'" command="batch">批量导入</el-dropdown-item>
                     <el-dropdown-item command="download">下载</el-dropdown-item>
-                    <el-dropdown-item command="delete" disabled>删除</el-dropdown-item>
+                    <el-dropdown-item command="delete">删除</el-dropdown-item>
                   </el-dropdown-menu>
                 </template>
               </el-dropdown>
@@ -625,45 +685,53 @@ function handleBatchUploadSuccess() {
         </div>
 
         <div v-else class="list-view">
-          <div class="list-header">
-            <span class="col col-name">样本集名称</span>
-            <span class="col col-modality">类型</span>
-            <span class="col col-scale">样本规模</span>
-            <span class="col col-version">版本号</span>
-            <span class="col col-update">更新时间</span>
-            <span class="col col-action">操作</span>
-          </div>
-          <div class="list-row" v-for="item in filteredData" :key="item.id">
-            <span class="col col-name">
-              <div class="name-cell">
-                <div class="name-text link-name" @click="goToDetail(item)">{{ item.name }}</div>
-                <div class="name-tags">
-                  <span class="tag tag-field" v-if="item.fieldCode && fieldLabel[item.fieldCode]">{{ fieldLabel[item.fieldCode] }}</span>
-                  <span class="tag" v-if="item.businessSystem">{{ item.businessSystem }}</span>
+          <el-table :data="filteredData" style="width: 100%" class="sample-set-table">
+            <el-table-column prop="name" label="样本集名称" min-width="220">
+              <template #default="{ row }">
+                <div class="name-cell">
+                  <div class="name-text link-name" @click="goToDetail(row)">{{ row.name }}</div>
+                  <div class="name-tags">
+                    <span class="tag tag-field" v-if="row.fieldCode && fieldLabel[row.fieldCode]">{{ fieldLabel[row.fieldCode] }}</span>
+                    <span class="tag" v-if="row.businessSystem">{{ row.businessSystem }}</span>
+                  </div>
                 </div>
+              </template>
+            </el-table-column>
+            <el-table-column prop="modality" label="类型" width="180">
+              <template #default="{ row }">
+                <div class="modality-badges-sm">
+                  <span v-for="m in row.modality" :key="m" class="modality-dot" :class="codeToIconKey[m] || m">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path :d="modalityIcon[codeToIconKey[m] || m]"/></svg>
+                    <span class="modality-text">{{ modalityLabel[m] }}</span>
+                  </span>
+                </div>
+              </template>
+            </el-table-column>
+            <el-table-column prop="scale" label="样本规模" width="120">
+              <template #default="{ row }">{{ formatScale(row.scale) }}条</template>
+            </el-table-column>
+            <el-table-column prop="version" label="版本号" width="100" />
+            <el-table-column prop="updateTime" label="更新时间" width="120" />
+            <el-table-column label="操作" width="180">
+              <template #default="{ row }">
+                <el-button text size="small" class="action-btn" @click="openEditDialog(row)">编辑</el-button>
+                <el-button text size="small" class="action-btn" @click="downloadSampleSet(row)">下载</el-button>
+                <el-button text size="small" class="action-btn action-btn-danger" @click="handleDelete(row)">删除</el-button>
+              </template>
+            </el-table-column>
+            <template #empty>
+              <div class="empty-state">
+                <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="rgba(0,212,255,0.3)" stroke-width="1">
+                  <path d="M4 20h16v-2H4v2zm0-6h16v-2H4v2zm0-6h16V6H4v2z"/>
+                </svg>
+                <p>暂无符合条件的样本集</p>
+                <el-button type="primary" @click="resetFilters">重置筛选条件</el-button>
               </div>
-            </span>
-            <span class="col col-modality">
-              <div class="modality-badges-sm">
-                <span v-for="m in item.modality" :key="m" class="modality-dot" :class="codeToIconKey[m] || m">
-                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path :d="modalityIcon[codeToIconKey[m] || m]"/></svg>
-                  <span class="modality-text">{{ modalityLabel[m] }}</span>
-                </span>
-              </div>
-            </span>
-            <span class="col col-scale">{{ formatScale(item.scale) }}条</span>
-            <span class="col col-version">{{ item.version }}</span>
-            <span class="col col-update">{{ item.updateTime }}</span>
-            <span class="col col-action">
-              <el-button text size="small" class="action-btn" @click="openEditDialog(item)">编辑</el-button>
-              <el-button text size="small" class="action-btn" @click="openUploadDialog(item)">上传</el-button>
-              <el-button v-if="item.modality[0] === '05'" text size="small" class="action-btn" @click="openBatchDialog(item)">批量导入</el-button>
-              <el-button text size="small" class="action-btn" @click="downloadSampleSet(item)">下载</el-button>
-            </span>
-          </div>
+            </template>
+          </el-table>
         </div>
 
-        <div v-if="filteredData.length === 0" class="empty-state">
+        <div v-if="filteredData.length === 0" class="empty-state empty-state-outer">
           <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="rgba(0,212,255,0.3)" stroke-width="1">
             <path d="M4 20h16v-2H4v2zm0-6h16v-2H4v2zm0-6h16V6H4v2z"/>
           </svg>
@@ -743,6 +811,18 @@ function handleBatchUploadSuccess() {
           <span class="upload-info-label">允许格式：</span>
           <span class="upload-info-value">{{ uploadTarget.modality[0] === '05' ? '图像文件（jpg/png/bmp等）' : uploadTarget.modality[0] === '02' ? '文本文件（txt/csv/doc等）' : uploadTarget.modality[0] === '03' ? '音频文件（mp3/wav等）' : uploadTarget.modality[0] === '04' ? '视频文件（mp4/avi等）' : '不限' }}</span>
         </div>
+        <div class="subdir-row" v-if="uploadTarget.modality[0] === '05'">
+          <div class="subdir-label">目标目录<span class="subdir-tip">（选择已有目录或根目录）</span></div>
+          <el-cascader
+            v-model="uploadDirId"
+            :options="uploadDirTree"
+            :props="{ checkStrictly: true, emitPath: false, expandTrigger: 'hover' }"
+            placeholder="根目录"
+            :disabled="uploadSaving"
+            clearable
+            style="width: 100%"
+          />
+        </div>
         <el-upload
           :accept="typeCodeToAccept[uploadTarget.modality[0]] || ''"
           :auto-upload="false"
@@ -776,6 +856,8 @@ function handleBatchUploadSuccess() {
       source="original"
       title="批量导入（ZIP 分片上传）"
       description="上传 ZIP，自动分片上传并解压图片到样本集目录；原始样本仅导入图片"
+      :directoryTree="uploadDirTree"
+      :currentDirId="''"
       @success="handleBatchUploadSuccess"
     />
   </div>
@@ -1148,72 +1230,17 @@ function handleBatchUploadSuccess() {
   overflow: hidden;
 }
 
-.list-header {
-  display: flex;
-  align-items: center;
-  padding: 12px 16px;
-  background: rgba(0, 212, 255, 0.08);
-  border-bottom: 1px solid rgba(0, 212, 255, 0.15);
-  font-size: 13px;
-  font-weight: 600;
-  color: rgba(255, 255, 255, 0.65);
-}
-
-.list-row {
-  display: flex;
-  align-items: center;
-  padding: 14px 16px;
-  border-bottom: 1px solid rgba(0, 212, 255, 0.08);
-  transition: background 0.2s;
-
-  &:last-child {
-    border-bottom: none;
-  }
-
-  &:hover {
-    background: rgba(0, 212, 255, 0.06);
-  }
-}
-
-.col {
-  font-size: 13px;
-  color: rgba(255, 255, 255, 0.8);
-  flex-shrink: 0;
-}
-
-.col-name {
-  flex: 2;
-  min-width: 0;
-}
-
-.col-modality {
-  width: 120px;
-}
-
-.col-scale {
-  width: 90px;
-  text-align: center;
-}
-
-.col-version {
-  width: 60px;
-  text-align: center;
-}
-
-.col-update {
-  width: 110px;
-  text-align: center;
-}
-
-.col-action {
-  width: 120px;
-  text-align: center;
-}
-
 .action-btn {
   color: #00d4ff !important;
   &:hover {
     color: #66e0ff !important;
+  }
+}
+
+.action-btn-danger {
+  color: #ff5555 !important;
+  &:hover {
+    color: #ff8888 !important;
   }
 }
 
@@ -1288,6 +1315,19 @@ function handleBatchUploadSuccess() {
   }
   .upload-info-value {
     color: rgba(255, 255, 255, 0.85);
+  }
+  .subdir-row {
+    margin-bottom: 14px;
+    .subdir-label {
+      font-size: 13px;
+      color: rgba(255, 255, 255, 0.7);
+      margin-bottom: 6px;
+    }
+    .subdir-tip {
+      color: rgba(255, 255, 255, 0.4);
+      font-size: 12px;
+      margin-left: 6px;
+    }
   }
   .upload-drag-content {
     text-align: center;
