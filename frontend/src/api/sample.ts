@@ -200,6 +200,46 @@ export async function updateSampleScore(sampleNo: string, sampleName: string, sc
   if (json.code !== 0) throw new Error(json.message || '评分失败')
 }
 
+export interface SampleImageRow {
+  sampleNo: string
+  sampleName: string
+  suffix: string
+  filePath: string
+  fileSize: number
+  labelThink: string
+}
+
+export async function randomSampleImages(setNo: string, count: number = 30): Promise<SampleImageRow[]> {
+  const res = await fetch(`${BASE_URL}/random-sample-images`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ setNo, count })
+  })
+  const json = await res.json()
+  if (json.code !== 0) throw new Error(json.message || '抽样失败')
+  return json.data || []
+}
+
+export async function submitQualityInspection(setNo: string, averageStar: number): Promise<void> {
+  const res = await fetch(`${BASE_URL}/submit-quality-inspection`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ setNo, averageStar })
+  })
+  const json = await res.json()
+  if (json.code !== 0) throw new Error(json.message || '提交质检评分失败')
+}
+
+export async function resetQualityLevel(setNo: string): Promise<void> {
+  const res = await fetch(`${BASE_URL}/reset-quality-level`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ setNo })
+  })
+  const json = await res.json()
+  if (json.code !== 0) throw new Error(json.message || '重置质量等级失败')
+}
+
 export async function saveLabelThink(sampleNo: string, sampleName: string, labelThink: string): Promise<void> {
   const res = await fetch(`${BASE_URL}/update-label-think`, {
     method: 'POST',

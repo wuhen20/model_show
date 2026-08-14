@@ -3,7 +3,7 @@ import { ref, computed, nextTick, onMounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import Header from '@/components/Header.vue'
 import Sidebar from '@/components/Sidebar.vue'
-import { getSamples, getImageUrl, getAnnotations, getAudioText, updateSampleScore, uploadSamples, uploadSamplesBatch, saveLabelThink, getClasses, getSamplesByLabels, getDirectoryTree, getDirectoryPath, createDirectory, deleteDirectory, type SampleInfoRow, type AnnotationData, type AnnotationBox, type DirectoryNode, type DirectoryPathItem } from '@/api/sample'
+import { getSamples, getImageUrl, getAnnotations, getAudioText, updateSampleScore, uploadSamples, uploadSamplesBatch, saveLabelThink, getClasses, getSamplesByLabels, getDirectoryTree, getDirectoryPath, createDirectory, deleteDirectory, randomSampleImages, submitQualityInspection, resetQualityLevel, type SampleInfoRow, type SampleImageRow, type AnnotationData, type AnnotationBox, type DirectoryNode, type DirectoryPathItem } from '@/api/sample'
 import ChunkUploadDialog from '@/components/ChunkUploadDialog.vue'
 import { ElMessage, ElMessageBox, ElLoading } from 'element-plus'
 
@@ -147,7 +147,11 @@ async function handleUploadConfirm() {
     uploadDialogVisible.value = false
     loadSamples()
     // 上传后刷新目录树（可能用户在根目录上传了新目录关联的样本）
-    if (isImageSet.value) loadDirectoryTree()
+    if (isImageSet.value) {
+      loadDirectoryTree()
+      // 导入新图片后清空样本集质量等级
+      resetQualityLevel(setNo.value).catch(() => {})
+    }
   } catch (e: any) {
     ElMessage.error(e.message || '上传失败')
   } finally {
@@ -168,7 +172,11 @@ function openBatchDialog() {
 
 function handleBatchUploadSuccess() {
   loadSamples()
-  if (isImageSet.value) loadDirectoryTree()
+  if (isImageSet.value) {
+    loadDirectoryTree()
+    // 批量导入新图片后清空样本集质量等级
+    resetQualityLevel(setNo.value).catch(() => {})
+  }
 }
 
 // 筛选条件
@@ -958,31 +966,11 @@ watch(previewVisible, (val) => {
   }
 })
 
-// ========== 质量评分 ==========
+// ========== 质量评分（用于样本质检工作台）==========
 const scoreCodeMap: Record<string, string> = { '01': '优质', '02': '良好', '03': '一般', '04': '较差' }
-// 星级与编码映射：5星→01优质，4星→02良好，3星→03一般，2星/1星→04较差
 const starToCode: Record<number, string> = { 5: '01', 4: '02', 3: '03', 2: '04', 1: '04' }
 const codeToStar: Record<string, number> = { '01': 5, '02': 4, '03': 3, '04': 2 }
 const starLabels: Record<number, string> = { 5: '优质', 4: '良好', 3: '一般', 2: '较差', 1: '较差' }
-const ratingLoading = ref<string | null>(null) // 正在评分的行标识
-
-async function handleRate(row: SampleInfoRow, star: number) {
-  const sampleNo = String(row.sampleNo || '')
-  const sampleName = String(row.sampleName || '')
-  if (!sampleNo || !sampleName) return
-  const key = `${sampleNo}_${sampleName}`
-  ratingLoading.value = key
-  const code = starToCode[star]
-  try {
-    await updateSampleScore(sampleNo, sampleName, code)
-    row.sampleScore = code
-    ElMessage.success(`评分成功：${star}星 - ${starLabels[star]}`)
-  } catch (e: any) {
-    ElMessage.error(e.message || '评分失败')
-  } finally {
-    ratingLoading.value = null
-  }
-}
 
 function getScoreStars(score: string | null | undefined): number {
   if (!score) return 0
@@ -992,6 +980,330 @@ function getScoreStars(score: string | null | undefined): number {
 function getScoreLabel(score: string | null | undefined): string {
   if (!score) return '未评分'
   return scoreCodeMap[score] || '未评分'
+}
+
+// ========== 样本质检工作台 ==========
+const SAMPLE_COUNT = 30 // 目标抽样数量
+const inspectionVisible = ref(false)
+const inspectionLoading = ref(false)
+const inspectionSamples = ref<SampleImageRow[]>([])
+const inspectionIndex = ref(0) // 当前查看的图片序号
+const inspectionRatings = ref<Record<string, number>>({}) // sampleNo → star
+const inspectionSubmitting = ref(false)
+
+// 实际样本数量（不足30张时全量抽取）
+const actualCount = computed(() => inspectionSamples.value.length)
+
+// 当前图片
+const currentSample = computed(() => inspectionSamples.value[inspectionIndex.value] || null)
+
+// 当前图片的评分
+const currentStar = computed(() => {
+  const s = currentSample.value
+  if (!s) return 0
+  return inspectionRatings.value[s.sampleNo] || 0
+})
+
+// 已评分数量
+const ratedCount = computed(() => Object.keys(inspectionRatings.value).length)
+
+// 未评分数量
+const unratedCount = computed(() => actualCount.value - ratedCount.value)
+
+// 是否全部已评分
+const allRated = computed(() => actualCount.value > 0 && ratedCount.value >= actualCount.value)
+
+// 平均星级（基于实际样本数量）
+const averageStar = computed(() => {
+  const ratings = Object.values(inspectionRatings.value)
+  if (ratings.length === 0) return 0
+  const sum = ratings.reduce((a, b) => a + b, 0)
+  return sum / ratings.length
+})
+
+async function openInspection() {
+  inspectionVisible.value = true
+  inspectionLoading.value = true
+  inspectionSamples.value = []
+  inspectionRatings.value = {}
+  inspectionAnnoData.value = null
+  inspectionCachedImage.value = null
+  inspectionIndex.value = -1 // 先设-1，确保后续设为0时能触发watch
+  try {
+    const data = await randomSampleImages(setNo.value, SAMPLE_COUNT)
+    inspectionSamples.value = data
+    // 直接加载第一张图片的标注
+    if (data.length > 0) {
+      inspectionIndex.value = 0
+    }
+  } catch (e: any) {
+    ElMessage.error(e.message || '抽样失败')
+    inspectionVisible.value = false
+  } finally {
+    inspectionLoading.value = false
+  }
+}
+
+function handleInspectionPrev() {
+  if (inspectionIndex.value > 0) {
+    inspectionIndex.value--
+  }
+}
+
+function handleInspectionNext() {
+  if (inspectionIndex.value < inspectionSamples.value.length - 1) {
+    inspectionIndex.value++
+  }
+}
+
+function handleInspectionRate(star: number) {
+  const s = currentSample.value
+  if (!s) return
+  // 点击同一颗星则取消评分
+  if (inspectionRatings.value[s.sampleNo] === star) {
+    inspectionRatings.value[s.sampleNo] = 0
+  } else {
+    inspectionRatings.value[s.sampleNo] = star
+  }
+}
+
+async function handleInspectionSubmit() {
+  if (!allRated.value) return
+  inspectionSubmitting.value = true
+  try {
+    await submitQualityInspection(setNo.value, averageStar.value)
+    // 计算质量等级文字
+    const rounded = Math.round(averageStar.value)
+    const qualityLabel = starLabels[rounded] || '未知'
+    ElMessage.success(`评分提交成功，平均星级：${averageStar.value.toFixed(1)}星，为${qualityLabel}。`)
+    inspectionVisible.value = false
+  } catch (e: any) {
+    ElMessage.error(e.message || '提交质检评分失败')
+  } finally {
+    inspectionSubmitting.value = false
+  }
+}
+
+function handleInspectionCancel() {
+  const doClose = () => {
+    inspectionVisible.value = false
+    inspectionRatings.value = {}
+    inspectionSamples.value = []
+    inspectionAnnoData.value = null
+    inspectionCachedImage.value = null
+    inspectionIndex.value = -1
+  }
+  if (ratedCount.value > 0) {
+    ElMessageBox.confirm('评分尚未提交，确定退出吗？', '确认退出', {
+      confirmButtonText: '确定退出',
+      cancelButtonText: '继续评分',
+      type: 'warning',
+    }).then(() => {
+      doClose()
+    }).catch(() => {
+      // 用户取消，继续评分
+    })
+  } else {
+    doClose()
+  }
+}
+
+async function handleInspectionResample() {
+  inspectionRatings.value = {}
+  inspectionIndex.value = -1 // 先置-1，避免触发旧数据的标注加载
+  inspectionAnnoData.value = null
+  inspectionCachedImage.value = null
+  inspectionLoading.value = true
+  try {
+    const data = await randomSampleImages(setNo.value, SAMPLE_COUNT)
+    inspectionSamples.value = data
+    // 加载第一张图片的标注
+    if (data.length > 0) {
+      await nextTick()
+      inspectionIndex.value = 0
+    }
+  } catch (e: any) {
+    ElMessage.error(e.message || '重新抽取失败')
+  } finally {
+    inspectionLoading.value = false
+  }
+}
+
+// ========== 质检工作台 - 图片标注展示 ==========
+const inspectionAnnoData = ref<AnnotationData | null>(null)
+const inspectionAnnoLoading = ref(false)
+const inspectionCanvasRef = ref<HTMLCanvasElement | null>(null)
+const inspectionCachedImage = ref<HTMLImageElement | null>(null)
+const inspectionImageLoading = ref(false)
+const inspectionSelectedBoxIndex = ref<number | null>(null)
+const inspectionThinkCollapsed = ref(false)
+const inspectionHoverStar = ref(0) // 鼠标悬停的星级，0=未悬停
+
+// 切换图片时加载标注
+watch(inspectionIndex, async (idx) => {
+  const sample = inspectionSamples.value[idx]
+  if (!sample) return
+  inspectionAnnoData.value = null
+  inspectionCachedImage.value = null
+  inspectionSelectedBoxIndex.value = null
+  inspectionThinkCollapsed.value = false
+  inspectionAnnoLoading.value = true
+  try {
+    const ann = await getAnnotations(sample.sampleNo)
+    inspectionAnnoData.value = ann
+    await nextTick()
+    drawInspectionAnnotations()
+  } catch {
+    inspectionAnnoData.value = null
+  } finally {
+    inspectionAnnoLoading.value = false
+  }
+})
+
+function drawInspectionAnnotations() {
+  const canvas = inspectionCanvasRef.value
+  if (!canvas || !inspectionAnnoData.value) return
+
+  const ctx = canvas.getContext('2d')
+  if (!ctx) return
+
+  const drawImage = (img: HTMLImageElement) => {
+    const nw = img.naturalWidth
+    const nh = img.naturalHeight
+
+    const container = canvas.parentElement
+    const containerW = container ? container.clientWidth : 800
+    const containerH = container ? container.clientHeight : 600
+
+    const scaleByW = containerW / nw
+    const scaleByH = containerH / nh
+    const scale = Math.min(scaleByW, scaleByH, 1) // 不放大超过原图
+
+    const displayW = Math.round(nw * scale)
+    const displayH = Math.round(nh * scale)
+
+    canvas.width = displayW
+    canvas.height = displayH
+    canvas.style.width = displayW + 'px'
+    canvas.style.height = displayH + 'px'
+
+    ctx.drawImage(img, 0, 0, displayW, displayH)
+
+    // 绘制标注框
+    const boxes = inspectionAnnoData.value!.boxes
+    const highlightIdx = inspectionSelectedBoxIndex.value
+
+    boxes.forEach((box, i) => {
+      const x = (box.cx - box.w / 2) * displayW
+      const y = (box.cy - box.h / 2) * displayH
+      const w = box.w * displayW
+      const h = box.h * displayH
+
+      const color = boxColors[box.classId % boxColors.length]
+      const isHighlighted = highlightIdx !== null && highlightIdx === i
+      const isOtherDimmed = highlightIdx !== null && highlightIdx !== i
+
+      if (isOtherDimmed) {
+        ctx.globalAlpha = 0.3
+      }
+
+      ctx.strokeStyle = color
+      ctx.lineWidth = isHighlighted
+        ? Math.max(4, Math.min(displayW, displayH) / 150)
+        : Math.max(2, Math.min(displayW, displayH) / 300)
+      ctx.strokeRect(x, y, w, h)
+
+      if (isHighlighted) {
+        ctx.fillStyle = color
+        ctx.globalAlpha = 0.15
+        ctx.fillRect(x, y, w, h)
+        ctx.globalAlpha = 1
+      }
+
+      // 标签
+      const label = box.className
+      const fontSize = Math.max(14, Math.min(displayW, displayH) / 45)
+      ctx.font = `bold ${fontSize}px sans-serif`
+      const textMetrics = ctx.measureText(label)
+      const padding = 4
+      const labelH = fontSize + padding * 2
+
+      const labelOnTop = y - labelH >= 0
+      const labelY = labelOnTop ? y - labelH : y + h - labelH
+
+      ctx.fillStyle = color
+      ctx.globalAlpha = isOtherDimmed ? 0.3 : 0.8
+      ctx.fillRect(x, labelY, textMetrics.width + padding * 2, labelH)
+      ctx.globalAlpha = isOtherDimmed ? 0.3 : 1
+
+      ctx.fillStyle = '#fff'
+      ctx.fillText(label, x + padding, labelY + fontSize + padding)
+
+      ctx.globalAlpha = 1
+    })
+  }
+
+  if (inspectionCachedImage.value) {
+    drawImage(inspectionCachedImage.value)
+    inspectionImageLoading.value = false
+  } else {
+    const img = new Image()
+    img.crossOrigin = 'anonymous'
+    img.onload = () => {
+      inspectionCachedImage.value = img
+      drawImage(img)
+      inspectionImageLoading.value = false
+    }
+    img.onerror = () => {
+      inspectionImageLoading.value = false
+    }
+    const sample = currentSample.value
+    if (sample?.filePath) {
+      img.src = getImageUrl(sample.filePath)
+    }
+  }
+}
+
+// 点击右侧标注项 → 左侧高亮
+function handleInspectionSelectBox(index: number) {
+  if (inspectionSelectedBoxIndex.value === index) {
+    inspectionSelectedBoxIndex.value = null
+  } else {
+    inspectionSelectedBoxIndex.value = index
+  }
+  drawInspectionAnnotations()
+}
+
+// 点击 canvas 标注框 → 右侧高亮
+function handleInspectionCanvasClick(e: MouseEvent) {
+  if (!inspectionAnnoData.value?.boxes) return
+  const canvas = inspectionCanvasRef.value
+  if (!canvas) return
+
+  const rect = canvas.getBoundingClientRect()
+  const scaleX = canvas.width / rect.width
+  const scaleY = canvas.height / rect.height
+  const clickX = (e.clientX - rect.left) * scaleX
+  const clickY = (e.clientY - rect.top) * scaleY
+
+  const boxes = inspectionAnnoData.value.boxes
+  for (let i = boxes.length - 1; i >= 0; i--) {
+    const box = boxes[i]
+    const displayW = canvas.width
+    const displayH = canvas.height
+    const x = (box.cx - box.w / 2) * displayW
+    const y = (box.cy - box.h / 2) * displayH
+    const w = box.w * displayW
+    const h = box.h * displayH
+
+    if (clickX >= x && clickX <= x + w && clickY >= y && clickY <= y + h) {
+      handleInspectionSelectBox(i)
+      return
+    }
+  }
+  // 点击空白区域取消选中
+  inspectionSelectedBoxIndex.value = null
+  drawInspectionAnnotations()
 }
 
 onMounted(() => {
@@ -1033,6 +1345,7 @@ onMounted(() => {
             <el-button type="primary" @click="openUploadDialog">上传样本</el-button>
             <el-button v-if="isImageSet" @click="openBatchDialog">批量导入</el-button>
             <el-button v-if="isImageSet" type="success" @click="openExportDialog">导出</el-button>
+            <el-button v-if="isImageSet" type="warning" @click="openInspection">样本质检</el-button>
           </div>
         </div>
 
@@ -1126,7 +1439,6 @@ onMounted(() => {
             </div>
             <div class="thumbnail-name" :title="row.sampleName">{{ row.sampleName }}</div>
             <div class="thumbnail-meta">
-              <span class="thumbnail-score" :class="`score-${getScoreStars(row.sampleScore)}`">{{ getScoreLabel(row.sampleScore) }}</span>
               <span class="thumbnail-label-flag">{{ row.labelFlag || '未标注' }}</span>
             </div>
           </div>
@@ -1158,7 +1470,7 @@ onMounted(() => {
                 </template>
               </el-table-column>
             </template>
-            <el-table-column v-if="!isTimeSeriesSet" label="质量评分" width="220">
+            <el-table-column v-if="!isTimeSeriesSet && !isImageSet" label="质量评分" width="220">
               <template #default="{ row }">
                 <div class="star-rating">
                   <span
@@ -1532,6 +1844,116 @@ onMounted(() => {
         </div>
       </div>
     </el-dialog>
+
+    <!-- 样本质检工作台 - 全屏模态框 -->
+    <div v-if="inspectionVisible" class="inspection-overlay">
+      <div class="inspection-modal" v-loading="inspectionLoading || inspectionAnnoLoading" element-loading-text="加载中...">
+        <!-- 顶部状态栏 -->
+        <div class="inspection-topbar">
+          <div class="inspection-sample-name">样本名称：{{ currentSample?.sampleName || '-' }}</div>
+          <div class="inspection-progress">
+            进度：{{ inspectionIndex + 1 }} / {{ actualCount }}
+            <span class="inspection-rated-info" v-if="ratedCount > 0">（已评分 {{ ratedCount }} 张）</span>
+          </div>
+          <div class="inspection-topbar-actions">
+            <span v-if="actualCount < SAMPLE_COUNT" class="inspection-hint">当前样本总量不足 {{ SAMPLE_COUNT }} 张，已全量抽取评估。</span>
+            <el-button size="small" @click="handleInspectionResample" :disabled="inspectionLoading">重新抽取</el-button>
+          </div>
+        </div>
+
+        <!-- 中央区域：左侧图片 + 右侧标注面板 -->
+        <div class="inspection-content">
+          <!-- 左侧：图片 + 左右箭头 -->
+          <div class="inspection-image-panel">
+            <button class="inspection-nav-arrow left" :disabled="inspectionIndex <= 0" @click="handleInspectionPrev">
+              <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 18l-6-6 6-6"/></svg>
+            </button>
+            <div class="inspection-image-wrap">
+              <template v-if="currentSample">
+                <!-- 无标注时显示普通 img -->
+                <template v-if="!inspectionAnnoData?.hasAnnotations">
+                  <img
+                    v-if="currentSample.filePath"
+                    :src="getImageUrl(currentSample.filePath)"
+                    class="inspection-img"
+                    @load="inspectionImageLoading = false"
+                    @error="inspectionImageLoading = false"
+                  />
+                  <div v-else class="inspection-img-placeholder">无图片</div>
+                </template>
+                <!-- 有标注时显示 canvas -->
+                <canvas v-else ref="inspectionCanvasRef" class="inspection-canvas" @click="handleInspectionCanvasClick"></canvas>
+              </template>
+              <div v-else class="inspection-empty"><p>暂无样本数据</p></div>
+            </div>
+            <button class="inspection-nav-arrow right" :disabled="inspectionIndex >= inspectionSamples.length - 1" @click="handleInspectionNext">
+              <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18l6-6-6-6"/></svg>
+            </button>
+          </div>
+
+          <!-- 右侧：标注面板 + 思维链 -->
+          <div class="inspection-sidebar">
+            <div class="inspection-anno-panel">
+              <div class="inspection-anno-header">标注信息</div>
+              <div class="inspection-anno-list">
+                <div
+                  v-for="(box, i) in inspectionAnnoData?.boxes || []"
+                  :key="i"
+                  class="inspection-anno-item"
+                  :class="{ active: inspectionSelectedBoxIndex === i }"
+                  @click="handleInspectionSelectBox(i)"
+                >
+                  <span class="inspection-anno-dot" :style="{ backgroundColor: boxColors[box.classId % boxColors.length] }"></span>
+                  <span class="inspection-anno-name">{{ box.className }}</span>
+                  <span class="inspection-anno-index">#{{ i + 1 }}</span>
+                </div>
+                <div v-if="!inspectionAnnoData?.boxes?.length" class="inspection-anno-empty">无标注信息</div>
+              </div>
+            </div>
+            <!-- 思维链（只读，可展开/收起） -->
+            <div class="inspection-think-box" v-if="currentSample?.labelThink">
+              <div class="inspection-think-header" @click="inspectionThinkCollapsed = !inspectionThinkCollapsed">
+                <span class="inspection-think-title">思维链</span>
+                <span class="inspection-think-toggle-icon">
+                  <svg v-if="!inspectionThinkCollapsed" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 15l-6-6-6 6"/></svg>
+                  <svg v-else width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9l6 6 6-6"/></svg>
+                </span>
+              </div>
+              <div class="inspection-think-body" v-show="!inspectionThinkCollapsed">
+                <pre class="inspection-think-text">{{ currentSample.labelThink }}</pre>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 底部操作栏 -->
+        <div class="inspection-bottombar">
+          <!-- 星级评分 -->
+          <div class="inspection-stars">
+            <span
+              v-for="star in 5"
+              :key="star"
+              class="inspection-star"
+              :class="{ active: star <= (inspectionHoverStar || currentStar) }"
+              @click="handleInspectionRate(star)"
+              @mouseenter="inspectionHoverStar = star"
+              @mouseleave="inspectionHoverStar = 0"
+              :title="`${star}星 - ${starLabels[star]}`"
+            >★</span>
+            <span class="inspection-star-label" v-if="currentStar > 0">{{ starLabels[currentStar] }}</span>
+            <span class="inspection-star-label unrated" v-else>未评分</span>
+          </div>
+          <!-- 提交/取消 -->
+          <div class="inspection-actions">
+            <el-button type="primary" :disabled="!allRated" :loading="inspectionSubmitting" @click="handleInspectionSubmit"
+              :title="!allRated ? `还剩 ${unratedCount} 张未评分` : ''">
+              提交评分
+            </el-button>
+            <el-button @click="handleInspectionCancel">取消</el-button>
+          </div>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -1595,7 +2017,7 @@ onMounted(() => {
 .page-actions {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 8px;
 }
 
 .view-toggle {
@@ -2785,5 +3207,335 @@ onMounted(() => {
 .ts-view-pagination {
   display: flex;
   justify-content: flex-end;
+}
+
+// ========== 样本质检工作台 ==========
+.inspection-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100vw;
+  height: 100vh;
+  background: rgba(0, 0, 0, 0.85);
+  z-index: 9999;
+  display: flex;
+  flex-direction: column;
+  padding: 0;
+}
+
+.inspection-modal {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  background: linear-gradient(135deg, rgba(17, 24, 39, 0.95) 0%, rgba(26, 35, 50, 0.9) 100%);
+  margin: 0;
+  overflow: hidden;
+}
+
+// 顶部状态栏
+.inspection-topbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px 24px;
+  border-bottom: 1px solid rgba(0, 212, 255, 0.15);
+  flex-shrink: 0;
+}
+
+.inspection-sample-name {
+  font-size: 14px;
+  color: rgba(255, 255, 255, 0.7);
+  min-width: 200px;
+}
+
+.inspection-progress {
+  font-size: 18px;
+  color: #fff;
+  font-weight: 500;
+  text-align: center;
+}
+
+.inspection-rated-info {
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.5);
+  font-weight: 400;
+  margin-left: 8px;
+}
+
+.inspection-hint {
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.35);
+  margin-right: 12px;
+}
+
+.inspection-topbar-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  min-width: 200px;
+  justify-content: flex-end;
+}
+
+// 中央区域
+.inspection-content {
+  flex: 1;
+  display: flex;
+  overflow: hidden;
+  min-height: 0;
+}
+
+// 左侧图片面板
+.inspection-image-panel {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+  overflow: hidden;
+}
+
+.inspection-image-wrap {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  max-width: 100%;
+  max-height: 100%;
+}
+
+.inspection-img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  border-radius: 4px;
+}
+
+.inspection-img-placeholder {
+  color: rgba(255, 255, 255, 0.3);
+  font-size: 18px;
+}
+
+.inspection-canvas {
+  border-radius: 4px;
+  cursor: default;
+}
+
+.inspection-empty {
+  color: rgba(255, 255, 255, 0.4);
+  font-size: 18px;
+}
+
+// 图片两侧导航箭头（圆形凸出样式）
+.inspection-nav-arrow {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  border: 1px solid rgba(0, 212, 255, 0.3);
+  background: rgba(0, 0, 0, 0.5);
+  color: #00d4ff;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s;
+  z-index: 10;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+
+  &.left { left: 12px; }
+  &.right { right: 12px; }
+
+  &:hover:not(:disabled) {
+    background: rgba(0, 0, 0, 0.7);
+    border-color: #00d4ff;
+    box-shadow: 0 4px 16px rgba(0, 212, 255, 0.25);
+    transform: translateY(-50%) scale(1.05);
+  }
+
+  &:disabled {
+    opacity: 0.2;
+    cursor: not-allowed;
+  }
+}
+
+// 右侧标注面板
+.inspection-sidebar {
+  width: 280px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  border-left: 1px solid rgba(0, 212, 255, 0.15);
+  overflow: hidden;
+}
+
+.inspection-anno-panel {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.inspection-anno-header {
+  padding: 12px 16px;
+  font-size: 14px;
+  color: rgba(0, 212, 255, 0.8);
+  font-weight: 500;
+  border-bottom: 1px solid rgba(0, 212, 255, 0.1);
+  flex-shrink: 0;
+}
+
+.inspection-anno-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 8px 0;
+}
+
+.inspection-anno-item {
+  display: flex;
+  align-items: center;
+  padding: 8px 16px;
+  cursor: pointer;
+  transition: background 0.15s;
+  gap: 8px;
+
+  &:hover {
+    background: rgba(0, 212, 255, 0.08);
+  }
+
+  &.active {
+    background: rgba(0, 212, 255, 0.15);
+  }
+}
+
+.inspection-anno-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.inspection-anno-name {
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.85);
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.inspection-anno-index {
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.35);
+  flex-shrink: 0;
+}
+
+.inspection-anno-empty {
+  padding: 24px 16px;
+  text-align: center;
+  color: rgba(255, 255, 255, 0.25);
+  font-size: 13px;
+}
+
+// 思维链（只读，可展开/收起）
+.inspection-think-box {
+  border-top: 1px solid rgba(0, 212, 255, 0.15);
+  flex-shrink: 0;
+}
+
+.inspection-think-header {
+  padding: 10px 16px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  cursor: pointer;
+  user-select: none;
+
+  &:hover {
+    background: rgba(0, 212, 255, 0.05);
+  }
+}
+
+.inspection-think-title {
+  font-size: 13px;
+  color: rgba(0, 212, 255, 0.8);
+  font-weight: 500;
+}
+
+.inspection-think-toggle-icon {
+  color: rgba(255, 255, 255, 0.4);
+  display: flex;
+  align-items: center;
+}
+
+.inspection-think-body {
+  padding: 0 16px 12px;
+  max-height: 160px;
+  overflow-y: auto;
+}
+
+.inspection-think-text {
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.7);
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+  margin: 0;
+  font-family: inherit;
+}
+
+// 底部操作栏
+.inspection-bottombar {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  padding: 16px 24px;
+  border-top: 1px solid rgba(0, 212, 255, 0.15);
+  flex-shrink: 0;
+  position: relative;
+}
+
+// 星级评分
+.inspection-stars {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.inspection-star {
+  font-size: 36px;
+  color: rgba(255, 255, 255, 0.15);
+  cursor: pointer;
+  transition: color 0.15s, transform 0.15s;
+  user-select: none;
+  line-height: 1;
+
+  &:hover {
+    transform: scale(1.15);
+  }
+
+  &.active {
+    color: #f5a623;
+  }
+}
+
+.inspection-star-label {
+  margin-left: 8px;
+  font-size: 14px;
+  color: #f5a623;
+
+  &.unrated {
+    color: rgba(255, 255, 255, 0.3);
+  }
+}
+
+.inspection-actions {
+  display: flex;
+  gap: 8px;
+  flex-shrink: 0;
+  position: absolute;
+  right: 24px;
 }
 </style>

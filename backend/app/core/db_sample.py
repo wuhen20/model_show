@@ -257,6 +257,61 @@ def insert_sample_info(set_no: str, sample_name: str, suffix: str, type_code: st
         conn.close()
 
 
+def random_sample_images(set_no: str, count: int = 30):
+    """从高质量样本集中随机抽取 count 张图片样本（type_code='05'）"""
+    conn = get_connection()
+    try:
+        with conn.cursor() as cursor:
+            if _is_oracle():
+                sql = """
+                    SELECT * FROM (
+                        SELECT sample_no, sample_name, suffix, file_path, file_size, label_think
+                        FROM s_sample_info
+                        WHERE set_no = %s AND type_code = '05'
+                        ORDER BY DBMS_RANDOM.VALUE()
+                    ) WHERE ROWNUM <= %s
+                """
+                _execute(cursor, sql, (set_no, count))
+            else:
+                sql = """
+                    SELECT sample_no, sample_name, suffix, file_path, file_size, label_think
+                    FROM s_sample_info
+                    WHERE set_no = %s AND type_code = '05'
+                    ORDER BY RAND()
+                    LIMIT %s
+                """
+                _execute(cursor, sql, (set_no, count))
+            return cursor.fetchall()
+    finally:
+        conn.close()
+
+
+def update_sample_set_quality_level(set_no: str, quality_level: str):
+    """更新样本集质量等级"""
+    conn = get_connection()
+    try:
+        with conn.cursor() as cursor:
+            sql = "UPDATE s_sample_set SET quality_level = %s WHERE set_no = %s"
+            _execute(cursor, sql, (quality_level, set_no))
+        conn.commit()
+        return cursor.rowcount
+    finally:
+        conn.close()
+
+
+def reset_sample_set_quality_level(set_no: str):
+    """清空样本集质量等级（导入新图片后调用）"""
+    conn = get_connection()
+    try:
+        with conn.cursor() as cursor:
+            sql = "UPDATE s_sample_set SET quality_level = NULL WHERE set_no = %s"
+            _execute(cursor, sql, (set_no,))
+        conn.commit()
+        return cursor.rowcount
+    finally:
+        conn.close()
+
+
 def update_sample_score(sample_no: str, sample_name: str, score_code: str):
     """更新样本质量评分（编码：01-优质/02-良好/03-一般/04-较差）"""
     conn = get_connection()

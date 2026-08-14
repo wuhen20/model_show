@@ -39,7 +39,8 @@ const menuItems: MenuItem[] = [
       { id: 'sampleset-ts', name: '时序样本集管理', path: '/timeseries/sample-set' },
       { id: 'sampleset-collect', name: '数据采集任务', path: '/collect-task' },
       { id: 'sampleset-clean', name: '样本数据清洗', path: '/clean-task' },
-      { id: 'sampleset-clean-result', name: '数据清洗结果', path: '/clean-result' }
+      { id: 'sampleset-clean-result', name: '数据清洗结果', path: '/clean-result' },
+      { id: 'sampleset-label', name: '标注任务管理', path: '/label-task' }
     ]
   },
   {

@@ -2,6 +2,7 @@ from fastapi import APIRouter, Query, UploadFile, File, Form
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 from app.core.database import query_code_dict, generate_sample_set_no
+from app.core.biz_constants import BizCode
 from app.core.db_sample import (
     query_original_sample_set, query_original_sample_info,
     save_original_sample_set, update_original_sample_set, insert_original_sample_info,
@@ -147,7 +148,7 @@ def _cleanup_storage(set_no: str, set_path: str | None):
 def save_sample_set_api(req: SaveSampleSetRequest):
     try:
         from app.core.config import settings
-        set_no = generate_sample_set_no()
+        set_no = generate_sample_set_no(BizCode.ORIGINAL_SAMPLE_SET)
         # 根据存储类型生成 set_path
         if is_minio_enabled():
             set_path = minio_build_set_path(set_no)

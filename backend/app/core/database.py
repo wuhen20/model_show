@@ -451,26 +451,31 @@ def _get_next_sequence_batch(counter_type: str, date_key: str, count: int) -> in
 
 
 def generate_task_no():
-    """生成任务编号：年月日+3位序列号，如 20260701001
+    """生成数据采集任务编号：年月日+业务编号+3位序列号，如 2026080403001
 
+    业务编号 03 为数据采集任务。
     使用独立计数器表 s_sequence_counter，确保序列号永不复用。
     即使删除了任务，新任务的序列号也会继续递增。
     """
+    from app.core.biz_constants import BizCode
     from datetime import datetime
     today = datetime.now().strftime('%Y%m%d')
     seq = _get_next_sequence('TASK_NO', today)
-    return f"{today}{seq:03d}"
+    return f"{today}{BizCode.DATA_COLLECT_TASK}{seq:03d}"
 
 
-def generate_sample_set_no():
-    """生成样本集编号：年月日+3位序列号，如 20260701001
+def generate_sample_set_no(biz_code: str):
+    """生成样本集编号：年月日+业务编号+3位序列号，如 2026080401001
 
+    业务编号：
+      01 - 高质量样本集
+      02 - 原始样本集
     使用独立计数器表 s_sequence_counter，确保序列号永不复用。
     """
     from datetime import datetime
     today = datetime.now().strftime('%Y%m%d')
     seq = _get_next_sequence('SAMPLE_SET_NO', today)
-    return f"{today}{seq:03d}"
+    return f"{today}{biz_code}{seq:03d}"
 
 
 def generate_sample_no():
@@ -485,26 +490,30 @@ def generate_sample_no():
 
 
 def generate_clean_task_no():
-    """生成清理任务编号：年月日+3位序列号，如 20260701001
+    """生成数据清洗任务编号：年月日+业务编号+3位序列号，如 2026080404001
 
+    业务编号 04 为数据清洗任务。
     使用独立计数器表 s_sequence_counter，确保序列号永不复用。
     即使删除了任务，新任务的序列号也会继续递增。
     """
+    from app.core.biz_constants import BizCode
     from datetime import datetime
     today = datetime.now().strftime('%Y%m%d')
     seq = _get_next_sequence('CLEAN_TASK_NO', today)
-    return f"{today}{seq:03d}"
+    return f"{today}{BizCode.DATA_CLEAN_TASK}{seq:03d}"
 
 
 def generate_import_task_no():
-    """生成样本导入任务编号：年月日+3位序列号，如 20260701001
+    """生成样本导入任务编号：年月日+业务编号+3位序列号，如 2026080405001
 
+    业务编号 05 为样本批量导入任务。
     用于分片上传 + 异步导入任务，序列号永不复用。
     """
+    from app.core.biz_constants import BizCode
     from datetime import datetime
     today = datetime.now().strftime('%Y%m%d')
     seq = _get_next_sequence('IMPORT_TASK_NO', today)
-    return f"{today}{seq:03d}"
+    return f"{today}{BizCode.BATCH_IMPORT_TASK}{seq:03d}"
 
 
 def generate_directory_no():

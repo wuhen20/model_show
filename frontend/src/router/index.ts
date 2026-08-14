@@ -24,6 +24,8 @@ const routes = [
   { path: '/clean-task', name: 'DataCleanTask', component: () => import('@/views/DataCleanTask.vue'), meta: { title: '样本数据清洗' } },
   { path: '/clean-task-edit', name: 'DataCleanTaskEdit', component: () => import('@/views/DataCleanTaskEdit.vue'), meta: { title: '清洗任务编排' } },
   { path: '/clean-result', name: 'DataCleanResult', component: () => import('@/views/DataCleanResult.vue'), meta: { title: '数据清洗结果' } },
+  { path: '/label-task', name: 'LabelTask', component: () => import('@/views/LabelTask.vue'), meta: { title: '标注任务管理' } },
+  { path: '/label-workbench', name: 'LabelWorkbench', component: () => import('@/views/LabelWorkbench.vue'), meta: { title: '标注工作台' } },
 
   // ===== 知识管理（liuqi-knowledgebase）=====
   { path: '/knowledge-management', name: 'KnowledgeManagement', component: () => import('@/views/KnowledgeManagement.vue'), meta: { title: '知识管理' } },

@@ -21,6 +21,7 @@
     "axios": "^1.17.0",
     "echarts": "^5.5.0",
     "element-plus": "^2.9.7",
+    "fabric": "^7.4.0",
     "vue": "^3.4.21",
     "vue-demi": "^0.14.6",
     "vue-router": "^4.3.0"

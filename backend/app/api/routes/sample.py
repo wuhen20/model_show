@@ -8,6 +8,7 @@ from app.core.database import (
     generate_sample_no,
     save_query_result_to_desktop,
 )
+from app.core.biz_constants import BizCode
 from app.core.db_sample import (
     query_sample_set, query_sample_info, save_sample_set, update_sample_set,
     update_sample_set_labels, get_annotation_by_sample_no, query_audio_text,
@@ -18,6 +19,7 @@ from app.core.db_sample import (
     create_directory, query_directory_tree, query_directory_by_id,
     query_directory_path, delete_directory, get_dir_path_by_id,
     delete_sample_set,
+    random_sample_images, update_sample_set_quality_level, reset_sample_set_quality_level,
 )
 from app.core.db_collect import (
     sample_statistic, sample_trend,
@@ -312,8 +314,76 @@ class UpdateSampleScoreRequest(BaseModel):
     scoreCode: str  # 01-优质/02-良好/03-一般/04-较差
 
 
+class RandomSampleRequest(BaseModel):
+    setNo: str
+    count: int = 30
+
+
+class QualityInspectionSubmitRequest(BaseModel):
+    setNo: str
+    averageStar: float
+
+
 class DeleteSampleSetRequest(BaseModel):
     setNo: str
+
+
+@router.post("/random-sample-images")
+def random_sample_images_api(req: RandomSampleRequest):
+    """随机抽取图片样本用于质检"""
+    try:
+        rows = random_sample_images(req.setNo, req.count)
+        data = []
+        for row in rows:
+            data.append({
+                "sampleNo": row["sample_no"],
+                "sampleName": row["sample_name"],
+                "suffix": row["suffix"],
+                "filePath": row["file_path"],
+                "fileSize": row["file_size"],
+                "labelThink": row["label_think"] or "",
+            })
+        return {"code": 0, "data": data}
+    except Exception as e:
+        logger.exception("接口异常")
+        return {"code": 1, "message": f"抽样失败: {str(e)}"}
+
+
+@router.post("/submit-quality-inspection")
+def submit_quality_inspection_api(req: QualityInspectionSubmitRequest):
+    """提交质检评分，计算平均星级并更新样本集质量等级"""
+    avg = req.averageStar
+    # 四舍五入取整映射：5星→01优质，4星→02良好，3星→03一般，2星/1星→04较差
+    rounded = round(avg)
+    star_to_code = {5: '01', 4: '02', 3: '03', 2: '04', 1: '04'}
+    if rounded not in star_to_code:
+        return {"code": 1, "message": "平均星级无效"}
+    quality_level = star_to_code[rounded]
+    try:
+        rowcount = update_sample_set_quality_level(req.setNo, quality_level)
+        if rowcount == 0:
+            return {"code": 1, "message": "未找到对应样本集"}
+        return {"code": 0, "message": "质检评分提交成功"}
+    except Exception as e:
+        logger.exception("接口异常")
+        return {"code": 1, "message": f"提交失败: {str(e)}"}
+
+
+class ResetQualityLevelRequest(BaseModel):
+    setNo: str
+
+
+@router.post("/reset-quality-level")
+def reset_quality_level_api(req: ResetQualityLevelRequest):
+    """清空样本集质量等级（导入新图片后调用）"""
+    try:
+        rowcount = reset_sample_set_quality_level(req.setNo)
+        if rowcount == 0:
+            return {"code": 1, "message": "未找到对应样本集"}
+        return {"code": 0, "message": "质量等级已重置"}
+    except Exception as e:
+        logger.exception("接口异常")
+        return {"code": 1, "message": f"重置失败: {str(e)}"}
 
 
 @router.post("/delete-sample-set")
@@ -370,7 +440,7 @@ def _cleanup_storage(set_no: str, set_path: str | None):
 def save_sample_set_api(req: SaveSampleSetRequest):
     try:
         from app.core.config import settings
-        set_no = generate_sample_set_no()
+        set_no = generate_sample_set_no(BizCode.HIGH_QUALITY_SAMPLE_SET)
         # 根据存储类型生成 set_path
         if is_minio_enabled():
             # MinIO 模式：以 setNo 作为对象 key 前缀（桶下"路径"）

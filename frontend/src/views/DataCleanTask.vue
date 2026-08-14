@@ -184,7 +184,7 @@ function statusColor(statusCode: string): string {
 async function handleExecute(task: CleanTask) {
   const isImage = task.sampleType === '05'
   const confirmMsg = isImage
-    ? '确认执行该清洗任务？执行后将检测并标记问题图片（文件不会移动，仍在原位置）。'
+    ? '确认执行该清洗任务？执行后将检测并标记问题图片'
     : '确认执行该清洗任务？执行后清洗结果将以 JSON 文件保存到服务器。'
   try {
     await ElMessageBox.confirm(confirmMsg, '提示', { type: 'warning' })

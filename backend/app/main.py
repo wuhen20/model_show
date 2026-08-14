@@ -49,6 +49,7 @@ from app.api.routes.sample import router as sample_router
 from app.api.routes.clean import router as clean_router
 from app.api.routes.original_sample import router as original_sample_router
 from app.api.routes.upload_chunk import router as upload_chunk_router
+from app.api.routes.label import router as label_router
 
 # ===== 知识管理（liuqi-knowledgebase）=====
 from app.api.routes import knowledge as kb_knowledge
@@ -171,6 +172,7 @@ app.include_router(sample_router, prefix="/api/sample", tags=["样本管理"])
 app.include_router(clean_router, prefix="/api/clean", tags=["样本数据清理"])
 app.include_router(original_sample_router, prefix="/api/original-sample", tags=["原始样本管理"])
 app.include_router(upload_chunk_router, prefix="/api/upload-chunk", tags=["样本批量导入(分片上传)"])
+app.include_router(label_router, prefix="/api/label", tags=["标注任务管理"])
 
 # ===== 知识管理 =====
 app.include_router(kb_knowledge.router, prefix="/api/knowledge", tags=["知识管理"])
