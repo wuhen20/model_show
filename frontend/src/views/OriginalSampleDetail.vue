@@ -3,9 +3,9 @@ import { ref, computed, nextTick, onMounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import Header from '@/components/Header.vue'
 import Sidebar from '@/components/Sidebar.vue'
-import { getSamples, getImageUrl, getAnnotations, getAudioText, updateSampleScore, uploadSamples, uploadSamplesBatch, saveLabelThink, queryTimeSeriesData, getClasses, getSamplesByLabels, getDirectoryTree, getDirectoryPath, createDirectory, deleteDirectory, type SampleInfoRow, type AnnotationData, type AnnotationBox, type DirectoryNode, type DirectoryPathItem, type TimeSeriesColumn } from '@/api/originalSample'
+import { getSamples, getImageUrl, getAnnotations, getAudioText, updateSampleScore, uploadSamples, uploadSamplesBatch, saveLabelThink, queryTimeSeriesData, getClasses, getSamplesByLabels, getDirectoryTree, getDirectoryPath, createDirectory, deleteDirectory, getDbTables, bindTable, importTimeSeriesData, clearTimeSeriesData, type SampleInfoRow, type AnnotationData, type AnnotationBox, type DirectoryNode, type DirectoryPathItem, type TimeSeriesColumn } from '@/api/originalSample'
 import ChunkUploadDialog from '@/components/ChunkUploadDialog.vue'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElMessage, ElMessageBox, ElLoading } from 'element-plus'
 
 const route = useRoute()
 const router = useRouter()
@@ -134,6 +134,136 @@ function openBatchDialog() {
 function handleBatchUploadSuccess() {
   loadSamples()
   if (isImageSet.value) loadDirectoryTree()
+}
+
+// ========== CSV/Excel 导入弹框（仅时序类型）==========
+const importDialogVisible = ref(false)
+// 当前导入弹窗展示的绑定表（null 表示尚未绑定，需先选表绑定）
+const importBindingTable = ref<string | null>(null)
+// 未绑定时：待绑定的表名选择
+const importSelectedTable = ref('')
+const importTableOptions = ref<string[]>([])
+const importTableLoading = ref(false)
+const importBinding = ref(false)
+// 待导入的文件
+const importFileList = ref<File[]>([])
+const importDisplayList = ref<any[]>([])
+
+/** 打开导入弹窗：展示当前绑定表；未绑定时加载数据库表清单供选择 */
+async function openImportDialog() {
+  if (!isTimeSeriesSet.value) return
+  importBindingTable.value = tsTargetTable.value || null
+  importSelectedTable.value = ''
+  importFileList.value = []
+  importDisplayList.value = []
+  importDialogVisible.value = true
+  if (!importBindingTable.value) {
+    loadImportTableOptions()
+  }
+}
+
+async function loadImportTableOptions() {
+  if (importTableLoading.value) return
+  importTableLoading.value = true
+  try {
+    importTableOptions.value = await getDbTables()
+  } catch {
+    importTableOptions.value = []
+  } finally {
+    importTableLoading.value = false
+  }
+}
+
+/** 选定表后立即绑定（首次绑定，绑定后永久锁定，绑定前二次确认） */
+async function handleImportTableChange(tableName: string) {
+  if (!tableName) return
+  try {
+    await ElMessageBox.confirm(
+      `绑定后目标表名将永久锁定，不可更改。确认绑定表「${tableName}」吗？`,
+      '绑定目标表',
+      { confirmButtonText: '确认绑定', cancelButtonText: '取消', type: 'warning' }
+    )
+  } catch {
+    // 用户取消，还原选择
+    importSelectedTable.value = ''
+    return
+  }
+  importBinding.value = true
+  try {
+    const canonical = await bindTable(setNo.value, tableName.trim())
+    importBindingTable.value = canonical
+    ElMessage.success(`绑定成功，目标表：${canonical}`)
+  } catch (e: any) {
+    importSelectedTable.value = ''
+    ElMessage.error(e.message || '绑定失败')
+  } finally {
+    importBinding.value = false
+  }
+}
+
+function handleImportFileChange(_file: any, fileList: any[]) {
+  importFileList.value = fileList.map((f: any) => f.raw)
+}
+
+function handleImportFileRemove(_file: any, fileList: any[]) {
+  importFileList.value = fileList.map((f: any) => f.raw)
+}
+
+/** 确认导入：解析 CSV/Excel，列名忽略大小写匹配后追加写入绑定表（整体事务） */
+async function handleImportConfirm() {
+  if (!importBindingTable.value) {
+    ElMessage.warning('请先选择目标表完成绑定')
+    return
+  }
+  if (importFileList.value.length === 0) {
+    ElMessage.warning('请选择要导入的文件')
+    return
+  }
+  const file = importFileList.value[0]
+  const ext = '.' + (file.name.split('.').pop() || '').toLowerCase()
+  if (!['.csv', '.xlsx', '.xls'].includes(ext)) {
+    ElMessage.warning('仅支持 CSV、Excel（.xlsx/.xls）文件导入')
+    return
+  }
+
+  const loadingInstance = ElLoading.service({ lock: true, text: '正在导入数据...', background: 'rgba(0,0,0,0.7)' })
+  try {
+    const msg = await importTimeSeriesData(setNo.value, file)
+    ElMessage.success(msg)
+    importDialogVisible.value = false
+    // 导入成功后回到第一页刷新数据
+    tsCurrentPage.value = 1
+    await loadSamples()
+  } catch (e: any) {
+    ElMessage.error(e.message || '导入失败')
+  } finally {
+    loadingInstance.close()
+  }
+}
+
+/** 清空时序样本集绑定的目标表数据 */
+async function handleClearData() {
+  try {
+    await ElMessageBox.confirm('确定要清除该时序样本集绑定的目标表数据吗？此操作不可恢复。', '确认清除', {
+      confirmButtonText: '确定清除',
+      cancelButtonText: '取消',
+      type: 'warning',
+    })
+  } catch {
+    return
+  }
+  const loadingInstance = ElLoading.service({ lock: true, text: '正在清除数据...', background: 'rgba(0,0,0,0.7)' })
+  try {
+    const msg = await clearTimeSeriesData(setNo.value)
+    ElMessage.success(msg || '数据已清除')
+    // 清除后回到第一页刷新数据
+    tsCurrentPage.value = 1
+    await loadSamples()
+  } catch (e: any) {
+    ElMessage.error(e.message || '清除失败')
+  } finally {
+    loadingInstance.close()
+  }
 }
 
 // 筛选条件
@@ -924,6 +1054,8 @@ onMounted(() => {
               </button>
             </div>
             <el-button v-if="!isTimeSeriesSet" type="primary" @click="openUploadDialog">上传样本</el-button>
+            <el-button v-if="isTimeSeriesSet" type="primary" @click="openImportDialog">导入</el-button>
+            <el-button v-if="isTimeSeriesSet" type="danger" plain @click="handleClearData">数据清除</el-button>
             <el-button v-if="isImageSet" @click="openBatchDialog">批量导入</el-button>
           </div>
         </div>
@@ -1013,7 +1145,8 @@ onMounted(() => {
               <el-table-column
                 :prop="col.key"
                 :label="col.label"
-                :min-width="col.key === 'filePath' ? 200 : col.key === 'sampleName' ? 180 : undefined"
+                :min-width="col.key === 'filePath' ? 200 : col.key === 'sampleName' ? 180 : 130"
+                show-overflow-tooltip
               >
                 <template v-if="col.key === 'sampleName'" #default="{ row }">
                   <span v-if="isPreviewable(row)" class="link-name" @click="openPreview(row)">{{ row[col.key] ?? '-' }}</span>
@@ -1111,6 +1244,56 @@ onMounted(() => {
       <template #footer>
         <el-button type="primary" :loading="uploadSaving" @click="handleUploadConfirm">确认上传</el-button>
         <el-button @click="uploadDialogVisible = false">取消</el-button>
+      </template>
+    </el-dialog>
+
+    <!-- CSV/Excel 导入弹框（仅时序类型） -->
+    <el-dialog v-model="importDialogVisible" title="导入数据" width="520px" :close-on-click-modal="false" class="upload-dialog">
+      <div class="upload-dialog-content">
+        <!-- 最上方：当前绑定的目标表 -->
+        <div class="upload-info-row" v-if="importBindingTable">
+          <span class="upload-info-label">绑定表：</span>
+          <span class="upload-info-value import-table-name">{{ importBindingTable }}</span>
+        </div>
+        <div class="import-bind-area" v-else>
+          <div class="import-bind-label">该样本集尚未绑定目标表，请先选择目标表绑定后才能导入数据</div>
+          <el-select
+            v-model="importSelectedTable"
+            placeholder="选择或输入数据库表名"
+            filterable
+            allow-create
+            default-first-option
+            :loading="importTableLoading"
+            :disabled="importBinding"
+            style="width: 100%"
+            popper-class="upload-dialog-popper"
+            @change="handleImportTableChange"
+          >
+            <el-option v-for="t in importTableOptions" :key="t" :label="t" :value="t" />
+          </el-select>
+          <div class="import-bind-tip">绑定后目标表名将永久锁定，不可更改；请谨慎选择</div>
+        </div>
+        <el-upload
+          accept=".csv,.xlsx,.xls"
+          :auto-upload="false"
+          :file-list="importDisplayList"
+          :on-change="handleImportFileChange"
+          :on-remove="handleImportFileRemove"
+          :disabled="!importBindingTable"
+          drag
+        >
+          <div class="upload-drag-content">
+            <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="rgba(0,212,255,0.5)" stroke-width="1.5">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M17 8l-5-5-5 5M12 3v12"/>
+            </svg>
+            <p>将文件拖到此处，或<em>点击上传</em></p>
+            <p class="upload-tip">支持 CSV、Excel（.xlsx/.xls）；按列名忽略大小写匹配，仅导入绑定表已有的字段</p>
+          </div>
+        </el-upload>
+      </div>
+      <template #footer>
+        <el-button type="primary" :disabled="!importBindingTable" @click="handleImportConfirm">确认导入</el-button>
+        <el-button @click="importDialogVisible = false">取消</el-button>
       </template>
     </el-dialog>
 
@@ -2497,6 +2680,11 @@ onMounted(() => {
   }
   .upload-info-value {
     color: rgba(255, 255, 255, 0.85);
+  }
+  .import-table-name {
+    font-size: 16px;
+    font-weight: 500;
+    color: #00d4ff;
   }
   .upload-subdir-row {
     display: flex;

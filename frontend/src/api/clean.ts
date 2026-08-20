@@ -165,6 +165,7 @@ export interface CleanResult {
   taskName: string
   sampleTypeCode: string
   executeStatus: string
+  executeStatusName: string
   startTime: string
   endTime: string
   resultCount: number
@@ -327,4 +328,14 @@ export async function rollbackCleanPics(taskNo: string, cleanLogId?: number): Pr
   const json = await res.json()
   if (json.code !== 0) throw new Error(json.message || '回滚失败')
   return json.data
+}
+
+export async function deleteCleanResultFile(recordId: number): Promise<void> {
+  const res = await fetch(`${BASE_URL}/delete-clean-result-file`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ recordId })
+  })
+  const json = await res.json()
+  if (json.code !== 0) throw new Error(json.message || '删除失败')
 }

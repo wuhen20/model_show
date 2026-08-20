@@ -13,6 +13,8 @@ from app.core.database import (
     _date_format,
     _limit_sql,
     _is_oracle,
+    _quote_ident,
+    _show_columns_sql,
     _get_next_sequence,
     _get_next_sequence_batch,
     generate_directory_no,
@@ -208,7 +210,7 @@ def get_sample_set_path(set_no: str):
     conn = get_connection()
     try:
         with conn.cursor() as cursor:
-            sql = "SELECT set_path, set_name, sample_labels FROM s_sample_set WHERE set_no = %s"
+            sql = "SELECT set_path, set_name, sample_labels, type_code FROM s_sample_set WHERE set_no = %s"
             _execute(cursor, sql, (set_no,))
             return cursor.fetchone()
     finally:
@@ -544,6 +546,7 @@ def query_original_sample_set():
                         and scd.sort_no = 'QUALITY_LEVEL') as quality_level_name,
                     s.business_system,
                     s.set_path,
+                    s.binding_table,
                     {_date_format('s.update_time')} as update_time,
                     {_date_format('s.create_time')} as create_time,
                     s.version,
@@ -573,7 +576,7 @@ def query_original_sample_set_by_type(type_code: str):
     try:
         with conn.cursor() as cursor:
             sql = """
-                SELECT set_no, set_name, set_description, type_code, business_system
+                SELECT set_no, set_name, set_description, type_code, business_system, binding_table
                 FROM s_original_sample_set
                 WHERE type_code = %s
                 ORDER BY update_time DESC, create_time DESC
@@ -585,13 +588,13 @@ def query_original_sample_set_by_type(type_code: str):
 
 
 def save_original_sample_set(data: dict):
-    """新增原始样本集"""
+    """新增原始样本集（binding_table 仅时序类型样本集使用，创建时可空）"""
     conn = get_connection()
     try:
         with conn.cursor() as cursor:
             sql = """
-                INSERT INTO s_original_sample_set (set_no, set_name, set_description, business_system, type_code, sample_field, set_path)
-                VALUES (%(setCode)s, %(setName)s, %(description)s, %(businessSystem)s, %(sampleTypeCode)s, %(sampleFieldCode)s, %(setPath)s)
+                INSERT INTO s_original_sample_set (set_no, set_name, set_description, business_system, type_code, sample_field, set_path, binding_table)
+                VALUES (%(setCode)s, %(setName)s, %(description)s, %(businessSystem)s, %(sampleTypeCode)s, %(sampleFieldCode)s, %(setPath)s, %(bindingTable)s)
             """
             _execute(cursor, sql, data)
         conn.commit()
@@ -681,47 +684,35 @@ def query_original_sample_info(set_no: str, dir_id: str = None):
 
 
 def query_time_series_data_by_set_no(set_no: str, page: int = 1, page_size: int = 20):
-    """时序类型原始样本集：通过样本集编号关联查询采集任务目标表数据
-    链路：set_no → s_data_collect_task.original_sample_set_no → task_no
-         → s_data_collect_task_det.target_table → 分页查询目标表
+    """时序类型原始样本集：直接根据样本集绑定的目标表（binding_table）分页查询数据
+
+    不再通过"关联采集任务 → 任务明细目标表"链路取表，
+    避免多个采集任务关联同一样本集且目标表不同时查询异常。
     返回: {target_table, total, rows, columns}
     """
     conn = get_connection()
     try:
         with conn.cursor() as cursor:
-            # 1. 查询 task_no
-            sql_task = _limit_sql("""
-                SELECT task_no FROM s_data_collect_task
-                WHERE original_sample_set_no = %s
-                ORDER BY create_time DESC
+            # 1. 查询样本集绑定的目标表
+            sql_set = _limit_sql("""
+                SELECT binding_table FROM s_original_sample_set
+                WHERE set_no = %s
             """, 1)
-            _execute(cursor, sql_task, (set_no,))
-            task_row = cursor.fetchone()
-            if not task_row:
+            _execute(cursor, sql_set, (set_no,))
+            set_row = cursor.fetchone()
+            if not set_row:
                 return {"target_table": None, "total": 0, "rows": [], "columns": []}
-            task_no = task_row.get("task_no") if isinstance(task_row, dict) else task_row[0]
-
-            # 2. 查询 target_table
-            sql_det = _limit_sql("""
-                SELECT target_table FROM s_data_collect_task_det
-                WHERE task_no = %s
-                ORDER BY record_id DESC
-            """, 1)
-            _execute(cursor, sql_det, (task_no,))
-            det_row = cursor.fetchone()
-            if not det_row:
-                return {"target_table": None, "total": 0, "rows": [], "columns": []}
-            target_table = det_row.get("target_table") if isinstance(det_row, dict) else det_row[0]
+            target_table = set_row.get("binding_table") if isinstance(set_row, dict) else set_row[0]
             if not target_table:
                 return {"target_table": None, "total": 0, "rows": [], "columns": []}
 
-            # 3. 查询总记录数
-            sql_count = f"SELECT COUNT(*) AS cnt FROM {target_table}"
+            # 2. 查询总记录数
+            sql_count = f"SELECT COUNT(*) AS cnt FROM {_quote_ident(target_table)}"
             _execute(cursor, sql_count, ())
             count_row = cursor.fetchone()
             total = count_row.get("cnt", 0) if isinstance(count_row, dict) else count_row[0]
 
-            # 4. 分页查询数据
+            # 3. 分页查询数据
             offset = (page - 1) * page_size
             if _is_oracle():
                 sql_data = f"""
@@ -731,7 +722,7 @@ def query_time_series_data_by_set_no(set_no: str, page: int = 1, page_size: int 
                     ) WHERE rn > {offset}
                 """
             else:
-                sql_data = f"SELECT * FROM {target_table} LIMIT {page_size} OFFSET {offset}"
+                sql_data = f"SELECT * FROM {_quote_ident(target_table)} LIMIT {page_size} OFFSET {offset}"
             _execute(cursor, sql_data, ())
             rows = cursor.fetchall()
 
@@ -757,6 +748,129 @@ def query_time_series_data_by_set_no(set_no: str, page: int = 1, page_size: int 
                 "rows": clean_rows,
                 "columns": columns,
             }
+    finally:
+        conn.close()
+
+
+def get_original_sample_set_binding(set_no: str):
+    """查询原始样本集的样本类型与绑定表信息（用于绑定/导入前校验）"""
+    conn = get_connection()
+    try:
+        with conn.cursor() as cursor:
+            sql = _limit_sql("""
+                SELECT set_no, type_code, binding_table
+                FROM s_original_sample_set
+                WHERE set_no = %s
+            """, 1)
+            _execute(cursor, sql, (set_no,))
+            return cursor.fetchone()
+    finally:
+        conn.close()
+
+
+def bind_original_sample_set_table(set_no: str, table_name: str):
+    """首次绑定原始样本集的目标表（binding_table 一旦绑定永久锁定，仅允许从空值绑定）
+
+    返回 {success, reason}
+    """
+    conn = get_connection()
+    try:
+        with conn.cursor() as cursor:
+            # 仅允许 binding_table 为空时绑定（防止并发/重复绑定覆盖）
+            sql = """
+                UPDATE s_original_sample_set
+                SET binding_table = %s
+                WHERE set_no = %s
+                  AND (binding_table IS NULL OR binding_table = '')
+            """
+            _execute(cursor, sql, (table_name, set_no))
+            rowcount = cursor.rowcount
+        conn.commit()
+        if rowcount == 0:
+            return {"success": False, "reason": "该样本集已绑定目标表，绑定后不可更改"}
+        return {"success": True}
+    finally:
+        conn.close()
+
+
+def _list_table_columns(cursor, table_name: str) -> list[str]:
+    """查询指定表的全部列名（忽略大小写返回实际列名）"""
+    _execute(cursor, _show_columns_sql(table_name))
+    rows = cursor.fetchall()
+    cols = []
+    for col in rows:
+        if isinstance(col, dict):
+            name = col.get("field") or col.get("Field") or ""
+        else:
+            name = col[0]
+        if name:
+            cols.append(name)
+    return cols
+
+
+def import_time_series_data(set_no: str, binding_table: str, df):
+    """将 CSV/Excel 解析出的数据按列名匹配（忽略大小写）追加写入样本集绑定的目标表。
+
+    - 只写入目标表中实际存在的列，文件中匹配不到表列名的字段直接忽略
+    - 整体事务：任一批次写入失败则全部回滚
+    - 返回 {insert_count, matched_columns, ignored_columns}
+    """
+    import pandas as pd
+
+    conn = get_connection()
+    try:
+        with conn.cursor() as cursor:
+            # 1. 查询目标表实际列名（Oracle 返回大写，MySQL 返回实际大小写）
+            table_cols = _list_table_columns(cursor, binding_table)
+            if not table_cols:
+                raise ValueError(f"目标表 {binding_table} 不存在或没有字段")
+
+            # 2. 列名匹配（忽略大小写）：文件列 → 表列
+            table_cols_lower = {}
+            for c in table_cols:
+                table_cols_lower.setdefault(c.lower(), c)
+            matched = {}  # 文件列名 -> 表列名
+            for file_col in df.columns:
+                key = str(file_col).strip().lower()
+                if key in table_cols_lower and table_cols_lower[key] not in matched.values():
+                    matched[str(file_col)] = table_cols_lower[key]
+
+            if not matched:
+                raise ValueError(
+                    f"文件列与目标表 {binding_table} 的字段无匹配"
+                    f"（文件列: {list(map(str, df.columns))}，表字段: {table_cols}）"
+                )
+
+            # 3. 构建追加 INSERT（只包含匹配到的列）
+            target_columns = list(matched.values())
+            col_names = ", ".join(_quote_ident(c) for c in target_columns)
+            placeholders = ", ".join(["%s"] * len(target_columns))
+            insert_sql = f"INSERT INTO {_quote_ident(binding_table)} ({col_names}) VALUES ({placeholders})"
+
+            # 4. 组装数据行（NaN/NaT → None），整体事务批量写入
+            batch_values = []
+            for _, row in df.iterrows():
+                values = []
+                for file_col in matched.keys():
+                    v = row[file_col]
+                    if v is None or (isinstance(v, float) and pd.isna(v)) or v is pd.NaT:
+                        v = None
+                    values.append(v)
+                batch_values.append(tuple(values))
+
+            if batch_values:
+                _executemany(cursor, insert_sql, batch_values)
+        conn.commit()
+
+        ignored = [str(c) for c in df.columns if str(c) not in matched]
+        return {
+            "insert_count": len(batch_values),
+            "matched_columns": target_columns,
+            "ignored_columns": ignored,
+        }
+    except Exception:
+        conn.rollback()
+        raise
     finally:
         conn.close()
 
@@ -1199,5 +1313,39 @@ def delete_original_sample_set(set_no: str) -> dict:
             _execute(cursor, "DELETE FROM s_original_sample_set WHERE set_no = %s", (set_no,))
         conn.commit()
         return {"success": True, "set_path": set_path}
+    finally:
+        conn.close()
+
+
+def clear_time_series_data(set_no: str) -> dict:
+    """清空时序样本集绑定的目标表数据
+
+    仅允许时序类型（02）且已绑定目标表的样本集操作。
+    返回: {success: bool, reason?: str, count?: int}
+    """
+    conn = get_connection()
+    try:
+        with conn.cursor() as cursor:
+            # 1. 校验样本集
+            _execute(cursor, "SELECT binding_table, type_code FROM s_original_sample_set WHERE set_no = %s", (set_no,))
+            row = cursor.fetchone()
+            if not row:
+                return {"success": False, "reason": "样本集不存在"}
+            binding_table = row["binding_table"] if isinstance(row, dict) else row[0]
+            type_code = row["type_code"] if isinstance(row, dict) else row[1]
+            if type_code != "02":
+                return {"success": False, "reason": "仅时序类型样本集支持此操作"}
+            if not binding_table:
+                return {"success": False, "reason": "该样本集尚未绑定目标表，无数据可清除"}
+
+            # 2. 清空数据
+            # 注意：不做 user_tables 之类的存在性预检。系统通过 CURRENT_SCHEMA 切换 schema，
+            # 绑定表可能位于其它 schema（user_tables 查不到，导致误报"表不存在"），
+            # 因此直接按表名执行 DELETE，表不存在时由数据库抛错，由接口层返回错误信息。
+            del_sql = f"DELETE FROM {_quote_ident(binding_table)}"
+            _execute(cursor, del_sql, ())
+            deleted = cursor.rowcount
+        conn.commit()
+        return {"success": True, "count": deleted}
     finally:
         conn.close()

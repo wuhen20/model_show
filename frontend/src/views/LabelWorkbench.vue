@@ -89,6 +89,7 @@ const selectedAnnoIndex = ref<number | null>(null)
 // 保存状态
 const isSaving = ref(false)
 const imageLoading = ref(false)
+const noDefectMode = ref(false) // 无缺陷模式
 
 // ==================== 工具函数 ====================
 
@@ -159,6 +160,10 @@ function restoreSnapshot(snap: AnnotationSnapshot[]) {
 
 function updateAnnotationsList() {
   annotations.value = getCurrentSnapshot()
+  // 新增了标注时，自动退出无缺陷模式
+  if (noDefectMode.value && annotations.value.length > 0) {
+    noDefectMode.value = false
+  }
 }
 
 // YOLO 格式序列化（坐标相对图片左上角，归一化）
@@ -599,6 +604,24 @@ function toggleDrawMode() {
   }
 }
 
+// ==================== 无缺陷按钮切换 ====================
+function toggleNoDefect() {
+  if (!noDefectMode.value) {
+    // 进入无缺陷模式：清空所有标注框
+    if (canvas) {
+      // 移除所有标注 Rect（保留背景图片）
+      const rects = canvas.getObjects().filter(obj => obj instanceof fabric.Rect && (obj as any).classId !== undefined)
+      rects.forEach(obj => canvas.remove(obj))
+      canvas.renderAll()
+    }
+    annotations.value = []
+    noDefectMode.value = true
+  } else {
+    // 退出无缺陷模式
+    noDefectMode.value = false
+  }
+}
+
 // ==================== 删除键 ====================
 
 function handleKeyDown(e: KeyboardEvent) {
@@ -717,6 +740,10 @@ async function loadImageAndAnnotations(sample: LabelSampleRow) {
         pendingLabelContent = detail.labelContent
       }
     }
+    // 根据已保存的 labelFlag 恢复无缺陷模式
+    if (detail?.labelFlag === 2) {
+      noDefectMode.value = true
+    }
   } catch (e) {
     console.error('加载图片失败:', e)
     ElMessage.error('加载图片失败')
@@ -730,7 +757,13 @@ async function loadImageAndAnnotations(sample: LabelSampleRow) {
 async function autoSave() {
   if (!currentSample.value || !canvas) return
   const yolo = serializeToYolo()
-  const labelFlag = yolo ? '1' : '0'
+  // label_flag: 0未标注 / 1有标签 / 2无缺陷
+  let labelFlag: number
+  if (noDefectMode.value) {
+    labelFlag = 2
+  } else {
+    labelFlag = yolo ? 1 : 0
+  }
   isSaving.value = true
   try {
     await saveLabelContent(currentSample.value.recordId, yolo, labelFlag)
@@ -758,6 +791,8 @@ async function selectSample(index: number) {
   }
 
   currentIndex.value = index
+  // 切换图片时重置无缺陷模式
+  noDefectMode.value = false
   await loadImageAndAnnotations(samples.value[index])
 }
 
@@ -916,7 +951,13 @@ function goBack() {
                 :class="{ active: i === currentIndex }"
                 @click="selectSample(i)"
               >
-                <span class="file-dot" :class="{ labeled: sample.labelFlag === '1' }"></span>
+                <span v-if="sample.labelFlag === 2" class="file-check" title="无缺陷">
+                  <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
+                    <circle cx="6" cy="6" r="6" fill="#00d4ff"/>
+                    <path d="M3 6l2.5 2.5L9 4" stroke="#fff" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+                  </svg>
+                </span>
+                <span v-else class="file-dot" :class="{ labeled: sample.labelFlag === 1 }"></span>
                 <span class="file-name" :title="sample.sampleName">{{ sample.sampleName }}</span>
               </div>
               <div v-if="samplesLoading && samples.length > 0" class="loading-more">加载中...</div>
@@ -936,7 +977,21 @@ function goBack() {
 
           <!-- 右侧标注列表 -->
           <div class="sidebar-right">
-            <div class="sidebar-header">标注列表 ({{ annotations.length }})</div>
+            <div class="sidebar-header">
+              <span>已标注标签 ({{ annotations.length }})</span>
+              <button
+                class="no-defect-btn"
+                :class="{ active: noDefectMode }"
+                @click="toggleNoDefect"
+                :title="noDefectMode ? '点击取消无缺陷状态' : '标记为无缺陷样本'"
+              >
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/>
+                  <polyline points="22 4 12 14.01 9 11.01"/>
+                </svg>
+                无缺陷
+              </button>
+            </div>
             <div class="anno-list">
               <div
                 v-for="(anno, i) in annotations"
@@ -1010,7 +1065,6 @@ function goBack() {
   display: flex;
   flex-direction: column;
   height: 100vh;
-  background: #0d1117;
   overflow: hidden;
 }
 
@@ -1111,6 +1165,40 @@ function goBack() {
   font-weight: 500;
   border-bottom: 1px solid rgba(0, 212, 255, 0.1);
   flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.no-defect-btn {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px;
+  border-radius: 4px;
+  border: 1px solid rgba(0, 255, 136, 0.4);
+  background: rgba(0, 255, 136, 0.08);
+  color: rgba(0, 255, 136, 0.7);
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.2s;
+  line-height: 1;
+
+  &:hover {
+    background: rgba(0, 255, 136, 0.15);
+    color: #00ff88;
+  }
+
+  &.active {
+    background: rgba(0, 255, 136, 0.2);
+    color: #00ff88;
+    box-shadow: 0 0 8px rgba(0, 255, 136, 0.3);
+  }
+
+  svg {
+    flex-shrink: 0;
+  }
 }
 
 .file-list {
@@ -1146,6 +1234,15 @@ function goBack() {
   &.labeled {
     background: #00ff88;
   }
+}
+
+.file-check {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 12px;
+  height: 12px;
+  flex-shrink: 0;
 }
 
 .file-name {
@@ -1196,7 +1293,7 @@ function goBack() {
   bottom: 12px;
   left: 50%;
   transform: translateX(-50%);
-  color: rgba(255, 255, 255, 0.25);
+  color: rgba(255, 255, 255, 0.55);
   font-size: 11px;
   pointer-events: none;
 }

@@ -11,6 +11,8 @@ from app.core.db_sample import (
     create_directory, query_directory_tree, query_directory_by_id,
     query_directory_path, delete_directory, get_dir_path_by_id,
     delete_original_sample_set,
+    get_original_sample_set_binding, bind_original_sample_set_table,
+    import_time_series_data, clear_time_series_data,
 )
 from app.services.sample_minio_service import (
     is_minio_enabled, is_minio_path,
@@ -82,6 +84,7 @@ class SaveSampleSetRequest(BaseModel):
     sampleTypeName: str = ""
     sampleFieldCode: str = ""
     sampleFieldName: str = ""
+    bindingTable: str = ""  # 时序类型专用：绑定的目标表名（"暂空（待采集）"时为空）
 
 
 class UpdateSampleSetRequest(BaseModel):
@@ -148,6 +151,17 @@ def _cleanup_storage(set_no: str, set_path: str | None):
 def save_sample_set_api(req: SaveSampleSetRequest):
     try:
         from app.core.config import settings
+        binding_table = req.bindingTable.strip()
+        # 仅时序类型（02）支持绑定目标表
+        if binding_table and req.sampleTypeCode != "02":
+            return {"code": 1, "message": "仅时序类型样本集支持绑定目标表"}
+        # 绑定已有表时校验表存在（大小写不敏感，入库使用数据库中的实际表名）
+        if binding_table:
+            canonical = _resolve_db_table_name(binding_table)
+            if not canonical:
+                return {"code": 1, "message": f"数据库中不存在表 {binding_table}，无法绑定"}
+            binding_table = canonical
+
         set_no = generate_sample_set_no(BizCode.ORIGINAL_SAMPLE_SET)
         # 根据存储类型生成 set_path
         if is_minio_enabled():
@@ -165,6 +179,7 @@ def save_sample_set_api(req: SaveSampleSetRequest):
             'sampleTypeCode': req.sampleTypeCode,
             'sampleFieldCode': req.sampleFieldCode,
             'setPath': set_path,
+            'bindingTable': binding_table or None,
         }
         rowcount = save_original_sample_set(data)
         return {"code": 0, "message": "保存成功", "data": {"rowcount": rowcount, "setNo": set_no}}
@@ -381,7 +396,7 @@ def query_time_series_data_api(
     page: int = Query(1, ge=1, description="页码"),
     pageSize: int = Query(20, ge=1, le=200, description="每页条数"),
 ):
-    """时序类型原始样本集：分页查询关联的采集任务目标表数据"""
+    """时序类型原始样本集：分页查询绑定目标表（binding_table）的数据"""
     try:
         result = query_time_series_data_by_set_no(setNo, page, pageSize)
         # 转换行数据为驼峰
@@ -404,6 +419,205 @@ def query_time_series_data_api(
     except Exception as e:
         logger.exception("接口异常")
         return {"code": 1, "message": f"查询失败: {str(e)}"}
+
+
+def _list_db_table_names() -> list[str]:
+    """查询当前数据库中的全部表名"""
+    from app.core.database import get_connection, _execute, _show_tables_sql
+    conn = get_connection()
+    try:
+        with conn.cursor() as cursor:
+            _execute(cursor, _show_tables_sql())
+            rows = cursor.fetchall()
+        names = []
+        for row in rows:
+            if isinstance(row, dict):
+                # SHOW TABLES / all_tables 均取第一列
+                name = next(iter(row.values()), "")
+            else:
+                name = row[0]
+            if name:
+                names.append(str(name))
+        return names
+    finally:
+        conn.close()
+
+
+def _resolve_db_table_name(table_name: str) -> str | None:
+    """按大小写不敏感方式解析表名，返回数据库中的实际表名；不存在返回 None"""
+    names = _list_db_table_names()
+    lower_map = {n.lower(): n for n in names}
+    return lower_map.get(table_name.strip().lower())
+
+
+@router.get("/query-db-tables")
+def query_db_tables_api():
+    """查询当前数据库的表清单（用于时序样本集绑定目标表的下拉选择）"""
+    try:
+        names = _list_db_table_names()
+        return {"code": 0, "data": [{"tableName": n} for n in names]}
+    except Exception as e:
+        logger.exception("接口异常")
+        return {"code": 1, "message": f"查询表清单失败: {str(e)}"}
+
+
+class BindTableRequest(BaseModel):
+    setNo: str
+    tableName: str
+
+
+@router.post("/bind-table")
+def bind_table_api(req: BindTableRequest):
+    """首次绑定原始样本集的目标表（binding_table 绑定后永久锁定，仅允许从空值绑定）"""
+    try:
+        table_name = req.tableName.strip()
+        if not req.setNo:
+            return {"code": 1, "message": "样本集编号不能为空"}
+        if not table_name:
+            return {"code": 1, "message": "表名不能为空"}
+
+        # 校验样本集存在且为时序类型
+        row = get_original_sample_set_binding(req.setNo)
+        if not row:
+            return {"code": 1, "message": "样本集不存在"}
+        set_info = row if isinstance(row, dict) else {}
+        if set_info.get("type_code") != "02":
+            return {"code": 1, "message": "仅时序类型样本集支持绑定目标表"}
+        if set_info.get("binding_table"):
+            return {"code": 1, "message": f"该样本集已绑定目标表 {set_info['binding_table']}，绑定后不可更改"}
+
+        # 校验表存在（大小写不敏感，入库使用数据库中的实际表名）
+        canonical = _resolve_db_table_name(table_name)
+        if not canonical:
+            return {"code": 1, "message": f"数据库中不存在表 {table_name}"}
+
+        result = bind_original_sample_set_table(req.setNo, canonical)
+        if not result["success"]:
+            return {"code": 1, "message": result["reason"]}
+        return {"code": 0, "message": f"绑定成功，目标表：{canonical}", "data": {"bindingTable": canonical}}
+    except Exception as e:
+        logger.exception("接口异常")
+        return {"code": 1, "message": f"绑定失败: {str(e)}"}
+
+
+def _parse_import_file(tmp_path: str, ext: str):
+    """解析 CSV/Excel 文件为 DataFrame（全部按字符串读取，空值后续转 None）
+
+    CSV 自动尝试常见编码：utf-8-sig（含BOM）→ gbk → gb18030
+    """
+    import pandas as pd
+
+    if ext == ".csv":
+        last_err = None
+        for enc in ("utf-8-sig", "gbk", "gb18030"):
+            try:
+                return pd.read_csv(tmp_path, dtype=str, encoding=enc)
+            except UnicodeDecodeError as e:
+                last_err = e
+                continue
+        raise ValueError(f"CSV 文件编码无法识别（已尝试 utf-8/gbk/gb18030）: {last_err}")
+    else:
+        # .xlsx / .xls
+        return pd.read_excel(tmp_path, dtype=str)
+
+
+@router.post("/import-time-series-data")
+async def import_time_series_data_api(
+    setNo: str = Form(..., description="样本集编号"),
+    file: UploadFile = File(..., description="CSV/Excel 文件"),
+):
+    """时序类型原始样本集：导入 CSV/Excel 数据，按列名匹配（忽略大小写）追加写入绑定的目标表
+
+    - 仅时序类型样本集可用；样本集未绑定表时需先绑定
+    - 文件中与目标表字段匹配不到的列直接忽略，不报错
+    - 整体事务：任一批次写入失败全部回滚
+    """
+    import tempfile
+    from app.core.config import settings
+
+    tmp_path = None
+    try:
+        if not setNo:
+            return {"code": 1, "message": "样本集编号不能为空"}
+        if not file.filename:
+            return {"code": 1, "message": "请选择要导入的文件"}
+        ext = os.path.splitext(file.filename)[1].lower()
+        if ext not in (".csv", ".xlsx", ".xls"):
+            return {"code": 1, "message": "仅支持 CSV、Excel（.xlsx/.xls）文件导入"}
+
+        # 校验样本集存在、为时序类型、已绑定目标表
+        row = get_original_sample_set_binding(setNo)
+        if not row:
+            return {"code": 1, "message": "样本集不存在"}
+        set_info = row if isinstance(row, dict) else {}
+        if set_info.get("type_code") != "02":
+            return {"code": 1, "message": "仅时序类型样本集支持导入数据"}
+        binding_table = set_info.get("binding_table")
+        if not binding_table:
+            return {"code": 1, "message": "该样本集尚未绑定目标表，请先在导入弹窗中选择目标表绑定"}
+
+        # 流式写入临时文件（避免大文件一次性读入内存）
+        tmp_dir = settings.upload_tmp_dir or tempfile.gettempdir()
+        os.makedirs(tmp_dir, exist_ok=True)
+        tmp_path = os.path.join(tmp_dir, f"ts_import_{setNo}_{id(file)}{ext}")
+        with open(tmp_path, "wb") as tmp_f:
+            while True:
+                chunk = await file.read(1024 * 1024)  # 1MB 分块
+                if not chunk:
+                    break
+                tmp_f.write(chunk)
+
+        # 解析文件
+        try:
+            df = _parse_import_file(tmp_path, ext)
+        except ValueError:
+            raise
+        except Exception as e:
+            return {"code": 1, "message": f"文件解析失败: {str(e)}"}
+
+        if df.empty:
+            return {"code": 1, "message": "文件中没有可导入的数据行"}
+
+        # 列名匹配 + 整体事务写入
+        result = import_time_series_data(setNo, binding_table, df)
+        ignored_tip = ""
+        if result["ignored_columns"]:
+            ignored_tip = f"，忽略未匹配字段: {', '.join(result['ignored_columns'])}"
+        return {
+            "code": 0,
+            "message": f"导入成功，共写入 {result['insert_count']} 条数据到表 {binding_table}{ignored_tip}",
+            "data": result,
+        }
+    except Exception as e:
+        logger.exception("时序数据导入异常")
+        return {"code": 1, "message": f"导入失败: {str(e)}"}
+    finally:
+        # 清理临时文件
+        if tmp_path and os.path.isfile(tmp_path):
+            try:
+                os.remove(tmp_path)
+            except Exception:
+                pass
+
+
+class ClearTimeSeriesDataRequest(BaseModel):
+    setNo: str
+
+
+@router.post("/clear-time-series-data")
+def clear_time_series_data_api(req: ClearTimeSeriesDataRequest):
+    """清空时序样本集绑定的目标表数据"""
+    try:
+        if not req.setNo:
+            return {"code": 1, "message": "样本集编号不能为空"}
+        result = clear_time_series_data(req.setNo)
+        if result["success"]:
+            return {"code": 0, "message": f"数据已清除，共删除 {result['count']} 条记录"}
+        else:
+            return {"code": 1, "message": result.get("reason", "清除失败")}
+    except Exception as e:
+        logger.exception("接口异常")
+        return {"code": 1, "message": f"清除数据失败: {str(e)}"}
 
 
 @router.get("/serve-image")

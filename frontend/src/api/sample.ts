@@ -369,6 +369,8 @@ export interface SampleSetOption {
   setName: string
   setDescription: string
   businessSystem: string
+  /** 时序类型样本集已绑定的目标表名（未绑定时为空） */
+  bindingTable?: string | null
 }
 
 export async function querySampleSetByType(sampleType: string): Promise<SampleSetOption[]> {
@@ -397,15 +399,9 @@ export async function getCollectLogs(taskNo: string): Promise<CollectLog[]> {
 
 export interface CollectTaskDetParams {
   taskNo: string
-  sourceDbType: string
-  sourceDbHost: string
-  sourceDbPort: string
-  sourceDbUsr: string
-  sourceDbPwd: string
-  sourceDbName: string
+  sourceDbId: number
   targetTable: string
   collectSql: string
-  sourceDbAuth: string
   fileGetMode?: string
   bucketName?: string
   fileId?: string
@@ -414,19 +410,24 @@ export interface CollectTaskDetParams {
 
 export interface CollectTaskDet {
   taskNo: string
-  sourceDbType: string
-  sourceDbHost: string
-  sourceDbPort: string
-  sourceDbUsr: string
-  sourceDbPwd: string
-  sourceDbName: string
+  sourceDbId: number | null
+  sourceDbType: string | null
+  sourceDbTypeName: string | null
+  sourceDbAlias: string | null
+  sourceDbHost: string | null
+  sourceDbPort: string | null
+  sourceDbUsr: string | null
+  sourceDbName: string | null
+  sourceDbAuth: string | null
   targetTable: string
   collectSql: string
-  sourceDbAuth: string
   lastExecuteTime: string
   lastExecuteFlagCode: number
   lastExecuteFlagName: string
   sampleTypeCode?: string
+  /** 关联原始样本集已绑定的目标表（时序任务，绑定后目标表名不可更改） */
+  bindingTable?: string | null
+  originalSampleSetNo?: string | null
   fileGetMode?: string
   bucketName?: string
   fileId?: string
@@ -437,6 +438,19 @@ export async function getCollectTaskDet(taskNo: string): Promise<CollectTaskDet 
   const res = await fetch(`${BASE_URL}/query-collect-task-det?taskNo=${encodeURIComponent(taskNo)}`)
   const json = await res.json()
   if (json.code !== 0) throw new Error(json.message || '查询明细失败')
+  return json.data
+}
+
+export interface TaskSampleSetInfo {
+  originalSampleSetNo: string | null
+  sampleSetName: string | null
+  bindingTable: string | null
+}
+
+export async function getTaskSampleSet(taskNo: string): Promise<TaskSampleSetInfo | null> {
+  const res = await fetch(`${BASE_URL}/query-task-sample-set?taskNo=${encodeURIComponent(taskNo)}`)
+  const json = await res.json()
+  if (json.code !== 0) throw new Error(json.message || '查询样本集信息失败')
   return json.data
 }
 
@@ -451,13 +465,15 @@ export async function saveCollectTaskDet(params: CollectTaskDetParams): Promise<
 }
 
 export async function testDbConnection(params: {
-  dbType: string
-  host: string
-  port: string
-  user: string
-  pwd: string
-  database: string
-  auth: string
+  dbType?: string
+  host?: string
+  port?: string
+  user?: string
+  pwd?: string
+  database?: string
+  auth?: string
+  /** 按已保存的数据源配置测试（任务明细页使用，传此参数时忽略其他字段） */
+  dbConfigId?: number
 }): Promise<{ success: boolean; message: string }> {
   const res = await fetch(`${BASE_URL}/test-db-connection`, {
     method: 'POST',
@@ -466,6 +482,73 @@ export async function testDbConnection(params: {
   })
   const json = await res.json()
   return { success: json.code === 0, message: json.message }
+}
+
+// ========== 数据源配置（s_database_config）==========
+
+export interface DatabaseConfigItem {
+  recordId: number
+  dbTypeCode: string
+  dbTypeName: string
+  dbAlias: string
+  dbHost: string
+  dbPort: string
+  dbUsr: string
+  dbAuth: string | null
+  dbName: string
+  remark: string | null
+  createTime: string
+}
+
+export async function queryDbConfig(): Promise<DatabaseConfigItem[]> {
+  const res = await fetch(`${BASE_URL}/query-db-config`)
+  const json = await res.json()
+  if (json.code !== 0) throw new Error(json.message || '查询数据源配置失败')
+  return json.data || []
+}
+
+export interface DbConfigParams {
+  recordId?: number
+  dbType?: string
+  dbAlias: string
+  dbHost: string
+  dbPort: string
+  dbUsr: string
+  /** 新增必填；编辑留空表示不修改密码 */
+  dbPwd: string
+  dbAuth: string
+  dbName: string
+  remark: string
+}
+
+export async function saveDbConfig(params: DbConfigParams): Promise<void> {
+  const res = await fetch(`${BASE_URL}/save-db-config`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(params)
+  })
+  const json = await res.json()
+  if (json.code !== 0) throw new Error(json.message || '保存失败')
+}
+
+export async function updateDbConfig(params: DbConfigParams): Promise<void> {
+  const res = await fetch(`${BASE_URL}/update-db-config`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(params)
+  })
+  const json = await res.json()
+  if (json.code !== 0) throw new Error(json.message || '更新失败')
+}
+
+export async function deleteDbConfig(recordId: number): Promise<void> {
+  const res = await fetch(`${BASE_URL}/delete-db-config`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ recordId })
+  })
+  const json = await res.json()
+  if (json.code !== 0) throw new Error(json.message || '删除失败')
 }
 
 export async function executeCollectTask(taskNo: string): Promise<string> {

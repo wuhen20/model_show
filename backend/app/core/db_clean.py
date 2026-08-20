@@ -403,10 +403,10 @@ def query_clean_log(task_no: str):
         conn.close()
 
 
-# ==================== 清洗结果（s_data_clean_log execute_status='03'）====================
+# ==================== 清洗结果（s_data_clean_log execute_status）====================
 
 def query_clean_results():
-    """查询清洗结果列表（execute_status=03 已完成 或 05 已回滚的记录），关联任务表获取任务名称和数据类型"""
+    """查询清洗结果列表（execute_status IN 03已完成/05已回滚/06文件已删除/07已入库），关联任务表获取任务名称和数据类型"""
     conn = get_connection()
     try:
         with conn.cursor() as cursor:
@@ -425,11 +425,36 @@ def query_clean_results():
                     l.file_path
                 FROM s_data_clean_log l
                 LEFT JOIN s_data_clean_task t ON l.task_no = t.task_no
-                WHERE l.execute_status IN ('03', '05')
+                WHERE l.execute_status IN ('03', '05', '06', '07')
                 ORDER BY l.start_time DESC
             """
             _execute(cursor, sql, ())
             return cursor.fetchall()
+    finally:
+        conn.close()
+
+
+def query_clean_status_dict():
+    """查询数据清洗任务/执行记录状态字典（DATA_CLEAN_TASK_STATUS），返回 {code_value: code_name}
+
+    同时用于 task_status 与 execute_status 的名称转码（两者共享同一套状态码）。
+    """
+    conn = get_connection()
+    try:
+        with conn.cursor() as cursor:
+            sql = """
+                SELECT CODE_VALUE, CODE_NAME
+                FROM sys_code_dict
+                WHERE SORT_NO = 'DATA_CLEAN_TASK_STATUS'
+                  AND ACTIVE_FLAG = 1
+            """
+            _execute(cursor, sql, ())
+            rows = cursor.fetchall()
+            return {
+                str(row.get("CODE_VALUE", row.get("code_value", ""))):
+                str(row.get("CODE_NAME", row.get("code_name", "")))
+                for row in rows
+            }
     finally:
         conn.close()
 

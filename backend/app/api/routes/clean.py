@@ -53,6 +53,7 @@ from app.core.db_clean import (
     query_clean_pic_records,
     delete_clean_pic_records,
     update_clean_log_status,
+    query_clean_status_dict,
 )
 from app.services.sample_minio_service import (
     is_minio_path, download_image, upload_image, delete_object, parse_object_id,
@@ -82,6 +83,10 @@ class ExecuteCleanTaskRequest(BaseModel):
     taskNo: str
 
 
+class DeleteCleanResultFileRequest(BaseModel):
+    recordId: int
+
+
 def _to_camel_dict(d: dict) -> dict:
     """snake_case → camelCase"""
     result = {}
@@ -97,15 +102,15 @@ def query_clean_tasks_api():
     """查询清洗任务列表"""
     try:
         rows = query_data_clean_tasks()
+        # 状态字典（DATA_CLEAN_TASK_STATUS），用于 task_status 名称转码
+        status_map = query_clean_status_dict()
         tasks = []
         for row in rows:
             task = _to_camel_dict(row)
             status_code = str(row.get("task_status") or "01")
-            flag = row.get("last_execute_flag")
             task["taskStatusCode"] = status_code
-            task["taskStatusName"] = {
-                "01": "未执行", "02": "执行中", "03": "已完成", "04": "失败"
-            }.get(status_code, "未执行")
+            task["taskStatusName"] = status_map.get(status_code, "未知")
+            flag = row.get("last_execute_flag")
             task["lastExecuteFlagCode"] = flag
             task["lastExecuteFlagName"] = {0: "未执行", 1: "成功", 2: "失败"}.get(flag, "未执行")
             tasks.append(task)
@@ -166,9 +171,8 @@ def query_clean_task_detail_api(taskNo: str = Query(..., description="任务编�
         result = _to_camel_dict(task)
         status_code = str(task.get("task_status") or "01")
         result["taskStatusCode"] = status_code
-        result["taskStatusName"] = {
-            "01": "未执行", "02": "执行中", "03": "已完成", "04": "失败"
-        }.get(status_code, "未执行")
+        status_map = query_clean_status_dict()
+        result["taskStatusName"] = status_map.get(status_code, "未知")
         # 节点列表转 camelCase + 解析 node_config
         nodes = []
         for node in task.get("nodes", []):
@@ -427,14 +431,13 @@ def query_clean_log_api(taskNo: str = Query(..., description="任务编号")):
     """查询清洗任务的执行记录列表"""
     try:
         rows = query_clean_log(taskNo)
+        status_map = query_clean_status_dict()
         logs = []
         for row in rows:
             log = _to_camel_dict(row)
             status = str(row.get("execute_status") or "")
             log["executeStatusCode"] = status
-            log["executeStatusName"] = {
-                "02": "执行中", "03": "成功", "04": "失败"
-            }.get(status, "未知")
+            log["executeStatusName"] = status_map.get(status, "未知")
             logs.append(log)
         return {"code": 0, "data": logs}
     except Exception as e:
@@ -443,12 +446,15 @@ def query_clean_log_api(taskNo: str = Query(..., description="任务编号")):
 
 @router.get("/query-clean-results")
 def query_clean_results_api():
-    """查询清洗结果列表（已完成 execute_status=03 或已回滚 execute_status=05 的记录）"""
+    """查询清洗结果列表（已完成03/已回滚05/文件已删除06/已入库07 的记录）"""
     try:
         rows = query_clean_results()
+        status_map = query_clean_status_dict()
         results = []
         for row in rows:
             item = _to_camel_dict(row)
+            scode = str(row.get("execute_status") or "")
+            item["executeStatusName"] = status_map.get(scode, "未知")
             results.append(item)
         return {"code": 0, "data": results}
     except Exception as e:
@@ -739,6 +745,59 @@ def download_clean_result_by_path_api(filePath: str = Query(..., description="�
     except Exception as e:
         logger.exception("下载清洗结果异常")
         return {"code": 1, "message": f"下载失败: {str(e)}"}
+
+
+@router.post("/delete-clean-result-file")
+def delete_clean_result_file_api(req: DeleteCleanResultFileRequest):
+    """删除时序清洗结果文件，并将执行状态改为 06-文件已删除
+
+    仅支持时序/结构化类型（sample_type != '05'）的结果；仅允许删除存在文件的
+    状态（03-已完成 / 07-已入库）。本地文件删除物理文件，MinIO 路径删除对象。
+    """
+    try:
+        conn = get_connection()
+        try:
+            with conn.cursor() as cursor:
+                sql = """
+                    SELECT l.file_path, l.file_name, t.sample_type
+                    FROM s_data_clean_log l
+                    LEFT JOIN s_data_clean_task t ON l.task_no = t.task_no
+                    WHERE l.record_id = %s
+                """
+                _execute(cursor, sql, (req.recordId,))
+                row = cursor.fetchone()
+        finally:
+            conn.close()
+
+        if not row or not row.get("file_path"):
+            return {"code": 1, "message": "清洗结果文件不存在或记录不存在"}
+
+        sample_type = str(row.get("sample_type") or "")
+        if sample_type == "05":
+            return {"code": 1, "message": "图像类型清洗结果不支持文件删除操作"}
+
+        file_path = row["file_path"]
+
+        # 删除文件（本地删除物理文件，MinIO 删除对象）；文件已缺失不阻塞，仅记录
+        try:
+            if is_minio_path(file_path):
+                delete_object(file_path)
+            else:
+                if os.path.exists(file_path):
+                    os.remove(file_path)
+        except Exception as e_del:
+            logger.warning(f"删除清洗结果文件失败（不阻断状态更新）：{file_path}, 错误: {e_del}")
+
+        # 清理结果文件内存缓存
+        _clean_result_cache.pop(req.recordId, None)
+
+        # 更新执行状态为 06-文件已删除
+        update_clean_log_status(req.recordId, "06")
+
+        return {"code": 0, "message": "文件已删除"}
+    except Exception as e:
+        logger.exception("删除清洗结果文件异常")
+        return {"code": 1, "message": f"删除失败: {str(e)}"}
 
 
 @router.get("/sample-set-options")
@@ -1061,6 +1120,12 @@ def import_to_sample_api(req: ImportToSampleRequest):
         msg = "入库成功"
         if ver_info["pre_version"] and ver_info["next_version"]:
             msg += f"，版本 {ver_info['pre_version']} → {ver_info['next_version']}"
+
+        # 入库成功后，将执行记录状态改为 07-已入库
+        try:
+            update_clean_log_status(req.recordId, "07")
+        except Exception as status_e:
+            logger.exception("更新入库后执行记录状态失败")
 
         return {
             "code": 0,

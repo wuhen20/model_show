@@ -2,7 +2,7 @@
 import { ref, computed, onMounted } from 'vue'
 import Header from '@/components/Header.vue'
 import Sidebar from '@/components/Sidebar.vue'
-import { getCleanResults, viewCleanResult, getDownloadCleanResultUrl, getSampleSetOptions, importToSample, queryCleanPics, getCleanPicImageUrl, rollbackCleanPics, type CleanResult, type CleanResultData, type SampleSetOption, type CleanPicRecord } from '@/api/clean'
+import { getCleanResults, viewCleanResult, getDownloadCleanResultUrl, getSampleSetOptions, importToSample, queryCleanPics, getCleanPicImageUrl, rollbackCleanPics, deleteCleanResultFile, type CleanResult, type CleanResultData, type SampleSetOption, type CleanPicRecord } from '@/api/clean'
 import { getCodeDict } from '@/api/sample'
 import { ElMessage, ElMessageBox, ElLoading } from 'element-plus'
 
@@ -232,6 +232,31 @@ async function handleRollback(item: CleanResult) {
   }
 }
 
+// ========== 删除结果文件 ==========
+const deleteSet = ref<Set<number>>(new Set())
+
+async function handleDeleteFile(item: CleanResult) {
+  try {
+    await ElMessageBox.confirm(
+      `确认删除清洗结果文件「${item.fileName || item.taskNo}」？\n删除后该结果将无法查看和下载（状态变为"文件已删除"）。`,
+      '删除文件确认',
+      { type: 'warning', confirmButtonText: '删除', cancelButtonText: '取消' }
+    )
+  } catch {
+    return
+  }
+  deleteSet.value.add(item.recordId)
+  try {
+    await deleteCleanResultFile(item.recordId)
+    ElMessage.success('文件已删除')
+    await loadResults()
+  } catch (e: any) {
+    ElMessage.error(e.message || '删除失败')
+  } finally {
+    deleteSet.value.delete(item.recordId)
+  }
+}
+
 // ========== 下载弹框 ==========
 const downloadVisible = ref(false)
 const downloadItem = ref<CleanResult | null>(null)
@@ -392,15 +417,25 @@ onMounted(() => {
           <el-table-column prop="filePath" label="文件路径" min-width="200" show-overflow-tooltip>
             <template #default="{ row }">{{ row.filePath || '-' }}</template>
           </el-table-column>
-          <el-table-column label="操作" width="240">
+          <el-table-column label="操作" width="280">
             <template #default="{ row }">
               <template v-if="row.executeStatus === '05'">
                 <span class="rollback-status-text">已回滚</span>
               </template>
+              <template v-else-if="row.executeStatus === '06'">
+                <span class="rollback-status-text">文件已删除</span>
+              </template>
               <template v-else>
                 <el-button size="small" @click="handleView(row)">查看</el-button>
                 <el-button v-if="row.sampleTypeCode !== '05'" size="small" @click="handleDownload(row)">下载</el-button>
-                <el-button v-if="row.sampleTypeCode !== '05'" size="small" type="primary" @click="handleImport(row)">入库</el-button>
+                <el-button
+                  v-if="row.sampleTypeCode !== '05'"
+                  size="small"
+                  type="danger"
+                  :loading="deleteSet.has(row.recordId)"
+                  @click="handleDeleteFile(row)"
+                >删除文件</el-button>
+                <el-button v-if="row.sampleTypeCode !== '05' && row.executeStatus !== '07'" size="small" type="primary" @click="handleImport(row)">入库</el-button>
                 <el-button
                   v-if="row.sampleTypeCode === '05'"
                   size="small"
@@ -613,7 +648,6 @@ onMounted(() => {
   display: flex;
   flex-direction: column;
   height: 100vh;
-  background: #0d1117;
   color: #e6edf3;
   font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
 }
@@ -737,8 +771,8 @@ onMounted(() => {
   border-radius: 8px;
 
   &::-webkit-scrollbar {
-    width: 8px;
-    height: 8px;
+    width: 10px;
+    height: 10px;
   }
 
   &::-webkit-scrollbar-track {
@@ -747,11 +781,11 @@ onMounted(() => {
   }
 
   &::-webkit-scrollbar-thumb {
-    background: rgba(0, 212, 255, 0.3);
-    border-radius: 4px;
+    background: rgba(0, 212, 255, 0.5);
+    border-radius: 5px;
 
     &:hover {
-      background: rgba(0, 212, 255, 0.5);
+      background: rgba(0, 212, 255, 0.7);
     }
   }
 }
@@ -815,20 +849,21 @@ onMounted(() => {
   min-height: 0; // 重要：让 flex 子项可以收缩并显示滚动条
 
   &::-webkit-scrollbar {
-    width: 8px;
+    width: 10px;
+    height: 12px;
   }
 
   &::-webkit-scrollbar-track {
     background: rgba(0, 0, 0, 0.2);
-    border-radius: 4px;
+    border-radius: 5px;
   }
 
   &::-webkit-scrollbar-thumb {
-    background: rgba(0, 212, 255, 0.3);
-    border-radius: 4px;
+    background: rgba(0, 212, 255, 0.5);
+    border-radius: 5px;
 
     &:hover {
-      background: rgba(0, 212, 255, 0.5);
+      background: rgba(0, 212, 255, 0.7);
     }
   }
 }

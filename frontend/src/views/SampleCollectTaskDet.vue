@@ -3,7 +3,7 @@ import { ref, computed, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import Header from '@/components/Header.vue'
 import Sidebar from '@/components/Sidebar.vue'
-import { getCodeDict, getCollectTaskDet, saveCollectTaskDet, testDbConnection, queryTableColumns, queryColMap, saveColMap, getCollectTaskExecType, updateCollectTaskExecType, type CodeDictItem, type TableColumnInfo, type ColMapItem } from '@/api/sample'
+import { getCodeDict, getCollectTaskDet, getTaskSampleSet, saveCollectTaskDet, testDbConnection, queryDbConfig, queryTableColumns, queryColMap, saveColMap, getCollectTaskExecType, updateCollectTaskExecType, type CodeDictItem, type DatabaseConfigItem, type TableColumnInfo, type ColMapItem } from '@/api/sample'
 import { ElMessage, ElMessageBox } from 'element-plus'
 
 const route = useRoute()
@@ -14,7 +14,6 @@ const taskNo = ref<string>((route.query.taskNo as string) || '')
 // 任务数据类型（用于判断是否图像类型）：优先从路由参数获取（新建后立即生效），loadTaskDet 后更新
 const sampleTypeCode = ref<string>((route.query.sampleType as string) || '')
 
-const dbTypeOptions = ref<{ value: string; label: string }[]>([])
 const fileGetModeOptions = ref<{ value: string; label: string }[]>([])
 const loading = ref(false)
 const savingSource = ref(false)
@@ -60,36 +59,87 @@ async function handleSaveExecType() {
   }
 }
 
-// ========== 上方：源数据配置 ==========
+// ========== 上方：数据源配置 ==========
 const form = ref({
-  sourceDbType: '',
-  sourceDbHost: '',
-  sourceDbPort: '',
-  sourceDbUsr: '',
-  sourceDbPwd: '',
-  sourceDbName: '',
   targetTable: '',
-  collectSql: '',
-  sourceDbAuth: 'NONE'
+  collectSql: ''
 })
 
-// Hive 认证方式选项
-const hiveAuthOptions = [
-  { value: 'NONE', label: 'NONE（无认证）' },
-  { value: 'LDAP', label: 'LDAP' },
-  { value: 'PLAIN', label: 'PLAIN' },
-  { value: 'KERBEROS', label: 'KERBEROS' },
-  { value: 'CUSTOM', label: 'CUSTOM' }
-]
+// 已选数据源（展示用，密码不返回）
+const selectedDb = ref<DatabaseConfigItem | null>(null)
 
-// 是否为 Hive 数据源（根据字典 label 名称判断，兼容不同编码值）
-const isHiveSource = computed(() => {
-  const opt = dbTypeOptions.value.find(o => o.value === form.value.sourceDbType)
-  return opt ? opt.label.toUpperCase() === 'HIVE' : false
+// 是否为 Oracle 数据源（用于展示 sid/服务名 标签）
+const isOracleDb = computed(() => {
+  if (!selectedDb.value) return false
+  return (selectedDb.value.dbTypeName || '').toUpperCase() === 'ORACLE'
 })
 
 // 是否为图像类型采集任务
 const isImageType = computed(() => sampleTypeCode.value === '05')
+
+// 时序样本集已绑定的目标表（binding_table 一旦绑定永久锁定，目标表名自动带出不可编辑）
+const boundTable = ref('')
+const isTableBound = computed(() => !!boundTable.value)
+
+// 关联的原始样本集信息（编号/名称；用于页面展示）
+const sampleSetNo = ref('')
+const sampleSetName = ref('')
+
+// ========== 数据源选择弹窗 ==========
+const dbSelectVisible = ref(false)
+const dbSelectLoading = ref(false)
+const dbConfigList = ref<DatabaseConfigItem[]>([])
+const dbSelectCurrent = ref<DatabaseConfigItem | null>(null)
+const dbSelectFilterType = ref('')
+const dbTypeOptions = ref<{ value: string; label: string }[]>([])
+
+const filteredDbConfigList = computed(() => {
+  if (!dbSelectFilterType.value) return dbConfigList.value
+  return dbConfigList.value.filter(c => c.dbTypeCode === dbSelectFilterType.value)
+})
+
+function openDbSelectDialog() {
+  dbSelectCurrent.value = null
+  dbSelectFilterType.value = ''
+  dbSelectVisible.value = true
+  loadDbConfigList()
+}
+
+async function loadDbConfigList() {
+  dbSelectLoading.value = true
+  try {
+    dbConfigList.value = await queryDbConfig()
+    // 加载数据库类型字典
+    const data = await getCodeDict(['DATABASE_TYPE'])
+    if (data.DATABASE_TYPE && data.DATABASE_TYPE.length > 0) {
+      dbTypeOptions.value = data.DATABASE_TYPE.map((item: CodeDictItem) => ({
+        value: item.codeValue,
+        label: item.codeName
+      }))
+    }
+    // 若已有选中数据源，回显高亮行
+    if (selectedDb.value) {
+      dbSelectCurrent.value = dbConfigList.value.find(c => c.recordId === selectedDb.value?.recordId) || null
+    }
+  } catch (e: any) {
+    ElMessage.error(e.message || '查询数据源配置失败')
+  } finally {
+    dbSelectLoading.value = false
+  }
+}
+
+function handleDbSelectCurrentChange(row: DatabaseConfigItem | null) {
+  dbSelectCurrent.value = row
+}
+
+function handleDbSelectConfirm() {
+  if (!dbSelectCurrent.value) {
+    ElMessage.warning('请先选择数据源')
+    return
+  }
+  selectedDb.value = dbSelectCurrent.value
+  dbSelectVisible.value = false
+}
 
 // ========== 图像获取配置 ==========
 const imageConfig = ref({
@@ -113,13 +163,7 @@ const execInfo = ref({
 
 async function loadDbTypeDict() {
   try {
-    const data = await getCodeDict(['DATABASE_TYPE', 'FILE_GET_MODE'])
-    if (data.DATABASE_TYPE && data.DATABASE_TYPE.length > 0) {
-      dbTypeOptions.value = data.DATABASE_TYPE.map((item: CodeDictItem) => ({
-        value: item.codeValue,
-        label: item.codeName
-      }))
-    }
+    const data = await getCodeDict(['FILE_GET_MODE'])
     if (data.FILE_GET_MODE && data.FILE_GET_MODE.length > 0) {
       fileGetModeOptions.value = data.FILE_GET_MODE.map((item: CodeDictItem) => ({
         value: item.codeValue,
@@ -131,21 +175,58 @@ async function loadDbTypeDict() {
   }
 }
 
+// 加载任务关联的原始样本集信息（样本集编号/名称/绑定表）
+// 不依赖明细行：新建任务首次进入明细页时也能自动带出已绑定样本集的目标表
+async function loadTaskSampleSet() {
+  try {
+    const info = await getTaskSampleSet(taskNo.value)
+    if (info) {
+      sampleSetNo.value = info.originalSampleSetNo || ''
+      sampleSetName.value = info.sampleSetName || ''
+      // 样本集已绑定目标表：目标表名自动带出并锁定（以样本集绑定表为准）
+      if (info.bindingTable) {
+        boundTable.value = info.bindingTable
+        form.value.targetTable = info.bindingTable
+      }
+    }
+  } catch (e: any) {
+    ElMessage.error(e.message || '查询样本集信息失败')
+  }
+}
+
 async function loadTaskDet() {
   loading.value = true
   try {
     const det = await getCollectTaskDet(taskNo.value)
     if (det) {
       form.value = {
-        sourceDbType: det.sourceDbType || '',
-        sourceDbHost: det.sourceDbHost || '',
-        sourceDbPort: det.sourceDbPort || '',
-        sourceDbUsr: det.sourceDbUsr || '',
-        sourceDbPwd: det.sourceDbPwd || '',
-        sourceDbName: det.sourceDbName || '',
         targetTable: det.targetTable || '',
-        collectSql: det.collectSql || '',
-        sourceDbAuth: det.sourceDbAuth || 'NONE'
+        collectSql: det.collectSql || ''
+      }
+      // 样本集已绑定目标表（时序类型）：目标表名自动带出，不可编辑
+      boundTable.value = det.bindingTable || ''
+      if (boundTable.value) {
+        form.value.targetTable = boundTable.value
+      }
+      // 回填关联原始样本集信息（编号/名称）
+      sampleSetNo.value = det.originalSampleSetNo || ''
+      // 回填已配置的数据源（只读展示，密码不返回）
+      if (det.sourceDbId) {
+        selectedDb.value = {
+          recordId: det.sourceDbId,
+          dbTypeCode: det.sourceDbType || '',
+          dbTypeName: det.sourceDbTypeName || det.sourceDbType || '',
+          dbAlias: det.sourceDbAlias || '',
+          dbHost: det.sourceDbHost || '',
+          dbPort: det.sourceDbPort || '',
+          dbUsr: det.sourceDbUsr || '',
+          dbAuth: det.sourceDbAuth || '',
+          dbName: det.sourceDbName || '',
+          remark: '',
+          createTime: ''
+        }
+      } else {
+        selectedDb.value = null
       }
       execInfo.value = {
         lastExecuteTime: det.lastExecuteTime || '',
@@ -167,32 +248,16 @@ async function loadTaskDet() {
   }
 }
 
-// ========== 测试数据库连接 ==========
+// ========== 测试数据库连接（按已保存的数据源配置测试） ==========
 async function handleTestConnection() {
-  if (!form.value.sourceDbType) {
-    ElMessage.warning('请选择数据库类型')
-    return
-  }
-  if (!form.value.sourceDbHost.trim()) {
-    ElMessage.warning('请输入数据库地址')
-    return
-  }
-  if (!form.value.sourceDbUsr.trim()) {
-    ElMessage.warning('请输入用户名')
+  if (!selectedDb.value) {
+    ElMessage.warning('请先选择数据源')
     return
   }
 
   testingConnection.value = true
   try {
-    const result = await testDbConnection({
-      dbType: form.value.sourceDbType,
-      host: form.value.sourceDbHost.trim(),
-      port: form.value.sourceDbPort.trim(),
-      user: form.value.sourceDbUsr.trim(),
-      pwd: form.value.sourceDbPwd.trim(),
-      database: form.value.sourceDbName.trim(),
-      auth: form.value.sourceDbAuth
-    })
+    const result = await testDbConnection({ dbConfigId: selectedDb.value.recordId })
     if (result.success) {
       ElMessageBox.alert(result.message, '测试连接', { type: 'success' })
     } else {
@@ -206,28 +271,12 @@ async function handleTestConnection() {
 }
 
 async function handleSaveSource() {
-  if (!form.value.sourceDbType) {
-    ElMessage.warning('请选择数据库类型')
-    return
-  }
-  if (!form.value.sourceDbHost.trim()) {
-    ElMessage.warning('请输入数据库地址')
-    return
-  }
-  if (!form.value.sourceDbUsr.trim()) {
-    ElMessage.warning('请输入用户名')
-    return
-  }
-  if (!form.value.sourceDbName.trim()) {
-    ElMessage.warning('请输入数据库名称')
+  if (!selectedDb.value) {
+    ElMessage.warning('请选择数据源')
     return
   }
   if (!form.value.collectSql.trim()) {
     ElMessage.warning('请输入采集SQL')
-    return
-  }
-  if (form.value.sourceDbType === '03' && !form.value.sourceDbAuth) {
-    ElMessage.warning('Hive 数据源请选择认证方式')
     return
   }
 
@@ -235,17 +284,11 @@ async function handleSaveSource() {
   try {
     await saveCollectTaskDet({
       taskNo: taskNo.value,
-      sourceDbType: form.value.sourceDbType,
-      sourceDbHost: form.value.sourceDbHost.trim(),
-      sourceDbPort: form.value.sourceDbPort.trim(),
-      sourceDbUsr: form.value.sourceDbUsr.trim(),
-      sourceDbPwd: form.value.sourceDbPwd.trim(),
-      sourceDbName: form.value.sourceDbName.trim(),
+      sourceDbId: selectedDb.value.recordId,
       targetTable: form.value.targetTable.trim(),
-      collectSql: form.value.collectSql.trim(),
-      sourceDbAuth: form.value.sourceDbAuth
+      collectSql: form.value.collectSql.trim()
     })
-    ElMessage.success('源数据配置保存成功')
+    ElMessage.success('数据源配置保存成功')
   } catch (e: any) {
     ElMessage.error(e.message || '保存失败')
   } finally {
@@ -358,16 +401,8 @@ async function handleSaveMapping() {
 
 // ========== 图像获取配置保存 ==========
 async function handleSaveImageConfig() {
-  if (!form.value.sourceDbType) {
-    ElMessage.warning('请先选择数据库类型')
-    return
-  }
-  if (!form.value.sourceDbHost.trim()) {
-    ElMessage.warning('请先输入数据库地址')
-    return
-  }
-  if (!form.value.sourceDbUsr.trim()) {
-    ElMessage.warning('请先输入用户名')
+  if (!selectedDb.value) {
+    ElMessage.warning('请先选择数据源')
     return
   }
   if (!form.value.collectSql.trim()) {
@@ -391,15 +426,9 @@ async function handleSaveImageConfig() {
   try {
     await saveCollectTaskDet({
       taskNo: taskNo.value,
-      sourceDbType: form.value.sourceDbType,
-      sourceDbHost: form.value.sourceDbHost.trim(),
-      sourceDbPort: form.value.sourceDbPort.trim(),
-      sourceDbUsr: form.value.sourceDbUsr.trim(),
-      sourceDbPwd: form.value.sourceDbPwd.trim(),
-      sourceDbName: form.value.sourceDbName.trim(),
+      sourceDbId: selectedDb.value.recordId,
       targetTable: form.value.targetTable.trim(),
       collectSql: form.value.collectSql.trim(),
-      sourceDbAuth: form.value.sourceDbAuth,
       fileGetMode: imageConfig.value.fileGetMode,
       bucketName: imageConfig.value.bucketName.trim(),
       fileId: imageConfig.value.fileId,
@@ -417,6 +446,15 @@ function goBack() {
   router.push('/collect-task')
 }
 
+async function init() {
+  await loadTaskSampleSet()
+  await loadTaskDet()
+  // 如果目标表名已有值，自动查询字段
+  if (form.value.targetTable.trim()) {
+    handleQueryColumns()
+  }
+}
+
 onMounted(() => {
   if (!taskNo.value) {
     ElMessage.warning('缺少任务编号，请从任务列表进入')
@@ -425,12 +463,7 @@ onMounted(() => {
   }
   loadDbTypeDict()
   loadExecType()
-  loadTaskDet().then(() => {
-    // 如果目标表名已有值，自动查询字段
-    if (form.value.targetTable.trim()) {
-      handleQueryColumns()
-    }
-  })
+  init()
 })
 </script>
 
@@ -451,7 +484,10 @@ onMounted(() => {
               </span>
               <h2 class="page-title">采集任务明细</h2>
             </div>
-            <span class="task-no-tag">任务编号：{{ taskNo }}</span>
+            <div class="title-right">
+              <span class="task-no-tag">任务编号：{{ taskNo }}</span>
+              <span v-if="sampleSetNo" class="task-no-tag sample-set-tag">关联原始样本集：{{ sampleSetName || sampleSetNo }}({{ sampleSetNo }})</span>
+            </div>
           </div>
         </div>
 
@@ -477,10 +513,10 @@ onMounted(() => {
           </div>
         </div>
 
-        <!-- ========== 上方：源数据配置 ========== -->
+        <!-- ========== 上方：数据源配置 ========== -->
         <div class="section-card">
           <div class="section-title">
-            <h3>源数据配置</h3>
+            <h3>数据源配置</h3>
           </div>
           <div v-if="loading" class="loading-mask-inline">
             <span>加载中...</span>
@@ -495,50 +531,51 @@ onMounted(() => {
           </div>
           <el-form label-width="100px" label-position="right">
             <div class="form-row">
-              <div class="form-col">
-                <el-form-item label="数据库类型" required>
-                  <el-select v-model="form.sourceDbType" placeholder="请选择" popper-class="detail-popper">
-                    <el-option v-for="opt in dbTypeOptions" :key="opt.value" :label="opt.label" :value="opt.value" />
-                  </el-select>
-                </el-form-item>
-              </div>
-              <div class="form-col">
-                <el-form-item label="数据库地址" required>
-                  <el-input v-model="form.sourceDbHost" placeholder="如 127.0.0.1" maxlength="100" />
-                </el-form-item>
-              </div>
+              <el-button type="primary" @click="openDbSelectDialog">选择数据源</el-button>
             </div>
             <div class="form-row">
-              <div class="form-col form-col-small">
-                <el-form-item label="端口">
-                  <el-input v-model="form.sourceDbPort" placeholder="如 3306" maxlength="32" />
-                </el-form-item>
-              </div>
-              <div class="form-col">
-                <el-form-item label="用户名" required>
-                  <el-input v-model="form.sourceDbUsr" placeholder="请输入用户名" maxlength="32" />
-                </el-form-item>
-              </div>
-              <div class="form-col">
-                <el-form-item label="密码">
-                  <el-input v-model="form.sourceDbPwd" type="password" show-password placeholder="请输入密码" maxlength="32" />
-                </el-form-item>
-              </div>
-              <div class="form-col">
-                <el-form-item label="数据库" required>
-                  <el-input v-model="form.sourceDbName" placeholder="请输入数据库名称" maxlength="64" />
+              <div class="form-col form-col-full">
+                <el-form-item label="数据源">
+                  <el-input :model-value="selectedDb?.dbAlias || ''" readonly placeholder="请选择数据源" class="readonly-input" />
                 </el-form-item>
               </div>
             </div>
-            <div v-if="form.sourceDbType === '03'" class="form-row">
-              <div class="form-col form-col-small">
-                <el-form-item label="认证方式" required>
-                  <el-select v-model="form.sourceDbAuth" placeholder="请选择Hive认证方式" popper-class="detail-popper" style="width: 160px">
-                    <el-option v-for="opt in hiveAuthOptions" :key="opt.value" :label="opt.label" :value="opt.value" />
-                  </el-select>
-                </el-form-item>
+            <template v-if="selectedDb">
+              <div class="form-row">
+                <div class="form-col">
+                  <el-form-item label="数据库类型">
+                    <el-input :model-value="selectedDb.dbTypeName || ''" readonly class="readonly-input" />
+                  </el-form-item>
+                </div>
+                <div class="form-col">
+                  <el-form-item label="数据库地址">
+                    <el-input :model-value="selectedDb.dbHost || ''" readonly class="readonly-input" />
+                  </el-form-item>
+                </div>
+                <div class="form-col form-col-small">
+                  <el-form-item label="端口">
+                    <el-input :model-value="selectedDb.dbPort || ''" readonly class="readonly-input" />
+                  </el-form-item>
+                </div>
               </div>
-            </div>
+              <div class="form-row">
+                <div class="form-col">
+                  <el-form-item label="用户名">
+                    <el-input :model-value="selectedDb.dbUsr || ''" readonly class="readonly-input" />
+                  </el-form-item>
+                </div>
+                <div class="form-col">
+                  <el-form-item :label="isOracleDb ? 'sid/服务名' : '数据库'">
+                    <el-input :model-value="selectedDb.dbName || ''" readonly class="readonly-input" />
+                  </el-form-item>
+                </div>
+                <div class="form-col form-col-small" v-if="selectedDb.dbAuth">
+                  <el-form-item label="认证方式">
+                    <el-input :model-value="selectedDb.dbAuth || ''" readonly class="readonly-input" />
+                  </el-form-item>
+                </div>
+              </div>
+            </template>
             <div class="form-row form-row-full">
               <el-form-item label="采集SQL" required class="full-width-item">
                 <el-input v-model="form.collectSql" type="textarea" :rows="6" placeholder="请输入采集数据的SQL语句" />
@@ -547,9 +584,52 @@ onMounted(() => {
           </el-form>
           <div class="section-footer">
             <el-button :loading="testingConnection" @click="handleTestConnection">测试连接</el-button>
-            <el-button type="primary" :loading="savingSource" @click="handleSaveSource">保存源数据配置</el-button>
+            <el-button type="primary" :loading="savingSource" @click="handleSaveSource">保存数据源配置</el-button>
           </div>
         </div>
+
+        <!-- 数据源选择弹窗 -->
+        <el-dialog v-model="dbSelectVisible" title="选择数据源" width="960px" :close-on-click-modal="false" class="db-select-dialog">
+          <div class="db-select-filter">
+            <span class="db-select-filter-label">数据库类型</span>
+            <el-select v-model="dbSelectFilterType" placeholder="全部" clearable popper-class="detail-popper" style="width: 160px">
+              <el-option v-for="opt in dbTypeOptions" :key="opt.value" :label="opt.label" :value="opt.value" />
+            </el-select>
+          </div>
+          <el-table
+            :data="filteredDbConfigList"
+            v-loading="dbSelectLoading"
+            highlight-current-row
+            style="width: 100%"
+            @current-change="handleDbSelectCurrentChange"
+          >
+            <el-table-column label="" width="50">
+              <template #default="{ row }">
+                <span class="db-radio" :class="{ active: dbSelectCurrent?.recordId === row.recordId }"></span>
+              </template>
+            </el-table-column>
+            <el-table-column prop="dbTypeName" label="数据库类型" width="110">
+              <template #default="{ row }">{{ row.dbTypeName || row.dbTypeCode || '-' }}</template>
+            </el-table-column>
+            <el-table-column prop="dbAlias" label="数据源名称" min-width="150" show-overflow-tooltip />
+            <el-table-column label="地址" min-width="170" show-overflow-tooltip>
+              <template #default="{ row }">{{ row.dbHost }}{{ row.dbPort ? ':' + row.dbPort : '' }}</template>
+            </el-table-column>
+            <el-table-column prop="dbUsr" label="用户名" min-width="110" show-overflow-tooltip>
+              <template #default="{ row }">{{ row.dbUsr || '-' }}</template>
+            </el-table-column>
+            <el-table-column prop="remark" label="备注" min-width="140" show-overflow-tooltip>
+              <template #default="{ row }">{{ row.remark || '-' }}</template>
+            </el-table-column>
+            <template #empty>
+              <div class="db-select-empty">暂无数据源，请先在「数据源配置」页面新增</div>
+            </template>
+          </el-table>
+          <template #footer>
+            <el-button @click="dbSelectVisible = false">取消</el-button>
+            <el-button type="primary" @click="handleDbSelectConfirm">确定</el-button>
+          </template>
+        </el-dialog>
 
         <!-- ========== 下方：目标字段映射配置（仅时序类型显示） ========== -->
         <div class="section-card" v-if="!isImageType">
@@ -559,16 +639,23 @@ onMounted(() => {
           <div class="target-table-row">
             <el-form label-width="100px" label-position="right" inline>
               <el-form-item label="目标表名" required>
-                <el-input v-model="form.targetTable" placeholder="数据写入的目标表名" maxlength="64" style="width: 260px" />
+                <el-input
+                  v-model="form.targetTable"
+                  :placeholder="isTableBound ? '样本集已绑定目标表，自动带出不可更改' : '数据写入的目标表名'"
+                  maxlength="64"
+                  style="width: 260px"
+                  :disabled="isTableBound"
+                  class="target-table-input"
+                />
               </el-form-item>
               <el-button type="primary" :loading="columnLoading" @click="handleQueryColumns" style="margin-left: 12px">
-                查询字段
+                字段自动匹配
               </el-button>
             </el-form>
           </div>
 
           <div v-if="columnsQueried && tableColumns.length > 0" class="mapping-area">
-            <el-table :data="mappings" style="width: 100%" class="mapping-table">
+            <el-table :data="mappings" style="width: 100%" class="mapping-table" max-height="360">
               <el-table-column label="源字段/别名" min-width="200">
                 <template #default="{ row }">
                   <el-input v-model="row.sourceColumn" placeholder="源字段" maxlength="32" size="small" />
@@ -597,7 +684,7 @@ onMounted(() => {
           </div>
 
           <div v-else class="mapping-placeholder">
-            <span>请输入目标表名后点击"查询字段"按钮</span>
+            <span>请输入目标表名后点击"字段自动匹配"按钮</span>
           </div>
 
           <div class="section-footer">
@@ -646,7 +733,6 @@ onMounted(() => {
   display: flex;
   flex-direction: column;
   height: 100vh;
-  background: #0d1117;
   overflow: hidden;
 }
 
@@ -681,6 +767,13 @@ onMounted(() => {
   gap: 16px;
 }
 
+.title-right {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
 .back-btn {
   display: flex;
   align-items: center;
@@ -703,12 +796,20 @@ onMounted(() => {
 }
 
 .task-no-tag {
-  font-size: 13px;
+  font-size: 16px;
   color: #00d4ff;
   background: rgba(0, 212, 255, 0.1);
   border: 1px solid rgba(0, 212, 255, 0.25);
-  padding: 4px 12px;
+  padding: 5px 14px;
   border-radius: 6px;
+  white-space: nowrap;
+}
+
+.sample-set-tag {
+  color: #00d4ff;
+  background: rgba(0, 212, 255, 0.1);
+  border: 1px solid rgba(0, 212, 255, 0.25);
+  white-space: normal;
 }
 
 // 通用卡片样式
@@ -788,9 +889,51 @@ onMounted(() => {
   max-width: 250px;
 }
 
+.form-col-full {
+  flex: 1;
+  min-width: 180px;
+  max-width: 100%;
+}
+
 .form-col-small {
   flex: 0 0 160px;
   max-width: 160px;
+}
+
+// 只读数据源展示输入框
+.readonly-input {
+  :deep(.el-input__wrapper) {
+    background: rgba(255, 255, 255, 0.02) !important;
+    box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.06) inset !important;
+
+    &.is-focus,
+    &:hover {
+      box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.06) inset !important;
+    }
+  }
+
+  :deep(.el-input__inner) {
+    color: rgba(255, 255, 255, 0.65) !important;
+    cursor: default;
+  }
+}
+
+// 样本集已绑定目标表时，目标表名输入框置灰且去除 hover/focus 高亮
+.target-table-input {
+  :deep(.el-input__wrapper) {
+    background: rgba(255, 255, 255, 0.04) !important;
+    box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.07) inset !important;
+    cursor: default;
+
+    &.is-focus,
+    &:hover {
+      box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.07) inset !important;
+    }
+  }
+  :deep(.el-input__inner) {
+    color: rgba(255, 255, 255, 0.45) !important;
+    cursor: default;
+  }
 }
 
 .full-width-item {
@@ -856,6 +999,91 @@ onMounted(() => {
     &.is-selected {
       color: #00d4ff !important;
     }
+  }
+}
+
+// 数据源选择弹窗（深色主题）
+.db-select-dialog {
+  .el-dialog {
+    background: linear-gradient(160deg, #111827 0%, #161e2e 100%);
+    border: 1px solid rgba(0, 212, 255, 0.25);
+  }
+
+  .el-dialog__title {
+    color: #fff;
+    font-weight: 600;
+  }
+
+  .db-select-filter {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 12px;
+
+    .db-select-filter-label {
+      color: rgba(255, 255, 255, 0.5);
+      font-size: 13px;
+      white-space: nowrap;
+    }
+  }
+
+  .el-table {
+    --el-table-tr-bg-color: transparent;
+    --el-table-bg-color: transparent;
+    --el-table-header-bg-color: rgba(0, 212, 255, 0.08);
+    --el-table-header-text-color: rgba(255, 255, 255, 0.85);
+    --el-table-text-color: rgba(255, 255, 255, 0.8);
+    --el-table-border-color: rgba(0, 212, 255, 0.14);
+    --el-table-row-hover-bg-color: rgba(0, 212, 255, 0.1);
+    --el-table-current-row-bg-color: rgba(0, 212, 255, 0.16);
+  }
+
+  .el-table th.el-table__cell {
+    background: linear-gradient(180deg, rgba(0, 212, 255, 0.12) 0%, rgba(0, 212, 255, 0.06) 100%) !important;
+  }
+
+  .db-radio {
+    display: inline-block;
+    width: 14px;
+    height: 14px;
+    border: 1px solid rgba(0, 212, 255, 0.4);
+    border-radius: 50%;
+    position: relative;
+
+    &.active {
+      border-color: #00d4ff;
+
+      &::after {
+        content: '';
+        position: absolute;
+        top: 3px;
+        left: 3px;
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background: #00d4ff;
+      }
+    }
+  }
+
+  .db-select-empty {
+    padding: 40px 0;
+    text-align: center;
+    color: rgba(255, 255, 255, 0.4);
+    font-size: 14px;
+  }
+
+  .el-button--primary {
+    background: linear-gradient(135deg, #00d4ff, #0099cc) !important;
+    border: none !important;
+    color: #0d1117 !important;
+    font-weight: 600;
+  }
+
+  .el-button:not(.el-button--primary) {
+    background: rgba(255, 255, 255, 0.05) !important;
+    border: 1px solid rgba(0, 212, 255, 0.2) !important;
+    color: rgba(255, 255, 255, 0.7) !important;
   }
 }
 

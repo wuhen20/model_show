@@ -49,9 +49,18 @@ const dialogVisible = ref(false)
 const dialogSaving = ref(false)
 const dialogForm = ref({ taskName: '', remark: '', executeType: '01', cronFormula: '', sampleType: '', sampleSetNo: '' })
 
+// 当前选中样本集的绑定表（仅时序类型；有绑定表显示表名，无则显示空待采集）
+const selectedSetBinding = ref<string | null>(null)
+const isTimeSeries = computed(() => dialogForm.value.sampleType === '02')
+const selectedSetBindingLabel = computed(() => {
+  if (!selectedSetBinding.value) return '空待采集'
+  return selectedSetBinding.value
+})
+
 function openCreateDialog() {
   dialogForm.value = { taskName: '', remark: '', executeType: '01', cronFormula: '', sampleType: '', sampleSetNo: '' }
   sampleSetOptions.value = []
+  selectedSetBinding.value = null
   dialogVisible.value = true
 }
 
@@ -59,6 +68,7 @@ function openCreateDialog() {
 async function onSampleTypeChange(val: string) {
   dialogForm.value.sampleSetNo = ''
   sampleSetOptions.value = []
+  selectedSetBinding.value = null
   if (!val) return
   sampleSetLoading.value = true
   try {
@@ -68,6 +78,12 @@ async function onSampleTypeChange(val: string) {
   } finally {
     sampleSetLoading.value = false
   }
+}
+
+// 选中样本集后，回显其绑定表（时序类型）用于判断是否已有绑定表
+function onSampleSetChange(val: string) {
+  const opt = sampleSetOptions.value.find(o => o.setNo === val)
+  selectedSetBinding.value = opt?.bindingTable || null
 }
 
 async function handleCreateConfirm() {
@@ -99,8 +115,8 @@ async function handleCreateConfirm() {
     )
     ElMessage.success('新建任务成功')
     dialogVisible.value = false
-    // 跳转到任务明细页面，传递 sampleType 用于判断图像/时序类型
-    router.push({ path: '/collect-task-detail', query: { taskNo, sampleType: dialogForm.value.sampleType } })
+    // 跳转到任务明细页面，传递 sampleType / sampleSetNo 用于判断图像/时序类型和样本集绑定表
+    router.push({ path: '/collect-task-detail', query: { taskNo, sampleType: dialogForm.value.sampleType, sampleSetNo: dialogForm.value.sampleSetNo || '' } })
   } catch (e: any) {
     ElMessage.error(e.message || '新建失败')
   } finally {
@@ -363,9 +379,13 @@ async function loadCodeDict() {
           </el-select>
         </el-form-item>
         <el-form-item label="原始样本集" required>
-          <el-select v-model="dialogForm.sampleSetNo" placeholder="请先选择数据类型" :loading="sampleSetLoading" :disabled="!dialogForm.sampleType" style="width: 100%">
+          <el-select v-model="dialogForm.sampleSetNo" placeholder="请先选择数据类型" :loading="sampleSetLoading" :disabled="!dialogForm.sampleType" style="width: 100%" @change="onSampleSetChange">
             <el-option v-for="opt in sampleSetOptions" :key="opt.setNo" :label="opt.setName" :value="opt.setNo" />
           </el-select>
+        </el-form-item>
+        <el-form-item v-if="isTimeSeries" label="样本集绑定表">
+          <el-input :model-value="selectedSetBindingLabel" readonly class="readonly-input" />
+          <div class="field-tip">该时序样本集已绑定的目标表名；未绑定时为"空待采集"，可稍后在采集任务明细页创建</div>
         </el-form-item>
         <el-form-item label="执行方式" required>
           <el-radio-group v-model="dialogForm.executeType">
@@ -415,7 +435,6 @@ async function loadCodeDict() {
   display: flex;
   flex-direction: column;
   height: 100vh;
-  background: #0d1117;
   overflow: hidden;
 }
 
@@ -503,6 +522,7 @@ async function loadCodeDict() {
 
 .link-col {
   cursor: pointer;
+  color: #00d4ff;
   transition: color 0.2s;
 
   &:hover {
@@ -540,6 +560,28 @@ async function loadCodeDict() {
   color: rgba(255, 255, 255, 0.4);
   margin-top: 4px;
   line-height: 1.5;
+}
+
+.field-tip {
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.4);
+  margin-top: 4px;
+  line-height: 1.5;
+}
+
+.readonly-input {
+  :deep(.el-input__wrapper) {
+    background: rgba(255, 255, 255, 0.05) !important;
+    box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.08) inset !important;
+
+    &.is-focus {
+      box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.08) inset !important;
+    }
+  }
+  :deep(.el-input__inner) {
+    color: rgba(255, 255, 255, 0.6) !important;
+    cursor: default;
+  }
 }
 
 .log-btn {

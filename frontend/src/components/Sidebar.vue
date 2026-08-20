@@ -5,22 +5,22 @@ import { RouterLink, useRoute } from 'vue-router'
 const route = useRoute()
 const collapsed = ref(false)
 
-interface MenuChild { id: string; name: string; path: string }
-interface MenuItem { id: string; name: string; icon: string; path?: string; children?: MenuChild[] }
+interface MenuChild { id: string; name: string; path: string; hidden?: boolean }
+interface MenuItem { id: string; name: string; icon: string; path?: string; children?: MenuChild[]; hidden?: boolean }
 
 // 融合后的全平台导航（两级可展开）
 const menuItems: MenuItem[] = [
-  { id: 'home', name: '工作台首页', icon: 'home', path: '/' },
-  { id: 'experience', name: '能力体验', icon: 'zap', path: '/ability-experience' },
+  { id: 'home', name: '工作台首页', icon: 'home', path: '/', hidden: true },
+  { id: 'experience', name: '能力体验', icon: 'zap', path: '/ability-experience', hidden: true },
   {
-    id: 'service', name: '模型服务', icon: 'server', children: [
+    id: 'service', name: '模型服务', icon: 'server', hidden: true, children: [
       { id: 'service-overview', name: '模型服务总览', path: '/model-service' },
       { id: 'service-mm', name: '多模态目标检测', path: '/multimodal-detection' },
       { id: 'service-ts', name: '时序模型服务', path: '/timeseries/model-service' }
     ]
   },
   {
-    id: 'sm', name: '小模型平台', icon: 'cpu', children: [
+    id: 'sm', name: '小模型平台', icon: 'cpu', hidden: true, children: [
       { id: 'sm-dash', name: '平台概览', path: '/sm' },
       { id: 'sm-models', name: '小模型管理', path: '/models' },
       { id: 'sm-training', name: '小模型训练', path: '/training' },
@@ -30,29 +30,30 @@ const menuItems: MenuItem[] = [
       { id: 'sm-mcp-test', name: 'MCP 服务测试', path: '/mcp/test' }
     ]
   },
-  { id: 'knowledge', name: '知识管理', icon: 'book', path: '/knowledge-management' },
+  { id: 'knowledge', name: '知识管理', icon: 'book', path: '/knowledge-management', hidden: true },
   { id: 'center', name: '样本中心', icon: 'database', path: '/sample' },
   {
-    id: 'sampleset', name: '样本集管理', icon: 'folder', children: [
+    id: 'sampleset', name: '样本管理', icon: 'folder', children: [
       { id: 'sampleset-base', name: '高质量样本管理', path: '/sample-set' },
       { id: 'sampleset-original', name: '原始样本管理', path: '/original-sample-set' },
-      { id: 'sampleset-ts', name: '时序样本集管理', path: '/timeseries/sample-set' },
+      { id: 'sampleset-ts', name: '时序样本集管理', path: '/timeseries/sample-set', hidden: true },
       { id: 'sampleset-collect', name: '数据采集任务', path: '/collect-task' },
+      { id: 'sampleset-db-config', name: '数据源配置', path: '/db-config' },
       { id: 'sampleset-clean', name: '样本数据清洗', path: '/clean-task' },
       { id: 'sampleset-clean-result', name: '数据清洗结果', path: '/clean-result' },
-      { id: 'sampleset-label', name: '标注任务管理', path: '/label-task' }
+      { id: 'sampleset-label', name: '样本标注', path: '/label-task' }
     ]
   },
   {
-    id: 'analysis', name: '评测分析', icon: 'bar-chart', children: [
+    id: 'analysis', name: '评测分析', icon: 'bar-chart', hidden: true, children: [
       { id: 'analysis-ts', name: '时序模型分析', path: '/timeseries/analysis' }
     ]
   },
-  { id: 'interface', name: '接口管理', icon: 'plug', path: '/interface' },
-  { id: 'config', name: '场景配置', icon: 'settings', path: '/config' },
-  { id: 'monitor', name: '运行监控', icon: 'monitor', path: '/monitor' },
-  { id: 'log', name: '日志中心', icon: 'file-text', path: '/log' },
-  { id: 'system', name: '系统设置', icon: 'cog', path: '/system' }
+  { id: 'interface', name: '接口管理', icon: 'plug', path: '/interface', hidden: true },
+  { id: 'config', name: '场景配置', icon: 'settings', path: '/config', hidden: true },
+  { id: 'monitor', name: '运行监控', icon: 'monitor', path: '/monitor', hidden: true },
+  { id: 'log', name: '日志中心', icon: 'file-text', path: '/log', hidden: true },
+  { id: 'system', name: '系统设置', icon: 'cog', path: '/system', hidden: true }
 ]
 
 const isChildActive = (item: MenuItem) => !!item.children?.some(c => route.path === c.path)
@@ -98,7 +99,7 @@ const getIconPath = (iconName: string) => {
       <template v-for="item in menuItems" :key="item.id">
         <!-- 叶子菜单 -->
         <RouterLink
-          v-if="!item.children"
+          v-if="!item.children && !item.hidden"
           :to="item.path!"
           class="nav-item"
           :class="{ active: route.path === item.path }"
@@ -110,7 +111,7 @@ const getIconPath = (iconName: string) => {
         </RouterLink>
 
         <!-- 含二级目录的父级 -->
-        <div v-else class="nav-group">
+        <div v-else-if="!item.hidden" class="nav-group">
           <div
             class="nav-item nav-parent"
             :class="{ active: isChildActive(item), open: expanded[item.id] }"
@@ -131,7 +132,7 @@ const getIconPath = (iconName: string) => {
           </div>
           <div v-if="!collapsed && expanded[item.id]" class="submenu">
             <RouterLink
-              v-for="child in item.children"
+              v-for="child in item.children!.filter(c => !c.hidden)"
               :key="child.id"
               :to="child.path"
               class="subnav-item"

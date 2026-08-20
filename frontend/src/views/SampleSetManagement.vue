@@ -183,7 +183,7 @@ function toggleSort(field: SortField) {
 }
 
 function goToDetail(item: SampleSet) {
-  router.push({ path: '/sample-detail', query: { setNo: item.setNo, setName: item.name, typeCode: item.modality[0] || '' } })
+  router.push({ path: '/sample-detail', query: { setNo: item.setNo, setName: item.name, typeCode: item.modality[0] || '', qualityLevel: item.qualityLevel || '' } })
 }
 
 async function downloadSampleSet(item: SampleSet) {

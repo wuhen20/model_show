@@ -27,6 +27,8 @@ export interface SaveSampleSetParams {
   sampleTypeName: string
   sampleFieldCode: string
   sampleFieldName: string
+  /** 时序类型专用：绑定的目标表名（"暂空（待采集）"时为空） */
+  bindingTable?: string
 }
 
 export async function saveSampleSet(params: SaveSampleSetParams): Promise<void> {
@@ -165,6 +167,50 @@ export async function queryTimeSeriesData(
   const json = await res.json()
   if (json.code !== 0) throw new Error(json.message || '查询时序数据失败')
   return json.data || { targetTable: null, total: 0, rows: [], columns: [] }
+}
+
+// ========== 时序样本集：绑定目标表 / CSV-Excel 导入 ==========
+
+/** 查询当前数据库的表清单（用于时序样本集绑定目标表的下拉选择） */
+export async function getDbTables(): Promise<string[]> {
+  const res = await fetch(`${BASE_URL}/query-db-tables`)
+  const json = await res.json()
+  if (json.code !== 0) throw new Error(json.message || '查询表清单失败')
+  return (json.data || []).map((item: { tableName: string }) => item.tableName)
+}
+
+/** 首次绑定原始样本集的目标表（绑定后永久锁定，仅未绑定时可用） */
+export async function bindTable(setNo: string, tableName: string): Promise<string> {
+  const res = await fetch(`${BASE_URL}/bind-table`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ setNo, tableName })
+  })
+  const json = await res.json()
+  if (json.code !== 0) throw new Error(json.message || '绑定失败')
+  return json.data?.bindingTable || tableName
+}
+
+/** 时序样本集导入 CSV/Excel（按列名忽略大小写匹配，追加写入绑定的目标表，整体事务） */
+export async function importTimeSeriesData(setNo: string, file: File): Promise<string> {
+  const formData = new FormData()
+  formData.append('setNo', setNo)
+  formData.append('file', file)
+  const res = await fetch(`${BASE_URL}/import-time-series-data`, { method: 'POST', body: formData })
+  const json = await res.json()
+  if (json.code !== 0) throw new Error(json.message || '导入失败')
+  return json.message
+}
+
+/** 清空时序样本集绑定的目标表数据 */
+export async function clearTimeSeriesData(setNo: string): Promise<void> {
+  const res = await fetch(`${BASE_URL}/clear-time-series-data`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ setNo })
+  })
+  const json = await res.json()
+  if (json.code !== 0) throw new Error(json.message || '清除数据失败')
 }
 
 export function getImageUrl(filePath: string): string {

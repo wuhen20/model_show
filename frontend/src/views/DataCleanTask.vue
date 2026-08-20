@@ -200,7 +200,7 @@ async function handleExecute(task: CleanTask) {
 
     if (isAsync) {
       ElMessage.success('任务已启动，正在后台执行，请通过执行记录查看进度')
-      startTaskPolling(task.taskNo)
+      startTaskPolling(task.taskNo, isImage)
       await loadTasks()
       return
     }
@@ -229,7 +229,7 @@ const pollingTimers: Record<string, ReturnType<typeof setInterval>> = {}
 const POLLING_INTERVAL = 2000 // 轮询间隔 2 秒
 const POLLING_TIMEOUT = 30 * 60 * 1000 // 最大轮询时长 30 分钟
 
-function startTaskPolling(taskNo: string) {
+function startTaskPolling(taskNo: string, isImage: boolean) {
   // 避免重复启动
   if (pollingTimers[taskNo]) {
     clearInterval(pollingTimers[taskNo])
@@ -254,8 +254,11 @@ function startTaskPolling(taskNo: string) {
       const status = String(latestLog.executeStatusCode || '')
 
       if (status === '03') {
-        // 执行成功
-        ElMessage.success(`任务执行成功，共检测 ${latestLog.totalCount} 张图片，标记 ${latestLog.removedCount} 张问题图片`)
+        // 执行成功：文案按数据类型区分（图片 vs 时序）
+        const successMsg = isImage
+          ? `任务执行成功，共检测 ${latestLog.totalCount} 张图片，标记 ${latestLog.removedCount} 张问题图片`
+          : `任务执行成功，共检测 ${latestLog.totalCount} 条数据，标记 ${latestLog.removedCount} 条问题数据`
+        ElMessage.success(successMsg)
         stopTaskPolling(taskNo)
         await loadTasks()
       } else if (status === '04') {
@@ -397,7 +400,7 @@ async function loadOriginalSampleSetOptions() {
       <main class="content-area">
         <div class="page-header">
           <div class="page-title-row">
-            <h2 class="page-title">样本数据清理任务管理</h2>
+            <h2 class="page-title">样本数据清洗任务管理</h2>
             <el-button type="primary" class="add-btn" @click="openCreateDialog">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="margin-right: 4px">
                 <path d="M12 5v14M5 12h14" />
@@ -610,7 +613,6 @@ async function loadOriginalSampleSetOptions() {
   display: flex;
   flex-direction: column;
   height: 100vh;
-  background: #0d1117;
   overflow: hidden;
 }
 
@@ -694,6 +696,7 @@ async function loadOriginalSampleSetOptions() {
 
 .link-col {
   cursor: pointer;
+  color: #00d4ff;
   transition: color 0.2s;
 
   &:hover {

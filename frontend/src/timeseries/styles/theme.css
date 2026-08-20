@@ -42,7 +42,7 @@
   /* 背景层（近黑）*/
   --el-bg-color: #111827;                       /* 组件主背景（卡片/输入）*/
   --el-bg-color-overlay: #161e2e;               /* 浮层（下拉/日期面板/消息）*/
-  --el-bg-color-page: #0d1117;
+  --el-bg-color-page: #0f1923;
 
   /* 文本（白系，对齐主系统）*/
   --el-text-color-primary: #ffffff;
@@ -64,8 +64,8 @@
   --el-fill-color-light: rgba(255, 255, 255, 0.05);
   --el-fill-color-lighter: rgba(255, 255, 255, 0.04);
   --el-fill-color-blank: rgba(255, 255, 255, 0.04);             /* 输入框底色 */
-  --el-mask-color: rgba(8, 12, 22, 0.75);
-  --el-mask-color-extra-light: rgba(8, 12, 22, 0.4);
+  --el-mask-color: rgba(10, 18, 30, 0.75);
+  --el-mask-color-extra-light: rgba(10, 18, 30, 0.4);
 
   /* 表格专用 */
   --el-table-bg-color: transparent;
@@ -286,7 +286,7 @@
 /* ============================================================
    表单 / 输入控件
    ============================================================ */
-.el-form-item__label { color: rgba(255, 255, 255, 0.7); }
+.el-form-item__label { color: rgba(255, 255, 255, 0.7); pointer-events: none; }
 .el-input__wrapper,
 .el-textarea__inner,
 .el-select__wrapper,

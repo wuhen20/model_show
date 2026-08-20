@@ -173,6 +173,161 @@ def sample_trend():
         conn.close()
 
 
+# ==================== 数据源配置（s_database_config）====================
+
+def query_database_config():
+    """查询所有数据源配置（列表展示用，不返回密码）"""
+    conn = get_connection()
+    try:
+        with conn.cursor() as cursor:
+            sql = f"""
+                SELECT
+                    c.record_id,
+                    c.db_type as db_type_code,
+                    (
+                    select
+                        scd.code_name
+                    from
+                        sys_code_dict scd
+                    where
+                        scd.code_value = c.db_type
+                        and scd.sort_no = 'DATABASE_TYPE') as db_type_name,
+                    c.db_alias,
+                    c.db_host,
+                    c.db_port,
+                    c.db_usr,
+                    c.db_auth,
+                    c.db_name,
+                    c.remark,
+                    {_date_format('c.create_time')} as create_time
+                FROM s_database_config c
+                ORDER BY c.create_time DESC
+            """
+            _execute(cursor, sql, ())
+            return cursor.fetchall()
+    finally:
+        conn.close()
+
+
+def get_database_config_by_id(record_id: int):
+    """按ID查询数据源配置（含密码密文，仅供后端内部连接使用）"""
+    conn = get_connection()
+    try:
+        with conn.cursor() as cursor:
+            sql = """
+                SELECT record_id, db_type, db_alias, db_host, db_port, db_usr, db_pwd, db_auth, db_name
+                FROM s_database_config
+                WHERE record_id = %s
+            """
+            _execute(cursor, sql, (record_id,))
+            return cursor.fetchone()
+    finally:
+        conn.close()
+
+
+def db_alias_exists(db_alias: str, exclude_record_id: int = None):
+    """校验数据源名称是否已存在。exclude_record_id 用于编辑时排除自身"""
+    conn = get_connection()
+    try:
+        with conn.cursor() as cursor:
+            if exclude_record_id is not None:
+                sql = "SELECT COUNT(*) AS cnt FROM s_database_config WHERE db_alias = %s AND record_id != %s"
+                _execute(cursor, sql, (db_alias, exclude_record_id))
+            else:
+                sql = "SELECT COUNT(*) AS cnt FROM s_database_config WHERE db_alias = %s"
+                _execute(cursor, sql, (db_alias,))
+            row = cursor.fetchone()
+            return (row.get("cnt") or 0) > 0
+    finally:
+        conn.close()
+
+
+def save_database_config(data: dict):
+    """新增数据源配置。db_pwd 由调用方加密后传入"""
+    conn = get_connection()
+    try:
+        with conn.cursor() as cursor:
+            sql = """
+                INSERT INTO s_database_config
+                    (db_type, db_alias, db_host, db_port, db_usr, db_pwd, db_auth, db_name, remark)
+                VALUES
+                    (%(dbType)s, %(dbAlias)s, %(dbHost)s, %(dbPort)s, %(dbUsr)s, %(dbPwd)s, %(dbAuth)s, %(dbName)s, %(remark)s)
+            """
+            _execute(cursor, sql, data)
+        conn.commit()
+        return cursor.rowcount
+    finally:
+        conn.close()
+
+
+def update_database_config(data: dict):
+    """更新数据源配置。密码留空表示不修改（dbPwd 为空时不动 db_pwd 列）"""
+    conn = get_connection()
+    try:
+        with conn.cursor() as cursor:
+            if data.get("dbPwd"):
+                sql = """
+                    UPDATE s_database_config
+                    SET db_alias = %(dbAlias)s,
+                        db_host = %(dbHost)s,
+                        db_port = %(dbPort)s,
+                        db_usr = %(dbUsr)s,
+                        db_pwd = %(dbPwd)s,
+                        db_auth = %(dbAuth)s,
+                        db_name = %(dbName)s,
+                        remark = %(remark)s
+                    WHERE record_id = %(recordId)s
+                """
+            else:
+                sql = """
+                    UPDATE s_database_config
+                    SET db_alias = %(dbAlias)s,
+                        db_host = %(dbHost)s,
+                        db_port = %(dbPort)s,
+                        db_usr = %(dbUsr)s,
+                        db_auth = %(dbAuth)s,
+                        db_name = %(dbName)s,
+                        remark = %(remark)s
+                    WHERE record_id = %(recordId)s
+                """
+            # Oracle oracledb 严格要求 dict 中的 key 与 SQL 占位符一一对应，
+            # data 中可能含 dbType 等不在 SQL 中的 key，需过滤掉
+            used_keys = {"dbAlias", "dbHost", "dbPort", "dbUsr", "dbAuth", "dbName", "remark", "recordId"}
+            if data.get("dbPwd"):
+                used_keys.add("dbPwd")
+            filtered = {k: v for k, v in data.items() if k in used_keys}
+            _execute(cursor, sql, filtered)
+        conn.commit()
+        return cursor.rowcount
+    finally:
+        conn.close()
+
+
+def count_db_config_ref(record_id: int):
+    """统计数据源被采集任务明细引用的次数"""
+    conn = get_connection()
+    try:
+        with conn.cursor() as cursor:
+            sql = "SELECT COUNT(*) AS cnt FROM s_data_collect_task_det WHERE source_db_id = %s"
+            _execute(cursor, sql, (record_id,))
+            row = cursor.fetchone()
+            return row.get("cnt") or 0
+    finally:
+        conn.close()
+
+
+def delete_database_config(record_id: int):
+    """删除数据源配置（调用方需先校验无任务引用）"""
+    conn = get_connection()
+    try:
+        with conn.cursor() as cursor:
+            _execute(cursor, "DELETE FROM s_database_config WHERE record_id = %s", (record_id,))
+        conn.commit()
+        return cursor.rowcount
+    finally:
+        conn.close()
+
+
 # ==================== 数据采集任务（s_data_collect_task / s_data_collect_task_det / s_data_collect_log / s_data_collect_col_map）====================
 
 def query_data_collect_task():
@@ -246,12 +401,10 @@ def save_data_collect_task_det(data: dict):
         with conn.cursor() as cursor:
             sql = """
                 INSERT INTO s_data_collect_task_det
-                    (task_no, source_db_type, source_db_host, source_db_port, source_db_usr, source_db_pwd,
-                     source_db_name, target_table, collect_sql, source_db_auth,
+                    (task_no, source_db_id, target_table, collect_sql,
                      file_get_mode, bucket_name, file_id, file_name)
                 VALUES
-                    (%(taskNo)s, %(sourceDbType)s, %(sourceDbHost)s, %(sourceDbPort)s, %(sourceDbUsr)s, %(sourceDbPwd)s,
-                     %(sourceDbName)s, %(targetTable)s, %(collectSql)s, %(sourceDbAuth)s,
+                    (%(taskNo)s, %(sourceDbId)s, %(targetTable)s, %(collectSql)s,
                      %(fileGetMode)s, %(bucketName)s, %(fileId)s, %(fileName)s)
             """
             _execute(cursor, sql, data)
@@ -262,22 +415,31 @@ def save_data_collect_task_det(data: dict):
 
 
 def query_data_collect_task_det(task_no: str):
-    """查询任务明细（含主表的执行方式信息和数据类型）"""
+    """查询任务明细（JOIN 数据源配置返回源库展示信息，不含密码）"""
     conn = get_connection()
     try:
         with conn.cursor() as cursor:
             sql = _limit_sql(f"""
                 SELECT
                     d.task_no,
-                    d.source_db_type,
-                    d.source_db_host,
-                    d.source_db_port,
-                    d.source_db_usr,
-                    d.source_db_pwd,
-                    d.source_db_name,
+                    d.source_db_id,
+                    c.db_type as source_db_type,
+                    c.db_alias as source_db_alias,
+                    c.db_host as source_db_host,
+                    c.db_port as source_db_port,
+                    c.db_usr as source_db_usr,
+                    c.db_auth as source_db_auth,
+                    c.db_name as source_db_name,
+                    (
+                    select
+                        scd.code_name
+                    from
+                        sys_code_dict scd
+                    where
+                        scd.code_value = c.db_type
+                        and scd.sort_no = 'DATABASE_TYPE') as source_db_type_name,
                     d.target_table,
                     d.collect_sql,
-                    d.source_db_auth,
                     d.file_get_mode,
                     d.bucket_name,
                     d.file_id,
@@ -292,11 +454,39 @@ def query_data_collect_task_det(task_no: str):
                     END as last_execute_flag_name,
                     t.execute_type as execute_type,
                     t.cron_formula as cron_formula,
-                    t.sample_type as sample_type_code
+                    t.sample_type as sample_type_code,
+                    t.original_sample_set_no,
+                    oss.binding_table
                 FROM s_data_collect_task_det d
                 LEFT JOIN s_data_collect_task t ON t.task_no = d.task_no
+                LEFT JOIN s_database_config c ON c.record_id = d.source_db_id
+                LEFT JOIN s_original_sample_set oss ON oss.set_no = t.original_sample_set_no
                 WHERE d.task_no = %s
                 ORDER BY d.record_id DESC
+            """, 1)
+            _execute(cursor, sql, (task_no,))
+            return cursor.fetchone()
+    finally:
+        conn.close()
+
+
+def query_task_sample_set_info(task_no: str):
+    """查询采集任务关联的原始样本集信息（编号/名称/绑定表）
+
+    直接从 s_data_collect_task 关联 s_original_sample_set 查询，
+    不依赖 s_data_collect_task_det 明细行是否存在（新建任务首次进入明细页时明细可能尚未保存）。
+    返回: {original_sample_set_no, set_name, binding_table}；无关联返回 None
+    """
+    conn = get_connection()
+    try:
+        with conn.cursor() as cursor:
+            sql = _limit_sql("""
+                SELECT t.original_sample_set_no,
+                       oss.set_name,
+                       oss.binding_table
+                FROM s_data_collect_task t
+                LEFT JOIN s_original_sample_set oss ON oss.set_no = t.original_sample_set_no
+                WHERE t.task_no = %s
             """, 1)
             _execute(cursor, sql, (task_no,))
             return cursor.fetchone()
@@ -311,15 +501,9 @@ def update_data_collect_task_det(data: dict):
         with conn.cursor() as cursor:
             sql = """
                 UPDATE s_data_collect_task_det
-                SET source_db_type = %(sourceDbType)s,
-                    source_db_host = %(sourceDbHost)s,
-                    source_db_port = %(sourceDbPort)s,
-                    source_db_usr = %(sourceDbUsr)s,
-                    source_db_pwd = %(sourceDbPwd)s,
-                    source_db_name = %(sourceDbName)s,
+                SET source_db_id = %(sourceDbId)s,
                     target_table = %(targetTable)s,
                     collect_sql = %(collectSql)s,
-                    source_db_auth = %(sourceDbAuth)s,
                     file_get_mode = %(fileGetMode)s,
                     bucket_name = %(bucketName)s,
                     file_id = %(fileId)s,
@@ -336,20 +520,26 @@ def update_data_collect_task_det(data: dict):
 # ==================== 任务执行相关 ====================
 
 def get_task_det_raw(task_no: str):
-    """查询任务明细原始数据（用于执行，不做日期格式化）"""
+    """查询任务明细原始数据（用于执行，不做日期格式化）。
+    JOIN s_database_config 并以 source_db_* 别名返回源库连接信息（与旧表字段名一致，执行逻辑零改动），密码在此解密。
+    """
+    from app.core.crypto import sm4_decrypt
     conn = get_connection()
     try:
         with conn.cursor() as cursor:
             sql = _limit_sql("""
                 SELECT
-                    d.task_no, d.source_db_type, d.source_db_host, d.source_db_port,
-                    d.source_db_usr, d.source_db_pwd, d.source_db_name, d.target_table,
-                    d.collect_sql, d.source_db_auth,
+                    d.task_no, d.source_db_id,
+                    c.db_type as source_db_type, c.db_host as source_db_host, c.db_port as source_db_port,
+                    c.db_usr as source_db_usr, c.db_pwd as source_db_pwd, c.db_name as source_db_name,
+                    c.db_auth as source_db_auth, c.db_alias as source_db_alias,
+                    d.target_table, d.collect_sql,
                     d.file_get_mode, d.bucket_name, d.file_id, d.file_name,
                     t.sample_type, t.original_sample_set_no,
                     s.set_path
                 FROM s_data_collect_task_det d
                 LEFT JOIN s_data_collect_task t ON t.task_no = d.task_no
+                LEFT JOIN s_database_config c ON c.record_id = d.source_db_id
                 LEFT JOIN s_original_sample_set s ON s.set_no = t.original_sample_set_no
                 WHERE d.task_no = %s
                 ORDER BY d.record_id DESC
@@ -358,6 +548,9 @@ def get_task_det_raw(task_no: str):
             row = cursor.fetchone()
             if row and row.get("collect_sql") and isinstance(row["collect_sql"], bytes):
                 row["collect_sql"] = row["collect_sql"].decode("utf-8")
+            # 源库密码解密（SM4: 前缀密文解密，明文原样返回，兼容存量迁移数据）
+            if row and row.get("source_db_pwd"):
+                row["source_db_pwd"] = sm4_decrypt(row["source_db_pwd"])
             return row
     finally:
         conn.close()
@@ -644,7 +837,10 @@ def execute_source_sql(db_type: str, host: str, port: str, user: str, pwd: str, 
 
 
 def write_to_target_table(target_table: str, col_map: list[dict], columns: list, rows: list):
-    """根据字段映射将数据写入本地数据库的目标表。
+    """根据字段映射将数据追加写入本地数据库的目标表（纯 INSERT，不清空旧数据）。
+
+    多个采集任务 / CSV 导入共用样本集绑定的同一张目标表，全量数据沉淀，
+    因此写入前不再 DELETE 清空。同一任务重复执行会产生追加数据。
     col_map: [{source_column, target_colum}, ...]
     columns: 源SQL查询结果的列名列表
     rows: 源SQL查询结果的数据行（每行为tuple）
@@ -681,9 +877,7 @@ def write_to_target_table(target_table: str, col_map: list[dict], columns: list,
     conn = get_connection()
     try:
         with conn.cursor() as cursor:
-            # 先清空目标表旧数据
-            _execute(cursor, f"DELETE FROM {_quote_ident(target_table)}")
-            # 批量插入数据
+            # 追加写入数据（不再清空目标表旧数据）
             batch_values = []
             for row in rows:
                 values = tuple(row[i] if i < len(row) else None for i in sorted_indices)
@@ -796,10 +990,43 @@ def query_col_map(task_no: str):
 
 
 def save_col_map(task_no: str, target_table: str, mappings: list[dict]):
-    """保存任务字段映射配置（先删后插），同时更新目标表名"""
+    """保存任务字段映射配置（先删后插），同时更新目标表名。
+
+    时序任务关联的原始样本集绑定规则（binding_table 一旦绑定永久锁定）：
+    - 样本集未绑定表：保存时将目标表名同步写入样本集 binding_table（首次绑定）
+    - 样本集已绑定表：目标表名必须与绑定表一致，否则报错
+    """
     conn = get_connection()
     try:
         with conn.cursor() as cursor:
+            # 查询任务关联的样本集及已绑定表
+            _execute(cursor, """
+                SELECT t.original_sample_set_no, t.sample_type, s.binding_table
+                FROM s_data_collect_task t
+                LEFT JOIN s_original_sample_set s ON s.set_no = t.original_sample_set_no
+                WHERE t.task_no = %s
+            """, (task_no,))
+            task_row = cursor.fetchone()
+            if task_row:
+                if isinstance(task_row, dict):
+                    set_no = task_row.get("original_sample_set_no")
+                    sample_type = task_row.get("sample_type")
+                    binding_table = task_row.get("binding_table")
+                else:
+                    set_no, sample_type, binding_table = task_row[0], task_row[1], task_row[2]
+                # 仅时序类型（02）任务且已关联样本集时处理绑定
+                if set_no and sample_type == "02":
+                    if binding_table:
+                        if binding_table != target_table:
+                            raise ValueError(f"样本集已绑定目标表 {binding_table}，目标表名不可更改")
+                    else:
+                        # 未绑定：首次绑定目标表名
+                        _execute(cursor, """
+                            UPDATE s_original_sample_set
+                            SET binding_table = %s
+                            WHERE set_no = %s
+                              AND (binding_table IS NULL OR binding_table = '')
+                        """, (target_table, set_no))
             # 更新目标表名
             _execute(cursor, "UPDATE s_data_collect_task_det SET target_table = %s WHERE task_no = %s", (target_table, task_no))
             # 删除旧的映射配置
@@ -812,5 +1039,8 @@ def save_col_map(task_no: str, target_table: str, mappings: list[dict]):
                 """
                 _execute(cursor, sql, (task_no, m.get("sourceColumn", ""), m.get("targetColumn", "")))
         conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
     finally:
         conn.close()

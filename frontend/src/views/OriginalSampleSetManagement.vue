@@ -3,7 +3,7 @@ import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import Header from '@/components/Header.vue'
 import Sidebar from '@/components/Sidebar.vue'
-import { getCodeDict, saveSampleSet, updateSampleSet, querySampleSet, uploadSamples, uploadSamplesBatch, getDirectoryTree, deleteOriginalSampleSet, type DirectoryNode } from '@/api/originalSample'
+import { getCodeDict, saveSampleSet, updateSampleSet, querySampleSet, uploadSamples, uploadSamplesBatch, getDirectoryTree, deleteOriginalSampleSet, getDbTables, type DirectoryNode } from '@/api/originalSample'
 import ChunkUploadDialog from '@/components/ChunkUploadDialog.vue'
 import { ElMessage, ElMessageBox, ElLoading } from 'element-plus'
 
@@ -23,6 +23,7 @@ interface SampleSet {
   businessSystem: string
   fieldCode: string
   setDescription: string
+  bindingTable?: string | null
   _fromDb?: boolean
 }
 
@@ -308,6 +309,27 @@ const dialogForm = ref({
   sampleFieldCode: ''
 })
 
+// 时序类型专用：数据来源（wait-暂空待采集 bind-绑定已有表）与绑定表名
+const isTimeSeriesCreate = computed(() => dialogForm.value.sampleTypeCode === '02')
+const dataSource = ref<'' | 'wait' | 'bind'>('')
+const bindingTable = ref('')
+// 数据库表清单（绑定已有表下拉选择，支持手动输入）
+const dbTableOptions = ref<string[]>([])
+const dbTableLoading = ref(false)
+
+async function loadDbTableOptions() {
+  if (dbTableOptions.value.length > 0 || dbTableLoading.value) return
+  dbTableLoading.value = true
+  try {
+    dbTableOptions.value = await getDbTables()
+  } catch (e) {
+    // 表清单加载失败时仍可手动输入表名
+    dbTableOptions.value = []
+  } finally {
+    dbTableLoading.value = false
+  }
+}
+
 function openCreateDialog() {
   dialogForm.value = {
     setName: '',
@@ -316,11 +338,20 @@ function openCreateDialog() {
     sampleTypeCode: '',
     sampleFieldCode: ''
   }
+  dataSource.value = ''
+  bindingTable.value = ''
   dialogVisible.value = true
 }
 
 function onSampleTypeChange(val: string) {
   dialogForm.value.sampleTypeCode = val
+  // 非时序类型重置数据来源相关状态
+  dataSource.value = ''
+  bindingTable.value = ''
+  // 时序类型：预加载数据库表清单
+  if (val === '02') {
+    loadDbTableOptions()
+  }
 }
 
 async function handleCreateConfirm() {
@@ -331,6 +362,17 @@ async function handleCreateConfirm() {
   if (!dialogForm.value.sampleTypeCode) {
     ElMessage.warning('请选择样本类型')
     return
+  }
+  // 时序类型：数据来源必选；选择绑定已有表时表名必填
+  if (isTimeSeriesCreate.value) {
+    if (!dataSource.value) {
+      ElMessage.warning('请选择数据来源')
+      return
+    }
+    if (dataSource.value === 'bind' && !bindingTable.value.trim()) {
+      ElMessage.warning('请选择或输入要绑定的目标表名')
+      return
+    }
   }
 
   dialogSaving.value = true
@@ -344,7 +386,8 @@ async function handleCreateConfirm() {
       sampleTypeCode: dialogForm.value.sampleTypeCode,
       sampleTypeName: typeMatch?.label || '',
       sampleFieldCode: dialogForm.value.sampleFieldCode,
-      sampleFieldName: fieldMatch?.label || ''
+      sampleFieldName: fieldMatch?.label || '',
+      bindingTable: isTimeSeriesCreate.value && dataSource.value === 'bind' ? bindingTable.value.trim() : ''
     })
     ElMessage.success('新建样本集成功')
     dialogVisible.value = false
@@ -365,8 +408,16 @@ const editForm = ref({
   setName: '',
   description: '',
   businessSystem: '',
-  sampleFieldCode: '',
-  sampleTypeCode: ''  // 仅用于判断是否显示标注标签字段，不允许修改
+  sampleTypeCode: '',  // 仅用于判断是否显示标注标签字段，不允许修改
+  sampleFieldCode: ''
+})
+
+// 编辑弹窗：时序类型展示绑定信息
+const editIsTimeSeries = computed(() => editForm.value.sampleTypeCode === '02')
+const editBindingTable = ref<string | null>(null)
+const editDataSourceLabel = computed(() => {
+  if (!editBindingTable.value) return '暂空（待采集）'
+  return `绑定已有表：${editBindingTable.value}`
 })
 
 function openEditDialog(item: SampleSet) {
@@ -375,8 +426,14 @@ function openEditDialog(item: SampleSet) {
     setName: item.name,
     description: item.setDescription || '',
     businessSystem: item.businessSystem || '',
-    sampleFieldCode: item.fieldCode || '',
-    sampleTypeCode: item.modality[0] || ''
+    sampleTypeCode: item.modality[0] || '',
+    sampleFieldCode: item.fieldCode || ''
+  }
+  // 时序类型：读取绑定表信息
+  if (editForm.value.sampleTypeCode === '02') {
+    editBindingTable.value = (item as any).bindingTable || null
+  } else {
+    editBindingTable.value = null
   }
   editDialogVisible.value = true
 }
@@ -660,10 +717,6 @@ function handleBatchUploadSuccess() {
                   <span>{{ formatScale(item.scale) }}条</span>
                 </div>
                 <div class="meta-item">
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 7v10c0 .55.45 1 1 1h14c.55 0 1-.45 1-1V7c0-.55-.45-1-1-1H5c-.55 0-1 .45-1 1zm0 0l9 6 9-6"/></svg>
-                  <span>{{ item.version }}</span>
-                </div>
-                <div class="meta-item">
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>
                   <span>{{ item.updateTime }}</span>
                 </div>
@@ -757,6 +810,30 @@ function handleBatchUploadSuccess() {
             <el-option v-for="m in modalityOptions" :key="m.value" :label="m.label" :value="m.value" />
           </el-select>
         </el-form-item>
+        <!-- 数据来源（仅时序类型显示，必选） -->
+        <template v-if="isTimeSeriesCreate">
+          <el-form-item label="数据来源" required>
+            <el-radio-group v-model="dataSource">
+              <el-radio value="wait">暂空（待采集）</el-radio>
+              <el-radio value="bind">绑定已有表</el-radio>
+            </el-radio-group>
+          </el-form-item>
+          <el-form-item v-if="dataSource === 'bind'" label="目标表名" required>
+            <el-select
+              v-model="bindingTable"
+              placeholder="选择或输入数据库表名"
+              filterable
+              allow-create
+              default-first-option
+              :loading="dbTableLoading"
+              style="width: 100%"
+              popper-class="create-dialog-popper"
+            >
+              <el-option v-for="t in dbTableOptions" :key="t" :label="t" :value="t" />
+            </el-select>
+            <div class="binding-tip">绑定后目标表名将永久锁定，不可更改；请谨慎选择</div>
+          </el-form-item>
+        </template>
         <el-form-item label="样本领域">
           <el-select v-model="dialogForm.sampleFieldCode" placeholder="请选择样本领域" clearable style="width: 100%" popper-class="create-dialog-popper">
             <el-option v-for="f in fieldOptions" :key="f.value" :label="f.label" :value="f.value" />
@@ -774,17 +851,23 @@ function handleBatchUploadSuccess() {
         <el-form-item label="样本集名称">
           <el-input v-model="editForm.setName" disabled />
         </el-form-item>
-        <el-form-item label="样本类型">
-          <el-select v-model="editForm.sampleTypeCode" disabled style="width: 100%">
-            <el-option v-for="m in modalityOptions" :key="m.value" :label="m.label" :value="m.value" />
-          </el-select>
-        </el-form-item>
         <el-form-item label="描述">
           <el-input v-model="editForm.description" type="textarea" :rows="3" placeholder="请输入描述" maxlength="500" />
         </el-form-item>
         <el-form-item label="业务系统">
           <el-input v-model="editForm.businessSystem" placeholder="请输入业务系统" maxlength="50" />
         </el-form-item>
+        <el-form-item label="样本类型">
+          <el-select v-model="editForm.sampleTypeCode" disabled style="width: 100%">
+            <el-option v-for="m in modalityOptions" :key="m.value" :label="m.label" :value="m.value" />
+          </el-select>
+        </el-form-item>
+        <!-- 数据来源（仅时序类型展示，只读） -->
+        <template v-if="editIsTimeSeries">
+          <el-form-item label="数据来源">
+            <el-input :value="editDataSourceLabel" disabled />
+          </el-form-item>
+        </template>
         <el-form-item label="样本领域">
           <el-select v-model="editForm.sampleFieldCode" placeholder="请选择样本领域" clearable style="width: 100%" popper-class="create-dialog-popper">
             <el-option v-for="f in fieldOptions" :key="f.value" :label="f.label" :value="f.value" />
@@ -917,6 +1000,13 @@ function handleBatchUploadSuccess() {
   border-radius: 12px;
   padding: 16px 20px;
   margin-bottom: 16px;
+}
+
+.binding-tip {
+  font-size: 12px;
+  color: rgba(255, 170, 0, 0.7);
+  line-height: 1.6;
+  margin-top: 4px;
 }
 
 .filter-row {

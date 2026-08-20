@@ -356,6 +356,7 @@ def query_code_dict(sort_no_list: list[str]):
                 f"SELECT SORT_NO, CODE_VALUE, CODE_NAME "
                 f"FROM sys_code_dict "
                 f"WHERE SORT_NO IN ({placeholders}) "
+                f"AND active_flag = 1 "
                 f"ORDER BY SORT_NO, ORDER_INDEX, RECORD_ID"
             )
             _execute(cursor, sql, sort_no_list)

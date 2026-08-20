@@ -19,13 +19,13 @@ export interface LabelTask {
 export interface LabelTaskDetail extends LabelTask {}
 
 export interface LabelSampleRow {
-  recordId: string
+  recordId: number
   taskNo: string
   sampleNo: string
   sampleName: string
   filePath: string
   labelContent: string | null
-  labelFlag: string
+  labelFlag: number
   updateTime: string
 }
 
@@ -113,8 +113,12 @@ export async function getLabelTaskSamples(
 }
 
 /** 获取单条明细的标注内容 */
-export async function getLabelSample(recordId: string): Promise<LabelSampleDetail> {
-  const res = await fetch(`${BASE_URL}/samples/${recordId}`)
+export async function getLabelSample(recordId: number): Promise<LabelSampleDetail> {
+  const res = await fetch(`${BASE_URL}/sampleInfo`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ recordId })
+  })
   const json = await res.json()
   if (json.code !== 0) throw new Error(json.message || '查询失败')
   return json.data
@@ -122,15 +126,50 @@ export async function getLabelSample(recordId: string): Promise<LabelSampleDetai
 
 /** 保存标注内容 */
 export async function saveLabelContent(
-  recordId: string,
+  recordId: number,
   labelContent: string,
-  labelFlag: string
+  labelFlag: number
 ): Promise<void> {
-  const res = await fetch(`${BASE_URL}/samples/${recordId}`, {
-    method: 'PUT',
+  const res = await fetch(`${BASE_URL}/saveLabels`, {
+    method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ labelContent, labelFlag })
+    body: JSON.stringify({ recordId, labelContent, labelFlag })
   })
   const json = await res.json()
   if (json.code !== 0) throw new Error(json.message || '保存失败')
+}
+
+// ==================== 已标注样本入库 ====================
+
+export interface ImportLabeledSamplesResult {
+  insertedCount: number
+  updatedCount: number
+  errorCount: number
+  errors: string[]
+  preVersion?: string
+  nextVersion?: string
+}
+
+/** 已标注样本入库到高质量样本集 */
+export async function importLabeledSamples(
+  taskNo: string,
+  setNo: string,
+  majorVersionChange: boolean = false,
+  versionRemark: string = ''
+): Promise<ImportLabeledSamplesResult> {
+  const res = await fetch(`${BASE_URL}/import-to-sample`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ taskNo, setNo, majorVersionChange, versionRemark })
+  })
+  const json = await res.json()
+  if (json.code !== 0) throw new Error(json.message || '入库失败')
+  return {
+    insertedCount: json.data?.insertedCount ?? 0,
+    updatedCount: json.data?.updatedCount ?? 0,
+    errorCount: json.data?.errorCount ?? 0,
+    errors: json.data?.errors ?? [],
+    preVersion: json.data?.preVersion,
+    nextVersion: json.data?.nextVersion
+  }
 }

@@ -25,10 +25,13 @@ from app.core.db_collect import (
     sample_statistic, sample_trend,
     query_data_collect_task, save_data_collect_task, save_data_collect_task_det,
     query_data_collect_task_det, update_data_collect_task_det, get_task_det_raw,
+    query_task_sample_set_info,
     update_task_status, insert_collect_log, append_collect_log, finish_collect_log,
     query_collect_log, query_all_scheduled_tasks, get_task_execute_type,
     update_task_execute_type, delete_data_collect_task, execute_source_sql,
     query_target_table_columns, query_col_map, save_col_map, write_to_target_table,
+    query_database_config, get_database_config_by_id, db_alias_exists,
+    save_database_config, update_database_config, count_db_config_ref, delete_database_config,
 )
 from app.services.sample_minio_service import is_minio_enabled, is_minio_path, upload_image as minio_upload_image, download_image as minio_download_image, build_set_path as minio_build_set_path, build_object_id as minio_build_object_id, list_object_names as minio_list_object_names, sanitize_sub_dir as minio_sanitize_sub_dir, build_object_prefix as minio_build_object_prefix, delete_object as minio_delete_object
 import os
@@ -1200,10 +1203,32 @@ def query_sample_set_by_type_api(sampleType: str = Query(..., description="样�
                 "setName": row["set_name"],
                 "setDescription": row.get("set_description") or "",
                 "businessSystem": row.get("business_system") or "",
+                "bindingTable": row.get("binding_table") or None,
             }
             for row in rows
         ]
         return {"code": 0, "data": data}
+    except Exception as e:
+        logger.exception("接口异常")
+        return {"code": 1, "message": f"查询失败: {str(e)}"}
+
+
+@router.get("/query-task-sample-set")
+def query_task_sample_set_api(taskNo: str = Query(..., description="任务编号")):
+    """查询采集任务关联的原始样本集信息（编号/名称/绑定表）
+
+    不依赖任务明细行是否存在，新建任务首次进入明细页也能获取绑定表。
+    """
+    try:
+        row = query_task_sample_set_info(taskNo)
+        if not row:
+            return {"code": 0, "data": None}
+        item = {
+            "originalSampleSetNo": row.get("original_sample_set_no"),
+            "sampleSetName": row.get("set_name"),
+            "bindingTable": row.get("binding_table") or None,
+        }
+        return {"code": 0, "data": item}
     except Exception as e:
         logger.exception("接口异常")
         return {"code": 1, "message": f"查询失败: {str(e)}"}
@@ -1235,14 +1260,37 @@ def query_collect_task_det_api(taskNo: str = Query(..., description="任务编�
 
 @router.post("/test-db-connection")
 def test_db_connection_api(payload: dict):
-    """测试数据库连接"""
-    db_type_code = payload.get("dbType", "").strip()
-    host = payload.get("host", "").strip()
-    port = payload.get("port", "").strip()
-    user = payload.get("user", "").strip()
-    pwd = payload.get("pwd", "").strip()
-    database = payload.get("database", "").strip()
-    auth = payload.get("auth", "").strip() or "NONE"
+    """测试数据库连接。
+    - 传 dbConfigId：按数据源配置测试（任务明细页使用）
+    - 传表单参数（dbType/host/...）：按未保存的表单数据测试（数据源配置弹窗新增时使用）
+    """
+    from app.core.crypto import sm4_decrypt
+    db_config_id = payload.get("dbConfigId")
+    auth = "NONE"
+
+    if db_config_id:
+        # 按数据源配置测试
+        try:
+            cfg = get_database_config_by_id(int(db_config_id))
+        except (TypeError, ValueError):
+            return {"code": 1, "message": "数据源ID无效"}
+        if not cfg:
+            return {"code": 1, "message": "未找到对应的数据源配置"}
+        db_type_code = cfg.get("db_type") or ""
+        host = cfg.get("db_host") or ""
+        port = str(cfg.get("db_port") or "")
+        user = cfg.get("db_usr") or ""
+        pwd = sm4_decrypt(cfg.get("db_pwd") or "")
+        database = cfg.get("db_name") or ""
+        auth = cfg.get("db_auth") or "NONE"
+    else:
+        db_type_code = (payload.get("dbType") or "").strip()
+        host = (payload.get("host") or "").strip()
+        port = (payload.get("port") or "").strip()
+        user = (payload.get("user") or "").strip()
+        pwd = (payload.get("pwd") or "").strip()
+        database = (payload.get("database") or "").strip()
+        auth = (payload.get("auth") or "").strip() or "NONE"
 
     if not db_type_code or not host or not user:
         return {"code": 1, "message": "数据库类型、地址、用户名不能为空"}
@@ -1276,38 +1324,37 @@ def test_db_connection_api(payload: dict):
 @router.post("/save-collect-task-det")
 def save_collect_task_det_api(payload: dict):
     """保存数据采集任务明细（新增或更新）"""
-    task_no = payload.get("taskNo", "").strip()
-    source_db_type = payload.get("sourceDbType", "").strip()
-    source_db_host = payload.get("sourceDbHost", "").strip()
-    source_db_port = payload.get("sourceDbPort", "").strip()
-    source_db_usr = payload.get("sourceDbUsr", "").strip()
-    source_db_pwd = payload.get("sourceDbPwd", "").strip()
-    source_db_name = payload.get("sourceDbName", "").strip()
-    target_table = payload.get("targetTable", "").strip()
-    collect_sql = payload.get("collectSql", "").strip()
-    source_db_auth = payload.get("sourceDbAuth", "").strip()
+    task_no = (payload.get("taskNo") or "").strip()
+    source_db_id = payload.get("sourceDbId")
+    target_table = (payload.get("targetTable") or "").strip()
+    collect_sql = (payload.get("collectSql") or "").strip()
     # 图像类型采集相关字段（可选，时序任务不传）
-    file_get_mode = payload.get("fileGetMode", "").strip()
-    bucket_name = payload.get("bucketName", "").strip()
-    file_id = payload.get("fileId", "").strip()
-    file_name = payload.get("fileName", "").strip()
+    file_get_mode = (payload.get("fileGetMode") or "").strip()
+    bucket_name = (payload.get("bucketName") or "").strip()
+    file_id = (payload.get("fileId") or "").strip()
+    file_name = (payload.get("fileName") or "").strip()
 
     if not task_no:
         return {"code": 1, "message": "任务编号不能为空"}
-    if not source_db_type or not source_db_host or not source_db_usr or not collect_sql:
-        return {"code": 1, "message": "数据库类型、地址、用户名、SQL不能为空"}
+    if not source_db_id:
+        return {"code": 1, "message": "请选择数据源"}
+    if not collect_sql:
+        return {"code": 1, "message": "采集SQL不能为空"}
+
+    try:
+        # 校验数据源存在
+        source_db_id = int(source_db_id)
+        cfg = get_database_config_by_id(source_db_id)
+        if not cfg:
+            return {"code": 1, "message": "所选数据源不存在或已被删除"}
+    except (TypeError, ValueError):
+        return {"code": 1, "message": "数据源ID无效"}
 
     data = {
         "taskNo": task_no,
-        "sourceDbType": source_db_type,
-        "sourceDbHost": source_db_host,
-        "sourceDbPort": source_db_port,
-        "sourceDbUsr": source_db_usr,
-        "sourceDbPwd": source_db_pwd,
-        "sourceDbName": source_db_name,
+        "sourceDbId": source_db_id,
         "targetTable": target_table,
         "collectSql": collect_sql,
-        "sourceDbAuth": source_db_auth,
         "fileGetMode": file_get_mode or None,
         "bucketName": bucket_name or None,
         "fileId": file_id or None,
@@ -1328,6 +1375,149 @@ def save_collect_task_det_api(payload: dict):
     except Exception as e:
         logger.exception("接口异常")
         return {"code": 1, "message": f"保存失败: {str(e)}"}
+
+
+# ==================== 数据源配置（s_database_config）====================
+
+@router.get("/query-db-config")
+def query_db_config_api():
+    """查询所有数据源配置（不含密码）"""
+    try:
+        rows = query_database_config()
+        data = []
+        for row in rows:
+            item = {}
+            for k, v in row.items():
+                parts = k.split("_")
+                camel = parts[0] + "".join(p.capitalize() for p in parts[1:])
+                if hasattr(v, "isoformat"):
+                    v = v.isoformat()
+                item[camel] = v
+            data.append(item)
+        return {"code": 0, "data": data}
+    except Exception as e:
+        logger.exception("接口异常")
+        return {"code": 1, "message": f"查询失败: {str(e)}"}
+
+
+def _validate_db_config_payload(payload: dict, is_create: bool):
+    """数据源配置表单校验，返回 (错误消息, 表单数据)"""
+    from app.core.crypto import sm4_encrypt
+    db_type = (payload.get("dbType") or "").strip()
+    db_alias = (payload.get("dbAlias") or "").strip()
+    db_host = (payload.get("dbHost") or "").strip()
+    db_port = (payload.get("dbPort") or "").strip()
+    db_usr = (payload.get("dbUsr") or "").strip()
+    db_pwd = (payload.get("dbPwd") or "").strip()
+    db_auth = (payload.get("dbAuth") or "").strip()
+    db_name = (payload.get("dbName") or "").strip()
+    remark = (payload.get("remark") or "").strip()
+
+    if is_create and not db_type:
+        return "请选择数据库类型", None
+    if not db_alias:
+        return "请输入数据源名称", None
+    if not db_host:
+        return "请输入数据库地址", None
+    if not db_usr:
+        return "请输入用户名", None
+    if is_create and not db_pwd:
+        return "请输入密码", None
+    if not db_name:
+        return "请输入数据库名称", None
+    if db_type == "03" and not db_auth:
+        return "Hive 数据源请选择认证方式", None
+
+    data = {
+        "dbAlias": db_alias,
+        "dbHost": db_host,
+        "dbPort": db_port,
+        "dbUsr": db_usr,
+        "dbAuth": db_auth or None,
+        "dbName": db_name,
+        "remark": remark or None,
+        # 密码 SM4 加密存储（明文密文兼容读取）
+        "dbPwd": sm4_encrypt(db_pwd) if db_pwd else "",
+    }
+    return None, data
+
+
+@router.post("/save-db-config")
+def save_db_config_api(payload: dict):
+    """新增数据源配置"""
+    db_type = (payload.get("dbType") or "").strip()
+    err, data = _validate_db_config_payload(payload, is_create=True)
+    if err:
+        return {"code": 1, "message": err}
+    data["dbType"] = db_type
+
+    try:
+        # 数据源名称重名校验
+        if db_alias_exists(data["dbAlias"]):
+            return {"code": 1, "message": f"数据源名称「{data['dbAlias']}」已存在，请更换名称"}
+        save_database_config(data)
+        return {"code": 0, "message": "保存成功"}
+    except Exception as e:
+        logger.exception("接口异常")
+        return {"code": 1, "message": f"保存失败: {str(e)}"}
+
+
+@router.post("/update-db-config")
+def update_db_config_api(payload: dict):
+    """编辑数据源配置（类型不可修改；密码留空表示不修改）"""
+    record_id = payload.get("recordId")
+    if not record_id:
+        return {"code": 1, "message": "记录ID不能为空"}
+
+    try:
+        record_id = int(record_id)
+        existing = get_database_config_by_id(record_id)
+        if not existing:
+            return {"code": 1, "message": "未找到对应的数据源配置"}
+    except (TypeError, ValueError):
+        return {"code": 1, "message": "记录ID无效"}
+
+    # 类型不可修改：用库中原类型兜底（保证 Hive 认证方式等类型相关校验不遗漏）
+    if not (payload.get("dbType") or "").strip():
+        payload = {**payload, "dbType": existing.get("db_type") or ""}
+    err, data = _validate_db_config_payload(payload, is_create=False)
+    if err:
+        return {"code": 1, "message": err}
+    data["recordId"] = record_id
+
+    try:
+        # 数据源名称重名校验（排除自身）
+        if db_alias_exists(data["dbAlias"], exclude_record_id=record_id):
+            return {"code": 1, "message": f"数据源名称「{data['dbAlias']}」已存在，请更换名称"}
+        # 类型不可修改：忽略前端传入的类型，保持库中原值
+        update_database_config(data)
+        return {"code": 0, "message": "更新成功"}
+    except Exception as e:
+        logger.exception("接口异常")
+        return {"code": 1, "message": f"更新失败: {str(e)}"}
+
+
+@router.post("/delete-db-config")
+def delete_db_config_api(payload: dict):
+    """删除数据源配置（被采集任务引用时禁止删除）"""
+    record_id = payload.get("recordId")
+    if not record_id:
+        return {"code": 1, "message": "记录ID不能为空"}
+    try:
+        record_id = int(record_id)
+    except (TypeError, ValueError):
+        return {"code": 1, "message": "记录ID无效"}
+
+    try:
+        # 引用校验：被采集任务明细引用的数据源禁止删除
+        ref_count = count_db_config_ref(record_id)
+        if ref_count > 0:
+            return {"code": 1, "message": f"该数据源已被 {ref_count} 个采集任务引用，禁止删除"}
+        delete_database_config(record_id)
+        return {"code": 0, "message": "删除成功"}
+    except Exception as e:
+        logger.exception("接口异常")
+        return {"code": 1, "message": f"删除失败: {str(e)}"}
 
 
 class ExecuteCollectTaskRequest(BaseModel):
@@ -1354,6 +1544,9 @@ def execute_collect_task_internal(task_no: str, trigger_source: str = "manual") 
     collect_sql = det.get("collect_sql")
     if not collect_sql:
         return {"code": 1, "message": "采集SQL不能为空"}
+
+    if not det.get("source_db_id"):
+        return {"code": 1, "message": "数据源未配置，请先在明细页面选择数据源"}
 
     sample_type = det.get("sample_type") or ""
 

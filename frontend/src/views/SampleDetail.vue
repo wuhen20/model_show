@@ -13,6 +13,10 @@ const router = useRouter()
 const setNo = ref(typeof route.query.setNo === 'string' ? route.query.setNo : '')
 const setName = ref(typeof route.query.setName === 'string' ? route.query.setName : '')
 const typeCode = ref(typeof route.query.typeCode === 'string' ? route.query.typeCode : '')
+const qualityLevel = ref(typeof route.query.qualityLevel === 'string' ? route.query.qualityLevel : '')
+
+const qualityLevelLabel: Record<string, string> = { '01': '优质', '02': '良好', '03': '一般', '04': '较差' }
+const qualityLevelColor: Record<string, string> = { '01': '#00d4ff', '02': '#00ff88', '03': '#ffd93d', '04': '#ff6b6b' }
 
 const loading = ref(false)
 const sampleList = ref<SampleInfoRow[]>([])
@@ -1068,7 +1072,24 @@ function handleInspectionRate(star: number) {
 }
 
 async function handleInspectionSubmit() {
-  if (!allRated.value) return
+  if (ratedCount.value === 0) return
+  // 如果未全部评分，弹出确认提示
+  if (!allRated.value) {
+    try {
+      await ElMessageBox.confirm(
+        `存在待评分图片：${unratedCount.value}张，现在提交可能会使评分与样本实际质量存在差距，是否确认提交？`,
+        '确认提交',
+        {
+          confirmButtonText: '确认提交',
+          cancelButtonText: '继续评分',
+          type: 'warning',
+        }
+      )
+    } catch {
+      // 用户取消，继续评分
+      return
+    }
+  }
   inspectionSubmitting.value = true
   try {
     await submitQualityInspection(setNo.value, averageStar.value)
@@ -1147,6 +1168,7 @@ watch(inspectionIndex, async (idx) => {
   inspectionCachedImage.value = null
   inspectionSelectedBoxIndex.value = null
   inspectionThinkCollapsed.value = false
+  inspectionImageLoading.value = true
   inspectionAnnoLoading.value = true
   try {
     const ann = await getAnnotations(sample.sampleNo)
@@ -1328,6 +1350,7 @@ onMounted(() => {
                 <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 18l-6-6 6-6"/></svg>
               </span>
               {{ setName || setNo }}
+              <span v-if="qualityLevel" class="quality-badge" :style="{ color: qualityLevelColor[qualityLevel], borderColor: qualityLevelColor[qualityLevel] }">{{ qualityLevelLabel[qualityLevel] || qualityLevel }}</span>
             </h2>
             <p>样本集编号：{{ setNo }}，共 {{ filteredList.length }} 条样本</p>
           </div>
@@ -1869,6 +1892,13 @@ onMounted(() => {
               <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 18l-6-6 6-6"/></svg>
             </button>
             <div class="inspection-image-wrap">
+              <!-- 图片加载遮罩（minio 等慢速场景） -->
+              <div v-if="inspectionImageLoading" class="inspection-image-loading-mask">
+                <div class="inspection-image-loading-spinner">
+                  <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="inspection-loading-icon"><path d="M21 12a9 9 0 11-6.219-8.56"/></svg>
+                  <span>正在获取图片...</span>
+                </div>
+              </div>
               <template v-if="currentSample">
                 <!-- 无标注时显示普通 img -->
                 <template v-if="!inspectionAnnoData?.hasAnnotations">
@@ -1876,13 +1906,14 @@ onMounted(() => {
                     v-if="currentSample.filePath"
                     :src="getImageUrl(currentSample.filePath)"
                     class="inspection-img"
+                    :class="{ 'inspection-img-hidden': inspectionImageLoading }"
                     @load="inspectionImageLoading = false"
                     @error="inspectionImageLoading = false"
                   />
                   <div v-else class="inspection-img-placeholder">无图片</div>
                 </template>
                 <!-- 有标注时显示 canvas -->
-                <canvas v-else ref="inspectionCanvasRef" class="inspection-canvas" @click="handleInspectionCanvasClick"></canvas>
+                <canvas v-else ref="inspectionCanvasRef" class="inspection-canvas" :class="{ 'inspection-canvas-hidden': inspectionImageLoading }" @click="handleInspectionCanvasClick"></canvas>
               </template>
               <div v-else class="inspection-empty"><p>暂无样本数据</p></div>
             </div>
@@ -1945,8 +1976,8 @@ onMounted(() => {
           </div>
           <!-- 提交/取消 -->
           <div class="inspection-actions">
-            <el-button type="primary" :disabled="!allRated" :loading="inspectionSubmitting" @click="handleInspectionSubmit"
-              :title="!allRated ? `还剩 ${unratedCount} 张未评分` : ''">
+            <el-button type="primary" :disabled="ratedCount === 0" :loading="inspectionSubmitting" @click="handleInspectionSubmit"
+              :title="ratedCount === 0 ? '请先为图片评分' : ''">
               提交评分
             </el-button>
             <el-button @click="handleInspectionCancel">取消</el-button>
@@ -1999,13 +2030,24 @@ onMounted(() => {
 }
 
 .page-title h2 {
+  display: flex;
+  align-items: center;
+  gap: 10px;
   font-size: 22px;
   font-weight: 600;
   color: #fff;
   margin: 0 0 8px 0;
-  display: flex;
-  align-items: center;
-  gap: 4px;
+}
+
+.page-title .quality-badge {
+  display: inline-block;
+  padding: 2px 10px;
+  border-radius: 4px;
+  font-size: 13px;
+  font-weight: 600;
+  border: 1px solid;
+  line-height: 1.6;
+  flex-shrink: 0;
 }
 
 .page-title p {
@@ -3217,7 +3259,7 @@ onMounted(() => {
   width: 100vw;
   height: 100vh;
   background: rgba(0, 0, 0, 0.85);
-  z-index: 9999;
+  z-index: 1000;
   display: flex;
   flex-direction: column;
   padding: 0;
@@ -3295,6 +3337,7 @@ onMounted(() => {
 }
 
 .inspection-image-wrap {
+  position: relative;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -3324,6 +3367,43 @@ onMounted(() => {
 .inspection-empty {
   color: rgba(255, 255, 255, 0.4);
   font-size: 18px;
+}
+
+// 图片加载遮罩
+.inspection-image-loading-mask {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(8, 12, 22, 0.8);
+  backdrop-filter: blur(2px);
+}
+
+.inspection-image-loading-spinner {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  color: #00d4ff;
+  font-size: 14px;
+}
+
+.inspection-loading-icon {
+  animation: inspection-spin 1s linear infinite;
+}
+
+@keyframes inspection-spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+.inspection-img-hidden,
+.inspection-canvas-hidden {
+  opacity: 0;
+  position: absolute;
+  pointer-events: none;
 }
 
 // 图片两侧导航箭头（圆形凸出样式）

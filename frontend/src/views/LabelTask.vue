@@ -3,8 +3,8 @@ import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import Header from '@/components/Header.vue'
 import Sidebar from '@/components/Sidebar.vue'
-import { getLabelTasks, createLabelTask, updateLabelTask, deleteLabelTask, type LabelTask } from '@/api/label'
-import { queryOriginalSampleSetOptions, type OriginalSampleSetOption } from '@/api/clean'
+import { getLabelTasks, createLabelTask, updateLabelTask, deleteLabelTask, importLabeledSamples, type LabelTask } from '@/api/label'
+import { queryOriginalSampleSetOptions, getSampleSetOptions, type OriginalSampleSetOption, type SampleSetOption } from '@/api/clean'
 import { ElMessage, ElMessageBox } from 'element-plus'
 
 const router = useRouter()
@@ -139,8 +139,72 @@ function handleTaskClick(task: LabelTask) {
 
 function statusColor(status: string): string {
   if (status === '02') return '#00ff88'
+  if (status === '03') return '#00d4ff'
   if (status === '01') return '#ffaa00'
   return 'rgba(255, 255, 255, 0.5)'
+}
+
+// 入库按钮：标注进度完成即可，已入库后不屏蔽，允许重复操作
+function canImport(task: LabelTask): boolean {
+  return task.labeledCount >= task.totalCount && task.totalCount > 0
+}
+
+// ========== 入库弹框 ==========
+const importVisible = ref(false)
+const importSaving = ref(false)
+const importTask = ref<LabelTask | null>(null)
+const importSetNo = ref('')
+const importMajorVersion = ref(false)
+const importVersionRemark = ref('')
+const sampleSetOptions = ref<SampleSetOption[]>([])
+
+async function handleImport(task: LabelTask) {
+  importTask.value = task
+  importSetNo.value = ''
+  importMajorVersion.value = false
+  importVersionRemark.value = ''
+  importVisible.value = true
+  // 仅查询图像类型的高质量样本集
+  try {
+    sampleSetOptions.value = await getSampleSetOptions('05')
+  } catch (e: any) {
+    ElMessage.error(e.message || '加载样本集列表失败')
+  }
+}
+
+async function confirmImport() {
+  if (!importSetNo.value) {
+    ElMessage.warning('请选择目标样本集')
+    return
+  }
+  if (importVersionRemark.value.length > 150) {
+    ElMessage.warning('变更说明不能超过 150 个字')
+    return
+  }
+  if (!importTask.value) return
+  importSaving.value = true
+  try {
+    const result = await importLabeledSamples(
+      importTask.value.taskNo,
+      importSetNo.value,
+      importMajorVersion.value,
+      importVersionRemark.value.trim()
+    )
+    let msg = `入库成功：新增 ${result.insertedCount} 张，更新 ${result.updatedCount} 张`
+    if (result.errorCount > 0) {
+      msg += `，失败 ${result.errorCount} 张`
+    }
+    if (result.preVersion && result.nextVersion) {
+      msg += `，版本 ${result.preVersion} → ${result.nextVersion}`
+    }
+    ElMessage.success(msg)
+    importVisible.value = false
+    await loadTasks()
+  } catch (e: any) {
+    ElMessage.error(e.message || '入库失败')
+  } finally {
+    importSaving.value = false
+  }
 }
 
 onMounted(() => {
@@ -151,7 +215,7 @@ onMounted(() => {
 
 <template>
   <div class="app-layout">
-    <Header title="模型能力展示与体验工作台" subtitle="标注任务管理" />
+    <Header title="模型能力展示与体验工作台" subtitle="样本标注" />
     <div class="main-content">
       <Sidebar />
       <main class="content-area">
@@ -211,9 +275,10 @@ onMounted(() => {
           <el-table-column prop="createTime" label="创建时间" width="160">
             <template #default="{ row }">{{ row.createTime || '-' }}</template>
           </el-table-column>
-          <el-table-column label="操作" width="160">
+          <el-table-column label="操作" width="230">
             <template #default="{ row }">
               <el-button size="small" class="edit-btn" @click="openEditDialog(row)">编辑</el-button>
+              <el-button size="small" type="primary" class="import-btn" :disabled="!canImport(row)" @click="handleImport(row)">入库</el-button>
               <el-button type="danger" size="small" class="delete-btn" @click="handleDelete(row)">删除</el-button>
             </template>
           </el-table-column>
@@ -251,7 +316,7 @@ onMounted(() => {
             v-model="dialogForm.sampleLabels"
             type="textarea"
             :rows="6"
-            placeholder="每行一个标签名，也可用逗号分隔。例如：&#10;person&#10;car&#10;bike"
+            placeholder="每行一个标签名，也可用逗号（中英文）、分号（中英文）、顿号分隔。例如：&#10;person&#10;car&#10;bike"
             :disabled="labelsLocked"
           />
           <div v-if="labelsLocked" class="lock-tip">
@@ -268,6 +333,43 @@ onMounted(() => {
         <el-button type="primary" :loading="dialogSaving" @click="handleConfirm">确定</el-button>
       </template>
     </el-dialog>
+
+    <!-- 入库弹框 -->
+    <el-dialog v-model="importVisible" title="已标注样本入库" width="520px" :close-on-click-modal="false" class="create-dialog">
+      <el-form label-width="100px" label-position="right">
+        <el-form-item label="目标样本集" required>
+          <el-select
+            v-model="importSetNo"
+            placeholder="请选择高质量样本集"
+            filterable
+            style="width: 100%"
+          >
+            <el-option v-for="opt in sampleSetOptions" :key="opt.setNo" :label="`${opt.setName}（${opt.setNo}）`" :value="opt.setNo" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="版本变更">
+          <el-checkbox v-model="importMajorVersion">大版本变更</el-checkbox>
+        </el-form-item>
+        <el-form-item v-if="importMajorVersion" label="变更说明">
+          <el-input
+            v-model="importVersionRemark"
+            type="textarea"
+            :rows="3"
+            placeholder="请输入变更说明（非必填，最多 150 字）"
+            maxlength="150"
+            show-word-limit
+          />
+        </el-form-item>
+      </el-form>
+      <div class="import-tip">
+        <span class="import-tip-icon">!</span>
+        同名文件将仅更新标注内容，不覆盖原文件。
+      </div>
+      <template #footer>
+        <el-button @click="importVisible = false">取消</el-button>
+        <el-button type="primary" :loading="importSaving" @click="confirmImport">确认入库</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -276,7 +378,6 @@ onMounted(() => {
   display: flex;
   flex-direction: column;
   height: 100vh;
-  background: #0d1117;
   overflow: hidden;
 }
 
@@ -403,6 +504,37 @@ onMounted(() => {
   font-size: 12px;
   margin-top: 4px;
 }
+
+.import-tip {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+  padding: 10px 14px;
+  background: rgba(255, 170, 0, 0.08);
+  border: 1px solid rgba(255, 170, 0, 0.2);
+  border-radius: 6px;
+  color: rgba(255, 170, 0, 0.85);
+  font-size: 13px;
+}
+
+.import-tip-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: rgba(255, 170, 0, 0.3);
+  color: #ffaa00;
+  font-weight: 700;
+  font-size: 12px;
+  flex-shrink: 0;
+}
+
+.import-btn {
+  margin-left: 8px;
+}
 </style>
 
 <style lang="scss">
@@ -469,6 +601,19 @@ onMounted(() => {
   .el-select__wrapper {
     background: rgba(0, 0, 0, 0.3) !important;
     box-shadow: 0 0 0 1px rgba(0, 212, 255, 0.2) inset !important;
+  }
+
+  .el-checkbox__label {
+    color: rgba(255, 255, 255, 0.85) !important;
+  }
+
+  .el-checkbox__input.is-checked .el-checkbox__inner {
+    background: #00d4ff !important;
+    border-color: #00d4ff !important;
+  }
+
+  .el-checkbox__input.is-checked + .el-checkbox__label {
+    color: #00d4ff !important;
   }
 }
 </style>
